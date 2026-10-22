@@ -197,6 +197,8 @@ you can check for states the learner passes through.
 | `on main` | `HEAD` is on `main` |
 | `merged report into main` | A `git merge` (or `git pull`) has actually brought `report` into `main`, and its result is still in `main`'s history. Both fast-forward and merge-commit merges count; creating `report` from `main`'s tip does not, and neither does a merge that reports "Already up to date" |
 | `merge commit` | Some commit has two parents |
+| `merging` | A merge stopped on conflicts and has not been committed or aborted yet |
+| `conflicts` | Some files still have unresolved conflicts (not yet marked with `git add`) |
 | `file report.qmd` | That file exists in the working directory |
 | `file report.qmd contains "Q3"` | It exists and contains that text. `/regex/` works too |
 | `ran /git\s+status/` | The learner ran a matching command. Plain text matches as a substring |
@@ -304,9 +306,12 @@ exercise to its seeded state and clears the undo history.
 - **No network remotes.** The remote is a mock that lives in the page: there
   is no `clone`, and nothing talks to a real server. isomorphic-git can talk
   to GitHub through a CORS proxy, which is a real but separate piece of work.
-- **No conflict resolution.** isomorphic-git merges cleanly or fails. A
-  conflicting `merge` or `pull` prints an explanation and suggests resetting,
-  so a lesson stays honest about the limit rather than faking it.
+- **No three-way merge tool.** A conflicting `merge` or `pull` behaves as in
+  real git: it writes `<<<<<<<` / `=======` / `>>>>>>>` markers into the
+  files, stages everything that merged cleanly, and stops. The learner edits
+  the files (in the Editor tab, or with `echo`), marks them resolved with
+  `git add`, and concludes with `git commit`; `git merge --abort` gives up.
+  What it does not offer is a side-by-side merge editor.
 - **No `rebase`, `stash`, `reset --hard`, `cherry-pick` or `revert`.** These
   could be added to the engine in `src/sandbox-core.js`.
 

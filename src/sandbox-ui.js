@@ -88,7 +88,8 @@
         if (r.editor) {
           throw new Error('seed command opened an editor: ' + lines[i] + ' — give git commit a message with -m');
         }
-        if (!r.ok) {
+        // a seed may leave a merge stopped on conflicts for the learner to resolve
+        if (!r.ok && !r.conflict) {
           // A broken seed is an authoring bug, so make it loud rather than
           // leaving the learner in a half-built repository.
           throw new Error('seed command failed: ' + lines[i] + ' — ' + String(r.out).split('\n')[0]);
@@ -301,7 +302,7 @@
   /* -------------------------- staging diagram ------------------------ */
 
   function renderStages(node, status, graph, files, isRepo) {
-    var needAdd = []
+    var needAdd = (status.conflicted || []).map(function (c) { return { f: c.file, k: 'conflict: ' + c.kind, conflict: true }; })
       .concat(status.untracked.map(function (f) { return { f: f, k: 'untracked' }; }))
       .concat(status.modified.map(function (f) { return { f: f, k: 'modified' }; }))
       .concat(status.deleted.map(function (f) { return { f: f, k: 'deleted' }; }));
@@ -322,7 +323,8 @@
       var chips = items.length
         ? items.map(function (it) {
             var quiet = it.k === 'unchanged' || it.k === 'not in git yet';
-            var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '');
+            var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
+              (it.conflict ? ' gs-chip-conflict' : '');
             return '<span class="' + cls + '">' + esc(it.f) +
                    '<span class="gs-chip-k">' + esc(it.k) + '</span></span>';
           }).join('')
@@ -730,6 +732,7 @@
 
     function fileMark(f, status) {
       if (!status) return null;
+      if ((status.conflicted || []).some(function (c) { return c.file === f; })) return { k: '!', label: 'conflict', cls: 'conflict' };
       if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
       if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
       if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
@@ -1100,7 +1103,7 @@
       var graph = await sb.graphModel();
       var isRepo = await sb.isRepo();
       var status = isRepo ? await sb.statusModel()
-        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [] };
+        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
       renderStages(stagesNode, status, graph, files, isRepo);
@@ -1130,7 +1133,7 @@
 
       // Tab badges: enough signal that folded panels lose nothing you would
       // catch at a glance. A count means "something here"; ✓ means clean.
-      var changed = status.untracked.length + status.modified.length +
+      var changed = (status.conflicted || []).length + status.untracked.length + status.modified.length +
         status.deleted.length + status.staged.length + status.stagedDeleted.length;
       setBadge('files', isRepo ? (changed ? String(changed) : '✓')
         : (files.length ? String(files.length) : ''));
@@ -1182,8 +1185,9 @@
 
       var br = graph.head;
       // follows `cd`, so the prompt always says which folder paths resolve in
+      // a stopped merge shows as (main|MERGING), as git's own prompt does
       host.querySelector('.gs-prompt').textContent =
-        sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
+        sb.pwd() + (br ? ' (' + br + (status.merging ? '|MERGING' : '') + ')' : '') + ' $';
     }
 
     function drawTree(graph) {
@@ -1406,7 +1410,9 @@
       else if (trimmed === 'help') { writeText(helpText()); }
       else if (trimmed === 'reset') { await doReset(); }
       else { writeText(r.out, r.ok ? '' : 'gs-err'); }
-      if (r.ok && trimmed !== 'reset' && sb.changedSince(snap.core)) {
+      // a merge that stops on conflicts fails but still changes the repo,
+      // and undoing it is the quickest way back out
+      if (trimmed !== 'reset' && sb.changedSince(snap.core)) {
         undoStack.push(snap);
         if (undoStack.length > UNDO_DEPTH) undoStack.shift();
       }
@@ -1437,7 +1443,7 @@
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
         '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
-        '       branch [-d], checkout [-b], switch [-c], merge, config,',
+        '       branch [-d], checkout [-b], switch [-c], merge [--abort], config,',
         '       remote add origin, push [-u], pull, fetch',
         '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
         '       mkdir, cd, pwd',
@@ -1446,6 +1452,10 @@
         '{y}git commit{/} without -m opens {y}vim{/}, as real git usually does.',
         'Press {y}i{/} to type, {y}Esc{/} to stop typing, then {y}:wq{/} and Enter to',
         'save and commit, or {y}:q!{/} and Enter to give up.',
+        '',
+        'A {y}merge{/} that conflicts leaves {y}<<<<<<<{/} markers in the files: edit them',
+        'to keep what you want, then {y}git add{/} and {y}git commit{/}. {y}git merge --abort{/}',
+        'gives up.',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
         'nicety, not a git command — real git has no undo).',

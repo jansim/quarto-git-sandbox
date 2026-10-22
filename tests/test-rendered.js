@@ -1,5 +1,5 @@
 /* End-to-end: load the RENDERED example.html (the author's guide) in jsdom,
-   execute its real inlined scripts, and drive all six demo boxes to
+   execute its real inlined scripts, and drive all seven demo boxes to
    completion.
    Run: node test-rendered.js ../example.html */
 const fs = require('fs');
@@ -86,11 +86,13 @@ function outText(win, hostId) {
   check('helpers exported', typeof win.GitSandboxUI.isMerged === 'function');
 
   // whichever ids the page used (hand-written qmd or the extension)
-  const IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
-  check('page has six demo boxes', IDS.length === 6, JSON.stringify(IDS));
+  const ALL_IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
+  check('page has seven demo boxes', ALL_IDS.length === 7, JSON.stringify(ALL_IDS));
+  // the conflict box is looked up by id; the others by position
+  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow');
   const [ID1, ID2, ID3, ID4, ID5, ID6] = IDS;
 
-  for (const id of IDS) {
+  for (const id of ALL_IDS) {
     await waitFor(() => win.document.querySelector('#' + id + ' .gs-input'), 15000, id + ' to mount');
     check(id + ' mounted', !!win.document.querySelector('#' + id + ' .gs-input'));
     check(id + ' loading placeholder replaced',
@@ -220,6 +222,29 @@ function outText(win, hostId) {
       win.document.querySelectorAll('#' + id + ' .gs-graph circle').length === 3,
       String(win.document.querySelectorAll('#' + id + ' .gs-graph circle').length));
     check('merge-flow reset unticks tasks', tasksState(win, id).done === 0, tasksState(win, id).text);
+  }
+
+  /* ---------------- merge conflict ---------------- */
+  {
+    const id = 'conflict-flow';
+    const type = typer(win, id);
+    const prompt = () => win.document.querySelector('#' + id + ' .gs-prompt').textContent;
+    check('conflict-flow has 3 tasks', tasksState(win, id).total === 3);
+    await type('git merge title');
+    check('conflict-flow merge stops on a conflict',
+      /CONFLICT \(content\): Merge conflict in README\.md/.test(outText(win, id)), outText(win, id).slice(-250));
+    check('conflict-flow prompt shows MERGING', /\(main\|MERGING\)/.test(prompt()), prompt());
+    check('conflict-flow task 1 ticks', tasksState(win, id).done === 1, tasksState(win, id).text);
+    await type('cat README.md');
+    check('conflict-flow markers in the file', /<<<<<<< main/.test(outText(win, id)) && />>>>>>> title/.test(outText(win, id)),
+      outText(win, id).slice(-200));
+    await type('echo "# Quarterly sales analysis 2026" > README.md');
+    await type('git add README.md');
+    check('conflict-flow task 2 ticks', tasksState(win, id).done === 2, tasksState(win, id).text);
+    await type('git commit -m "Merge the new title"');
+    const st = tasksState(win, id);
+    check('conflict-flow all 3 tasks complete', st.done === 3, st.text);
+    check('conflict-flow prompt back to normal', /\(main\) \$$/.test(prompt()), prompt());
   }
 
   /* ---------------- box 5: remote flow (pull, work, push) ---------------- */

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Merge conflicts now behave as in real git instead of failing with an
+  error. A conflicting `git merge` or `git pull` writes conflict markers into
+  the files, stages what merged cleanly, and stops with `CONFLICT (content):
+  Merge conflict in …`. `git status` lists the unmerged paths, the prompt
+  reads `(main|MERGING)`, and the File Status view outlines conflicted files.
+  `git add` (or `git rm`) marks a file resolved, `git commit` (with or
+  without `-m`) concludes the merge with a two-parent commit, and `git merge
+  --abort` returns to the last commit. Committing, merging, pulling or
+  switching branches with unresolved files is refused as real git refuses
+  it. Undo takes back a conflicting merge like any other command.
+- New `when:` conditions `merging` and `conflicts`, and seeds may end on a
+  conflicting merge so an exercise can start mid-conflict.
 - `git commit` without `-m` now opens a small vim in the terminal pane, on a
   commit message template like real git's, instead of refusing. It starts in
   normal mode; `i`/`a`/`o` and friends start typing, `Esc` stops, and `:wq`,

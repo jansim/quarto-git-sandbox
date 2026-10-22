@@ -347,6 +347,50 @@ Seed failures are loud: if a seed command fails, the box says so instead of
 dropping the learner into a half-built repository. And **Reset** re-runs
 the seed, so learners always return to the exact state you designed.
 
+## Flow: resolving a merge conflict
+
+When both branches change the same line, `git merge` stops as real git
+does: it writes conflict markers into the file, the prompt reads
+`(main|MERGING)`, and the *File Status* tab outlines the conflicted file.
+The learner edits it (in the *Editor* tab, or with `echo`), marks it
+resolved with `git add`, and concludes with `git commit`. `git merge
+--abort` gives up, and **Undo** takes the merge back like any command. The
+`merging` and `conflicts` conditions follow each step.
+
+```git-sandbox
+id: conflict-flow
+title: Resolve a merge conflict
+prompt: "~/sales-analysis $"
+intro: |
+  You and a colleague both retitled {y}README.md{/}. Merge their
+  {y}title{/} branch and see what git does with two edits to one line.
+hints: [git merge title, git status, cat README.md, 'echo "# Quarterly sales analysis 2026" > README.md', git add README.md, 'git commit -m "Merge the new title"']
+done-note: A conflict is git asking you to decide. Take the markers out, `git add`, commit.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  git checkout -b title
+  echo "# Sales analysis 2026" > README.md
+  git add .
+  git commit -m "Retitle for the new year"
+  git checkout main
+  echo "# Quarterly sales analysis" > README.md
+  git add .
+  git commit -m "Say which sales"
+tasks:
+  - text: Merge `title` into `main` and read the `CONFLICT` message
+    when: conflicts
+  - text: Edit `README.md` down to the line you want, then mark it resolved with `git add`
+    when: merging and not conflicts and not file README.md contains "<<<<<<<"
+  - text: Conclude the merge with `git commit`
+    when: merged title into main and merge commit
+```
+
+A seed may also end on the conflicting `git merge`, so the learner starts
+in the middle of it.
+
 ## Flow: a remote, push and pull
 
 `git remote add origin <url>` in a seed creates a **mock remote**, a

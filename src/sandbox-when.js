@@ -10,6 +10,7 @@
      when: branch report and on main
      when: merged report into main
      when: merge commit
+     when: merging and not conflicts
      when: file report.qmd contains "Q3"
      when: ran /git\s+status/
      when: not clean
@@ -208,8 +209,16 @@
             var s = ctx.status;
             return ctx.isRepo && s.staged.length === 0 && s.modified.length === 0 &&
                    s.untracked.length === 0 && s.deleted.length === 0 &&
-                   s.stagedDeleted.length === 0;
+                   s.stagedDeleted.length === 0 && !(s.conflicted || []).length;
           };
+
+        // a merge stopped on conflicts and not yet committed or aborted
+        case 'merging':
+          return function (ctx) { return !!ctx.status.merging; };
+
+        // ...with files whose conflicts are not yet marked resolved
+        case 'conflicts':
+          return function (ctx) { return (ctx.status.conflicted || []).length > 0; };
 
         case 'staged':
           return function (ctx) {
@@ -333,7 +342,7 @@
         default:
           throw new Error('unknown condition "' + word + '". Available: repo, clean, staged, ' +
             'commits, commits on <branch>, branch <name>, on <branch>, merged <a> into <b>, ' +
-            'merge commit, file <name> [contains "text"], ran /regex/, remote, pushed');
+            'merge commit, merging, conflicts, file <name> [contains "text"], ran /regex/, remote, pushed');
       }
     }
 

@@ -569,6 +569,47 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       bad.querySelector('.gs-out').textContent);
   }
 
+  /* ---------------- merge conflicts ---------------- */
+  {
+    const box = win.document.createElement('div');
+    box.id = 'conflictbox';
+    win.document.body.appendChild(box);
+    // the seed ends on the conflicting merge, as a lesson might
+    const c = win.GitSandboxUI.mount('#conflictbox', {
+      seed: 'git init\necho base > f.txt\ngit add .\ngit commit -m one\ngit checkout -b feat\n' +
+        'echo theirs > f.txt\ngit add .\ngit commit -m feat\ngit checkout main\necho ours > f.txt\n' +
+        'git add .\ngit commit -m mine\ngit merge feat',
+      tasks: [{ text: 'Resolve it', check: (ctx) => win.GitSandboxUI.isMerged(ctx.graph, 'feat', 'main') }]
+    });
+    await c.ready;
+    const prompt = () => box.querySelector('.gs-prompt').textContent;
+    check('a seed may end on a conflict', !/could not be set up/.test(box.querySelector('.gs-out').textContent),
+      box.querySelector('.gs-out').textContent);
+    check('prompt shows MERGING', prompt() === '~/project (main|MERGING) $', prompt());
+    const chip = box.querySelector('.gs-chip-conflict');
+    check('conflicted file chip in the working directory', !!chip && /f\.txt/.test(chip.textContent) &&
+      /conflict: both modified/.test(chip.textContent), box.querySelector('.gs-stages').textContent);
+    check('files badge counts the conflict',
+      box.querySelector('.gs-tab[data-tab="files"] .gs-tab-badge').textContent === '1');
+    check('file browser marks the conflict', !!box.querySelector('.gs-fb-mark-conflict'));
+
+    await c.run('git merge --abort');
+    check('abort clears MERGING from the prompt', prompt() === '~/project (main) $', prompt());
+    await c.run('git merge feat');
+    check('conflicting merge typed by the learner', /CONFLICT/.test(box.querySelector('.gs-out').textContent));
+    await c.run('undo');
+    check('a conflicting merge can be undone', prompt() === '~/project (main) $', prompt());
+    await c.run('git merge feat');
+    await c.run('echo both > f.txt');
+    await c.run('git add f.txt');
+    check('resolved file leaves the conflict list', !box.querySelector('.gs-chip-conflict'));
+    check('still merging until the commit', /MERGING/.test(prompt()), prompt());
+    await c.run('git commit -m "Merge feat"');
+    check('merge concluded', prompt() === '~/project (main) $', prompt());
+    check('resolving counts as merging feat into main', box.querySelectorAll('.gs-task.is-done').length === 1,
+      box.querySelector('.gs-tasks').textContent);
+  }
+
   /* ---------------- commit tree (tree-view option) ---------------- */
   check('no commit tree unless asked for', !host.querySelector('.gs-tree') && !host.classList.contains('gs-has-tree'));
   {
