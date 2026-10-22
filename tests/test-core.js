@@ -107,7 +107,7 @@ async function scenario(name, fn) {
     check('status: staged new file', /Changes to be committed/.test(r.out) && /new file:\s+README\.md/.test(r.out), r.out);
 
     r = await run('git commit -m "First commit"');
-    check('commit ok', r.ok && /\[main [0-9a-f]{7}\] First commit/.test(r.out), r.out);
+    check('commit ok', r.ok && /\[main \(root-commit\) [0-9a-f]{7}\] First commit/.test(r.out), r.out);
     check('commit reports 1 file', /1 file changed/.test(r.out), r.out);
 
     r = await run('git status');
@@ -260,7 +260,7 @@ async function scenario(name, fn) {
 
     let r = await run('git checkout ' + first);
     check('checkout by short hash', r.ok && /detached HEAD/.test(r.out), r.out);
-    check('advice names the way back', /git switch main/.test(r.out), r.out);
+    check('advice names the way back', /git switch -$/m.test(r.out), r.out);
     check('says where HEAD is', new RegExp('HEAD is now at ' + first + ' First').test(r.out), r.out);
     check('no current branch', (await sb.currentBranch()) === null);
     check('workdir is the old commit', (await run('cat notes.txt')).out === 'one');
@@ -354,7 +354,7 @@ async function scenario(name, fn) {
 
     const t = (await run('git commit')).editor.text;
     r = await sb.finishCommit('Add a greeting\n\nLonger body.  \n' + t);
-    check('saved message commits', r.ok && /^\[main [0-9a-f]{7}\] Add a greeting\n 1 file changed$/.test(r.out), r.out);
+    check('saved message commits', r.ok && /^\[main \(root-commit\) [0-9a-f]{7}\] Add a greeting\n 1 file changed$/.test(r.out), r.out);
     const log = await sb.git.log({ fs: sb.fs, dir: sb.dir, depth: 1 });
     check('comment lines dropped, body kept', log[0].commit.message.trim() === 'Add a greeting\n\nLonger body.',
       JSON.stringify(log[0].commit.message));
@@ -778,7 +778,7 @@ async function scenario(name, fn) {
 
     r = await run('git commit');
     check('commit without -m offers the merge message',
-      r.ok && r.editor && /^Merge branch 'feat' into main\n/.test(r.editor.text) && /# Conflicts:\n#\td\.txt\n#\tf\.txt/.test(r.editor.text),
+      r.ok && r.editor && /^Merge branch 'feat'\n/.test(r.editor.text) && /# Conflicts:\n#\td\.txt\n#\tf\.txt/.test(r.editor.text),
       JSON.stringify(r.editor));
     r = await sb.finishCommit(r.editor.text);
     check('finishing the editor commit concludes the merge', r.ok, r.out);
@@ -789,7 +789,7 @@ async function scenario(name, fn) {
     check('merge state cleared', !st.merging && !(await sb.mergeState()));
     check('resolution committed', (await sb.readFile('f.txt')) === 'both\n');
     r = await run('git log --oneline');
-    check('log shows the merge', /Merge branch 'feat' into main/.test(r.out), r.out);
+    check('log shows the merge', /Merge branch 'feat'$/m.test(r.out), r.out);
   });
 
   await scenario('merge conflict, abort and undo', async ({ sb, run, check }) => {
@@ -875,6 +875,465 @@ async function scenario(name, fn) {
     check('pull merge recorded', (await sb.graphModel()).merges.some(m => m.from === 'origin/main' && m.into === 'main'));
     r = await run('git push');
     check('push after resolving', r.ok && /main -> main/.test(r.out), r.out);
+  });
+
+  /* ---------------- globs ---------------- */
+  await scenario('globs', async ({ sb, run, check }) => {
+    const words = Core.tokenizeWords('git add *.txt "*.md" \'a?\'');
+    check('unquoted * is a glob', words[2].glob === true && words[3].glob === false && words[4].glob === false, JSON.stringify(words));
+    await run('git init');
+    await run('echo a > a.txt');
+    await run('echo b > b.txt');
+    await run('echo c > c.csv');
+    await run('echo h > .hidden.txt');
+    await run('mkdir notes');
+    await run('echo n > notes/n.txt');
+    let r = await run('echo *.txt');
+    check('shell expands *.txt, sorted, no dot files', r.out === 'a.txt b.txt', r.out);
+    r = await run('echo .*.txt');
+    check('a leading dot matches dot files', r.out === '.hidden.txt', r.out);
+    r = await run('echo notes/*');
+    check('glob below a folder', r.out === 'notes/n.txt', r.out);
+    r = await run('echo *.pdf');
+    check('no match leaves the pattern as typed', r.out === '*.pdf', r.out);
+    r = await run('echo "*.txt"');
+    check('quoted glob is not expanded', r.out === '*.txt', r.out);
+    r = await run('echo [ab].txt ?.csv');
+    check('[set] and ? work', r.out === 'a.txt b.txt c.csv', r.out);
+    r = await run('ls *.txt');
+    check('ls lists the matching files', r.ok && r.out === 'a.txt  b.txt', r.out);
+    r = await run('cat *.txt');
+    check('cat several files', r.out === 'a\nb', r.out);
+
+    r = await run('git add *.txt');
+    let st = await sb.statusModel();
+    check('git add *.txt stages the top-level txt files', r.ok &&
+      st.staged.map(x => x.file).join() === 'a.txt,b.txt', JSON.stringify(st.staged));
+    await sb.git.remove({ fs: sb.fs, dir: sb.dir, filepath: 'a.txt' });
+    await sb.git.remove({ fs: sb.fs, dir: sb.dir, filepath: 'b.txt' });
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('quoted pathspec glob also matches in subfolders, like git', r.ok &&
+      st.staged.map(x => x.file).join() === '.hidden.txt,a.txt,b.txt,notes/n.txt', JSON.stringify(st.staged));
+    r = await run('git add "*.pdf"');
+    check('pathspec glob with no match fails', !r.ok && /pathspec '\*\.pdf' did not match any files/.test(r.out), r.out);
+    await run('git commit -m "Text files"');
+    await run('rm a.txt');
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('pathspec glob stages a deletion', r.ok && st.stagedDeleted.join() === 'a.txt', JSON.stringify(st));
+    await run('cd notes');
+    await run('echo m > m.txt');
+    await run('echo x > ../x.txt');
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('pathspec glob is relative to the current folder', r.ok &&
+      st.staged.map(x => x.file).join() === 'notes/m.txt', JSON.stringify(st.staged));
+  });
+
+  /* ---------------- .gitignore ---------------- */
+  await scenario('gitignore', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo notes > notes.txt');
+    await run('echo pdf > cheatsheet.pdf');
+    await run('mkdir build');
+    await run('echo bin > build/out.pdf');
+    await run('echo "*.pdf" > .gitignore');
+    let r = await run('git status');
+    check('ignored files are not untracked', !/cheatsheet\.pdf|build/.test(r.out) && /\.gitignore/.test(r.out), r.out);
+    let st = await sb.statusModel();
+    check('statusModel lists ignored files', st.ignored.join() === 'build/out.pdf,cheatsheet.pdf', JSON.stringify(st.ignored));
+    r = await run('git status --ignored');
+    check('status --ignored shows them, folders collapsed', /Ignored files:\n.*git add -f.*\n\s+build\/\n\s+cheatsheet\.pdf/.test(r.out), r.out);
+    r = await run('git add .');
+    st = await sb.statusModel();
+    check('git add . skips ignored files', r.ok && st.staged.map(x => x.file).join() === '.gitignore,notes.txt', JSON.stringify(st.staged));
+    r = await run('git add cheatsheet.pdf');
+    check('naming an ignored file is refused', !r.ok && /ignored by one of your \.gitignore files:\ncheatsheet\.pdf/.test(r.out) && /-f/.test(r.out), r.out);
+    r = await run('git add *');
+    check('git add * stages the rest, then refuses the ignored file', !r.ok && /cheatsheet\.pdf/.test(r.out), r.out);
+    r = await run('git add "*.pdf"');
+    check('a glob that only reaches ignored files matches nothing', !r.ok && /did not match any files/.test(r.out), r.out);
+    r = await run('git check-ignore cheatsheet.pdf notes.txt');
+    check('check-ignore prints the ignored paths', r.ok && r.out === 'cheatsheet.pdf', r.out);
+    r = await run('git check-ignore notes.txt');
+    check('check-ignore fails when nothing is ignored', !r.ok && r.out === '', r.out);
+    r = await run('git add -f cheatsheet.pdf');
+    st = await sb.statusModel();
+    check('-f adds an ignored file', r.ok && st.staged.some(x => x.file === 'cheatsheet.pdf') &&
+      st.ignored.indexOf('cheatsheet.pdf') === -1, JSON.stringify(st));
+    await run('git commit -m "Track it all"');
+    await run('echo changed > cheatsheet.pdf');
+    st = await sb.statusModel();
+    check('a tracked file stays tracked though it matches .gitignore', st.modified.indexOf('cheatsheet.pdf') !== -1, JSON.stringify(st));
+    await run('git add cheatsheet.pdf');
+    await run('git commit -m "Change it"');
+
+    // "once it's in, it's too late": take it out of git, keep the file
+    r = await run('git rm --cached cheatsheet.pdf');
+    check('rm --cached says what it removed', r.ok && r.out === "rm 'cheatsheet.pdf'", r.out);
+    check('rm --cached keeps the file on disk', (await sb.readFile('cheatsheet.pdf')) === 'changed\n');
+    st = await sb.statusModel();
+    check('rm --cached stages the deletion; the file is now ignored', st.stagedDeleted.join() === 'cheatsheet.pdf' &&
+      st.ignored.indexOf('cheatsheet.pdf') !== -1 && st.untracked.indexOf('cheatsheet.pdf') === -1, JSON.stringify(st));
+    r = await run('git rm --cached nope.txt');
+    check('rm of an unknown path fails', !r.ok && /pathspec 'nope\.txt' did not match any files/.test(r.out), r.out);
+  });
+
+  /* ---------------- git rm ---------------- */
+  await scenario('git rm', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('mkdir docs');
+    await run('echo a > docs/a.md');
+    await run('echo b > docs/b.md');
+    await run('echo c > c.txt');
+    await run('git add .');
+    await run('git commit -m "Files"');
+    let r = await run('git rm docs');
+    check('a folder needs -r', !r.ok && /not removing 'docs' recursively without -r/.test(r.out), r.out);
+    r = await run('git rm -r docs c.txt');
+    check('rm -r removes every file, in order', r.ok && r.out === "rm 'c.txt'\nrm 'docs/a.md'\nrm 'docs/b.md'", r.out);
+    check('the emptied folder is gone too', (await sb.listTree()).every(e => e.path.indexOf('docs') !== 0), JSON.stringify(await sb.listTree()));
+    const st = await sb.statusModel();
+    check('the deletions are staged', st.stagedDeleted.join() === 'c.txt,docs/a.md,docs/b.md', JSON.stringify(st));
+  });
+
+  /* ---------------- undoing changes ---------------- */
+  await scenario('undo', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo hello > example.txt');
+    await run('git add .');
+    let r = await run('git reset');
+    let st = await sb.statusModel();
+    check('reset before the first commit empties the staging area', r.ok && !st.staged.length && st.untracked.join() === 'example.txt', JSON.stringify(st));
+    await run('git add .');
+    await run('git commit -m "Hello"');
+
+    await run('echo world >> example.txt');
+    await run('git add .');
+    r = await run('git reset example.txt');
+    st = await sb.statusModel();
+    check('reset <file> unstages it and reports what is left', r.ok && r.out === 'Unstaged changes after reset:\nM\texample.txt' &&
+      !st.staged.length && st.modified.join() === 'example.txt', r.out + JSON.stringify(st));
+    check('reset <file> keeps the edit on disk', (await sb.readFile('example.txt')) === 'hello\nworld\n');
+
+    r = await run('git restore example.txt');
+    check('restore throws the edit away', r.ok && (await sb.readFile('example.txt')) === 'hello\n');
+    check('...and the tree is clean', /working tree clean/.test((await run('git status')).out));
+
+    await run('rm example.txt');
+    r = await run('git restore example.txt');
+    check('restore brings back a deleted file', r.ok && (await sb.readFile('example.txt')) === 'hello\n');
+    r = await run('git restore nope.txt');
+    check('restore of an unknown path fails', !r.ok && /pathspec 'nope\.txt' did not match/.test(r.out), r.out);
+    r = await run('git restore');
+    check('restore needs a path', !r.ok && /must specify path/.test(r.out), r.out);
+
+    await run('echo staged > example.txt');
+    await run('git add example.txt');
+    await run('echo unstaged > example.txt');
+    r = await run('git restore example.txt');
+    check('restore takes the staged copy, not the committed one', (await sb.readFile('example.txt')) === 'staged\n');
+    r = await run('git restore --staged example.txt');
+    st = await sb.statusModel();
+    check('restore --staged unstages but keeps the file', r.ok && !st.staged.length && st.modified.join() === 'example.txt' &&
+      (await sb.readFile('example.txt')) === 'staged\n', JSON.stringify(st));
+    await run('git add example.txt');
+    r = await run('git restore --staged --worktree example.txt');
+    check('restore --staged --worktree goes back to the commit', r.ok && (await sb.readFile('example.txt')) === 'hello\n' &&
+      /working tree clean/.test((await run('git status')).out));
+
+    // commit -a
+    await run('echo more >> example.txt');
+    await run('echo new > untracked.txt');
+    r = await run('git commit -am "More"');
+    st = await sb.statusModel();
+    check('commit -am stages tracked edits and commits', r.ok && /\] More/.test(r.out) && !st.modified.length, r.out);
+    check('commit -a leaves untracked files alone', st.untracked.join() === 'untracked.txt', JSON.stringify(st));
+    await run('rm untracked.txt');
+    await run('echo again >> example.txt');
+    r = await run('git commit -a -m "Again" -m "With a body"');
+    const head = (await sb.graphModel()).commits[0];
+    check('commit -a -m with two paragraphs', r.ok && head.message === 'Again', head.message);
+    check('commit -a with nothing to commit', !(await run('git commit -am "Nothing"')).ok);
+
+    // reset to a commit
+    r = await run('git reset --soft HEAD~1');
+    st = await sb.statusModel();
+    check('reset --soft keeps the change staged', r.ok && r.out === '' && st.staged.map(x => x.file).join() === 'example.txt', JSON.stringify(st));
+    r = await run('git reset HEAD');
+    st = await sb.statusModel();
+    check('reset HEAD unstages', r.ok && st.modified.join() === 'example.txt' && !st.staged.length, JSON.stringify(st));
+    r = await run('git reset --hard');
+    check('reset --hard throws away the edit', r.ok && /^HEAD is now at [0-9a-f]{7} More$/.test(r.out) &&
+      /working tree clean/.test((await run('git status')).out), r.out);
+    await run('echo extra > extra.txt');
+    await run('git add .');
+    await run('git commit -m "Extra"');
+    r = await run('git reset --hard HEAD~1');
+    check('reset --hard to an older commit removes files it lacks', r.ok && /HEAD is now at [0-9a-f]{7} More/.test(r.out) &&
+      (await sb.listFiles()).join() === 'example.txt', r.out + (await sb.listFiles()).join());
+    check('the branch moved back', (await sb.graphModel()).commits.length === 2);
+    r = await run('git reset --hard HEAD~5');
+    check('an unknown revision is ambiguous', !r.ok && /ambiguous argument 'HEAD~5'/.test(r.out), r.out);
+    r = await run('git reset --hard example.txt');
+    check('--hard with a path is refused', !r.ok && /Cannot do hard reset with paths/.test(r.out), r.out);
+  });
+
+  /* ---------------- reset during a merge ---------------- */
+  await scenario('reset aborts a merge', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo base > f.txt');
+    await run('git add .');
+    await run('git commit -m base');
+    await run('git checkout -b side');
+    await run('echo theirs > f.txt');
+    await run('git commit -am side');
+    await run('git checkout main');
+    await run('echo ours > f.txt');
+    await run('git commit -am ours');
+    await run('git merge side');
+    check('merge stopped', !!(await sb.mergeState()));
+    const r = await run('git reset --hard');
+    check('reset --hard ends the merge', r.ok && !(await sb.mergeState()) && (await sb.readFile('f.txt')) === 'ours\n');
+  });
+
+  /* ---------------- -h, config, redirection ---------------- */
+  await scenario('help and config', async ({ sb, run, check }) => {
+    let r = await run('git init -h');
+    check('init -h works before git init', r.ok && /^usage: git init /.test(r.out) && /--initial-branch/.test(r.out), r.out);
+    r = await run('git stash -h');
+    check('stash -h shows the usage though stash is not supported', r.ok && /^usage: git stash list/.test(r.out), r.out);
+    r = await run('git help commit');
+    check('git help <command>', r.ok && /^usage: git commit /.test(r.out), r.out);
+    r = await run('git commit -m "-h"');
+    check('-h as a message is not help', !/usage:/.test(r.out), r.out);
+
+    // the slides' "command library" exercise
+    await run('git init');
+    r = await run('git init -h > library.txt');
+    check('-h output can go into a file', r.ok && r.out === '' && /^usage: git init /.test(await sb.readFile('library.txt')), await sb.readFile('library.txt'));
+    r = await run('git commit -h >> library.txt');
+    const lib = await sb.readFile('library.txt');
+    check('>> appends', /usage: git init[\s\S]*usage: git commit/.test(lib), lib);
+    check('no colour codes in files', !/\{[gryb\/w]\}/.test(lib));
+    r = await run('git status > status.txt');
+    check('any command output can be redirected', /^On branch main/.test(await sb.readFile('status.txt')));
+    r = await run('git frobnicate > err.txt');
+    check('errors still show on screen', !r.ok && /not supported/.test(r.out), r.out);
+    r = await run('ls > nope/listing.txt');
+    check('redirect into a missing folder fails', !r.ok && /No such file/.test(r.out), r.out);
+
+    r = await run('git config --global user.name "Ada Lovelace"');
+    check('config --global user.name', r.ok && (await run('git config user.name')).out === 'Ada Lovelace');
+    await run('git config --global user.email ada@example.com');
+    await run('git add library.txt');
+    await run('git commit -m "Library"');
+    check('commits use the configured name', (await sb.graphModel()).commits[0].author === 'Ada Lovelace');
+    r = await run('git config pull.rebase false');
+    check('a local key is stored', r.ok && (await run('git config pull.rebase')).out === 'false');
+    check('...in .git/config', /rebase = false/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')));
+    r = await run('git config --global core.editor "code --wait"');
+    check('a global key with spaces', r.ok && (await run('git config core.editor')).out === 'code --wait');
+    r = await run('git config --list');
+    check('config --list', /user\.name=Ada Lovelace/.test(r.out) && /core\.editor=code --wait/.test(r.out) && /pull\.rebase=false/.test(r.out), r.out);
+    r = await run('git config no.such.key');
+    check('a missing key fails quietly', !r.ok && r.out === '', r.out);
+    r = await run('git config nosection');
+    check('a key needs a section', !r.ok && /key does not contain a section/.test(r.out), r.out);
+    r = await run('git config --unset pull.rebase');
+    check('--unset', r.ok && !(await run('git config pull.rebase')).ok);
+
+    const snap = sb.snapshot();
+    await run('git config --global init.defaultBranch trunk');
+    check('changing a global key counts as a change', sb.changedSince(snap));
+    sb.restore(snap);
+    check('undo restores global config', !(await run('git config --global init.defaultBranch')).ok);
+  });
+
+  await scenario('init.defaultBranch', async ({ sb, run, check }) => {
+    await run('git config --global init.defaultBranch trunk');
+    await run('git init');
+    check('init uses init.defaultBranch', (await run('git status')).out.indexOf('On branch trunk') === 0);
+  });
+
+  await scenario('init -b', async ({ sb, run, check }) => {
+    const r = await run('git init -b develop');
+    check('init -b names the first branch', r.ok && (await run('git status')).out.indexOf('On branch develop') === 0);
+  });
+
+  /* ---------------- remote-tracking branches ---------------- */
+  await scenario('tracking', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo a > a.txt');
+    await run('git add .');
+    await run('git commit -m one');
+    await run('git remote add origin https://example.com/acme/repo.git');
+    let r = await run('git pull');
+    check('pull without an upstream explains itself', !r.ok && /no tracking information/.test(r.out) &&
+      /--set-upstream-to=origin\/<branch> main/.test(r.out), r.out);
+    await run('git push -u origin main');
+    check('push -u records the upstream in .git/config',
+      /\[branch "main"\][^[]*merge = refs\/heads\/main/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')) &&
+      /\[branch "main"\][^[]*remote = origin/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')));
+    r = await run('git status');
+    check('status: up to date', /^On branch main\nYour branch is up to date with 'origin\/main'\./.test(r.out), r.out);
+    await run('echo b > b.txt');
+    await run('git add .');
+    await run('git commit -m two');
+    r = await run('git status');
+    check('status: ahead', /ahead of 'origin\/main' by 1 commit\./.test(r.out), r.out);
+    await run('git push');
+    await run('echo c > c.txt');
+    await run('git add .');
+    await run('git commit -m colleague');
+    await run('git push');
+    await run('rewind 1');
+    r = await run('git status');
+    check('status: news on the remote shows only after fetch', /up to date with/.test(r.out), r.out);
+    await run('git fetch');
+    r = await run('git status');
+    check('status: behind after fetch', /behind 'origin\/main' by 1 commit, and can be fast-forwarded/.test(r.out), r.out);
+    r = await run('git branch -r');
+    check('fetch records origin/HEAD, as git 2.48+ does', r.out === '  origin/HEAD -> origin/main\n  origin/main', r.out);
+    check('origin/HEAD gets no pill in the graph',
+      !(await sb.graphModel()).commits.some(c => c.refs.some(x => x.name === 'origin/HEAD')));
+    r = await run('git log --oneline origin/main');
+    check('log <ref> starts there', r.out.split('\n').length === 3 && /\(origin\/main, origin\/HEAD\) colleague/.test(r.out), r.out);
+    r = await run('git log --oneline --all -2');
+    check('log --all -2', r.out.split('\n').length === 2 && /colleague/.test(r.out), r.out);
+    r = await run('git log nope');
+    check('log of an unknown ref', !r.ok && /ambiguous argument 'nope'/.test(r.out), r.out);
+    r = await run('git merge origin/main');
+    check('merge origin/main fast-forwards', r.ok && /Fast-forward/.test(r.out), r.out);
+    check('merge origin/main is recorded', (await sb.graphModel()).merges.some(m => m.from === 'origin/main' && m.into === 'main'));
+
+    // a colleague's branch
+    await run('git checkout -b feature');
+    await run('echo f > f.txt');
+    await run('git add .');
+    await run('git commit -m feature');
+    await run('git push -u origin feature');
+    await run('git checkout main');
+    r = await run('git branch -D feature');
+    check('branch -D says what it deleted', r.ok && /^Deleted branch feature \(was [0-9a-f]{7}\)\.$/.test(r.out), r.out);
+    r = await run('git branch -a');
+    check('branch -a lists remote-tracking branches', /remotes\/origin\/feature/.test(r.out) && /remotes\/origin\/main/.test(r.out), r.out);
+    r = await run('git switch feature');
+    check('switch guesses the remote branch', r.ok && /Switched to a new branch 'feature'\nbranch 'feature' set up to track 'origin\/feature'\./.test(r.out), r.out);
+    check('...and checks it out', (await sb.currentBranch()) === 'feature' && (await sb.readFile('f.txt')) === 'f\n');
+    r = await run('git switch -');
+    check('switch - goes back', r.ok && (await sb.currentBranch()) === 'main', r.out);
+    r = await run('git checkout -');
+    check('checkout - too', r.ok && (await sb.currentBranch()) === 'feature', r.out);
+    r = await run('git checkout feature');
+    check('already on it', r.ok && /^Already on 'feature'\nYour branch is up to date with 'origin\/feature'\.$/.test(r.out), r.out);
+    await run('git checkout main');
+    await run('git branch -D feature');
+    r = await run('git checkout --track origin/feature');
+    check('checkout --track', r.ok && (await sb.currentBranch()) === 'feature' && /set up to track 'origin\/feature'/.test(r.out), r.out);
+    r = await run('git pull');
+    check('pull uses the upstream', r.ok && /Already up to date/.test(r.out), r.out);
+    await run('git checkout -b copy origin/main');
+    check('-b with a start point starts there, tracking it', !(await sb.listFiles()).includes('f.txt') &&
+      /up to date with 'origin\/main'/.test((await run('git status')).out));
+    r = await run('git pull origin feature');
+    check('pull origin <branch> merges that branch', r.ok && (await sb.readFile('f.txt')) === 'f\n', r.out);
+    r = await run('git pull --rebase');
+    check('pull --rebase is explained', !r.ok && /no rebase/.test(r.out), r.out);
+    r = await run('git branch --set-upstream-to=origin/feature');
+    check('--set-upstream-to', r.ok && /'copy' set up to track 'origin\/feature'/.test(r.out), r.out);
+    r = await run('git branch --unset-upstream');
+    check('--unset-upstream', r.ok && !/Your branch/.test((await run('git status')).out));
+
+    const snap = sb.snapshot();
+    await run('git checkout main');
+    sb.restore(snap);
+    r = await run('git switch -');
+    check('undo restores where switch - goes', r.ok && (await sb.currentBranch()) === 'feature', r.out);
+  });
+
+  /* ---------------- clone ---------------- */
+  await scenario('clone', async ({ sb, run, check }) => {
+    let r = await run('git clone https://github.com/acme/sales.git');
+    check('nothing to clone without a remote', !r.ok && /repository 'https:\/\/github\.com\/acme\/sales\.git' does not exist/.test(r.out), r.out);
+
+    // how an author sets up a clone exercise: build the remote, then drop the local copy
+    for (const l of ['git init', 'git remote add origin https://github.com/acme/sales', 'echo a > a.txt', 'git add .',
+      'git commit -m one', 'git push -u origin main', 'git checkout -b dev', 'echo d > d.txt', 'git add .',
+      'git commit -m dev', 'git push -u origin dev', 'rm -rf .git *']) {
+      r = await run(l);
+      if (!r.ok) check('setup: ' + l, false, r.out);
+    }
+    check('the folder is empty, the remote is still there', !(await sb.isRepo()) && !(await sb.listTree()).length &&
+      !!(await sb.remoteModel()), JSON.stringify(await sb.listTree()));
+    r = await run('git push');
+    check('no repository, no push', !r.ok && /not a git repository/.test(r.out), r.out);
+
+    r = await run('git clone https://github.com/acme/other.git');
+    check('a different URL is refused, naming the right one', !r.ok && /does not exist/.test(r.out) &&
+      /https:\/\/github\.com\/acme\/sales/.test(r.out), r.out);
+    r = await run('git clone git@github.com:acme/sales.git my-folder');
+    check('cloning into another folder is explained', !r.ok && /project folder itself/.test(r.out), r.out);
+    await run('mkdir sub');
+    await run('cd sub');
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('clone runs at the top only', !r.ok && /cd ~/.test(r.out), r.out);
+    await run('cd ~');
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('a non-empty folder is refused', !r.ok && /not an empty directory/.test(r.out), r.out);
+    await run('rm -r sub');
+
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('clone: SSH spelling of the same URL works', r.ok && r.out === "Cloning into '.'...\ndone.", r.out);
+    check('clone checks out the default branch', (await sb.currentBranch()) === 'main' && (await sb.listFiles()).join() === 'a.txt');
+    r = await run('git status');
+    check('clone sets the upstream', /up to date with 'origin\/main'/.test(r.out), r.out);
+    r = await run('git remote -v');
+    check('the remote is called origin, with the URL as typed', /^origin\tgit@github\.com:acme\/sales\.git \(fetch\)/.test(r.out), r.out);
+    const g = await sb.graphModel();
+    check('graph has origin/main and origin/dev but no origin/HEAD pill',
+      g.commits.some(c => c.refs.some(x => x.name === 'origin/dev')) && !g.commits.some(c => c.refs.some(x => x.name === 'origin/HEAD')),
+      JSON.stringify(g.commits.map(c => c.refs)));
+    r = await run('git log --oneline');
+    check('log decorates origin/HEAD', /\(HEAD -> main, origin\/main, origin\/HEAD\)/.test(r.out), r.out);
+    r = await run('git switch dev');
+    check('other branches come from origin', r.ok && /set up to track 'origin\/dev'/.test(r.out), r.out);
+    await run('echo more >> d.txt');
+    await run('git commit -am more');
+    r = await run('git push');
+    check('push to the cloned remote', r.ok && /^To git@github\.com:acme\/sales\.git/.test(r.out), r.out);
+
+    r = await run('git remote remove origin');
+    check('remote remove', r.ok && !(await run('git remote')).out && !(await run('git push')).ok);
+    r = await run('git remote add origin https://github.com/acme/sales');
+    check('remote add links the same remote again', r.ok && (await run('git fetch')).ok);
+    r = await run('git remote add upstream https://x');
+    check('only origin is supported', !r.ok && /must be called origin/.test(r.out), r.out);
+  });
+
+  await scenario('clone an empty remote', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('git remote add origin https://example.com/empty.git');
+    await run('rm -rf .git');
+    const r = await run('git clone https://example.com/empty.git');
+    check('empty remote warns', r.ok && /cloned an empty repository/.test(r.out) && await sb.isRepo(), r.out);
+  });
+
+  await scenario('shell rm', async ({ sb, run, check }) => {
+    await run('mkdir d');
+    await run('echo x > d/x.txt');
+    let r = await run('rm d');
+    check('a folder needs -r', !r.ok && r.out === "rm: cannot remove 'd': Is a directory", r.out);
+    r = await run('rm nope.txt');
+    check('missing file', !r.ok && r.out === "rm: cannot remove 'nope.txt': No such file or directory", r.out);
+    check('-f is quiet about missing files', (await run('rm -f nope.txt')).ok);
+    r = await run('rm -rf .');
+    check('the project folder itself is off limits', !r.ok && /refusing/.test(r.out), r.out);
+    r = await run('rm -rf /origin');
+    check('outside the project is off limits', !r.ok && /refusing/.test(r.out), r.out);
+    r = await run('rm -r d');
+    check('rm -r removes a folder', r.ok && !(await sb.listTree()).length);
   });
 
   /* ---------------- report ---------------- */

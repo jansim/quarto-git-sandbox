@@ -160,6 +160,37 @@ draws the remote's branches as they are now, with a solid outline.
 Pushing when the remote is ahead is rejected with git's real `(fetch first)`
 message, so the push → rejected → pull → push loop can be taught honestly.
 
+### Seeding a clone exercise
+
+To have learners start with `git clone`, build the remote in the seed as
+above, then delete the local copy with `rm -rf .git *`. The remote stays
+(it is "on GitHub"), the project folder is empty, and the learner's
+`git clone <url>` brings it back with `origin`, the remote-tracking
+branches and an upstream for the default branch, as real git does. Any
+spelling of the remote's URL works (`git@github.com:acme/sales.git` for
+`https://github.com/acme/sales`); a different URL is refused with a hint
+naming the right one.
+
+```yaml
+seed: |
+  git init
+  git remote add origin https://github.com/acme/sales-analysis
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  git push -u origin main
+  rm -rf .git *
+tasks:
+  - text: Clone the project with `git clone https://github.com/acme/sales-analysis`
+    when: repo
+```
+
+Since the repository always lives in the project folder, `git clone <url>`
+clones into it, as `git clone <url> .` would, and prints `Cloning into
+'.'...`. The `remote` condition is true from the start in such an exercise,
+because the remote exists before the clone; use `repo` to check for the
+clone itself.
+
 ### The commit tree
 
 The commit tree is a pane down the right of the box that draws the history
@@ -256,7 +287,7 @@ tasks:
 | `c.graph.commits` | `[{ oid, short, message, parents, refs, lane, timestamp, author }]`, children first |
 | `c.graph.branches` | `[{ name, oid, isHead }]` |
 | `c.graph.head` | Current branch name |
-| `c.status` | `{ staged, modified, untracked, deleted, stagedDeleted }` |
+| `c.status` | `{ staged, modified, untracked, deleted, stagedDeleted, ignored }` |
 | `c.files` | Filenames in the working directory |
 | `c.history` | Every command typed, in order |
 | `c.remote` | `null`, or `{ url, branch, tracked, ahead, behind, graph }` once a remote exists |
@@ -267,15 +298,46 @@ Policy. `when:` does not, which is another reason to prefer it.
 
 ## What the sandbox supports
 
-**Git:** `init`, `status`, `add`, `rm`, `commit [-m]`, `log [--oneline]`,
-`diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
-`switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
-`remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
-`fetch`, `pull`, `config user.name|user.email`
+**Git:** `init`, `status [--ignored]`, `add [-f]`, `rm [--cached] [-r]`,
+`check-ignore`, `commit [-a] [-m]`, `restore [--staged] [--source=<commit>]
+<file>`, `reset [<file>]`, `reset [--soft|--mixed|--hard] [<commit>]`, `log [--oneline] [--all] [-<n>] [<branch|origin/branch|commit>]`,
+`diff`, `branch [-d] [-a|-r] [<name> [<start>]]`,
+`branch --set-upstream-to=origin/<branch>`, `checkout [-b] <branch>
+[<start>]`, `checkout --track origin/<branch>`, `checkout <commit>`,
+`switch [-c] <branch>`, `switch --detach <commit>`, `switch -`,
+`merge <branch | origin/branch | commit>`, `remote [-v] | remote add origin
+<url> | remove origin`, `clone <url>`, `push [-u origin <branch>]`, `fetch`,
+`pull [origin <branch>]`, `config [--global] <key> [<value>]` (also `--list` and
+`--unset`), and `-h` on any of them, as in `git commit -h`
 
 **Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
-`touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
+`touch`, `rm [-rf]`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
 `undo`, and the authoring-only `rewind <n>`
+
+**`.gitignore`:** works as in real git, in the top folder and in
+subfolders. Ignored files drop out of `git status` and `git add .`, naming
+one in `git add` is refused with git's own hint to use `-f`, and `git status
+--ignored` lists them. Files that were tracked before the rule was written
+stay tracked until `git rm --cached <file>`, which takes them out of git but
+leaves them on disk. In the panels an ignored file shows as a grey
+"ignored" chip, and with a dim `I` in the editor's file browser. There is no
+global `.gitignore`: the sandbox has no home folder to keep one in.
+
+**Redirection:** `>` and `>>` work after any command, not only `echo`, so
+`git init -h > library.txt` or `git log --oneline > history.txt` write the
+output to a file. Errors still show in the terminal.
+
+**Config:** `git config` with or without `--global` stores any key.
+`user.name` and `user.email` sign the commits, and `init.defaultBranch`
+names the branch `git init` creates; other keys are kept and read back but
+change nothing (vim stays the editor, and `pull` always merges).
+
+**Globs:** an unquoted `*`, `?` or `[…]` expands to the matching file
+names before the command runs, as in bash, so `git add *.txt` stages the
+`.txt` files in the current folder and `ls data/*.csv` lists the CSVs in
+`data`. A pattern that matches nothing is passed on as typed. Quoted, the
+pattern reaches git as a pathspec, where `*` also crosses folders: `git add
+"*.txt"` stages every `.txt` file from here down, as real git does.
 
 `cd` moves around inside the project folder, and the prompt shows where you
 are. Relative paths in shell and git commands resolve from there, and
@@ -288,7 +350,13 @@ The remote is a bare repository elsewhere in the same in-memory filesystem.
 Push and fetch move objects and refs between the two repositories with real
 semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
-rejected with `(fetch first)`.
+rejected with `(fetch first)`. Upstreams live in `.git/config` as in git:
+`git status` and `git checkout` then say whether the branch is ahead of,
+behind, or diverged from `origin/<branch>` (as of the last fetch), and a
+plain `git pull` on a branch without one fails with git's "no tracking
+information" message. `git switch <branch>` (or `checkout`) for a branch
+that exists only as `origin/<branch>` creates it, tracking the remote one,
+as `git checkout --track origin/<branch>` does.
 
 **vim:** `git commit` without `-m` does what real git usually does: it
 drops you into vim on the commit message, in normal mode, where typing does
@@ -318,8 +386,8 @@ exercise to its seeded state and clears the undo history.
 
 ## What it does not do, on purpose
 
-- **No network remotes.** The remote is a mock that lives in the page: there
-  is no `clone`, and nothing talks to a real server. isomorphic-git can talk
+- **No network remotes.** The remote is a mock that lives in the page:
+  `git clone` copies that mock, and nothing talks to a real server. isomorphic-git can talk
   to GitHub through a CORS proxy, which is a real but separate piece of work.
 - **No three-way merge tool.** A conflicting `merge` or `pull` behaves as in
   real git: it writes `<<<<<<<` / `=======` / `>>>>>>>` markers into the
@@ -327,7 +395,7 @@ exercise to its seeded state and clears the undo history.
   the files (in the Editor tab, or with `echo`), marks them resolved with
   `git add`, and concludes with `git commit`; `git merge --abort` gives up.
   What it does not offer is a side-by-side merge editor.
-- **No `rebase`, `stash`, `reset --hard`, `cherry-pick` or `revert`.** These
+- **No `rebase`, `stash`, `cherry-pick` or `revert`.** These
   could be added to the engine in `src/sandbox-core.js`.
 
 ## Using it outside Quarto

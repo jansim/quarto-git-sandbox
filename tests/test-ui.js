@@ -428,7 +428,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await run('mkdir data/raw');
   await run('echo x > data/raw/q3.csv');
   await run('mkdir empty');
-  click(folder('notes')); // close the folder the new file opened
+  check('git rm took the emptied folder away too, as git does', !folder('notes'));
+
+  // files .gitignore matches: a quiet chip, and a dim I in the browser
+  await run('echo "*.log" > .gitignore');
+  await run('echo x > debug.log');
+  const logChip = host.querySelector('.gs-chip-work[data-file="debug.log"]');
+  check('an ignored file shows as a quiet "ignored" chip',
+    !!logChip && logChip.classList.contains('gs-chip-clean') && /ignored/.test(logChip.textContent),
+    logChip ? logChip.outerHTML : 'no chip');
+  const logMark = fileBtn('debug.log') && fileBtn('debug.log').querySelector('.gs-fb-mark-ignored');
+  check('the browser marks it I (ignored)', !!logMark && /^I/.test(logMark.textContent),
+    fileBtn('debug.log') ? fileBtn('debug.log').outerHTML : 'no row');
+  await run('rm debug.log');
+  await run('rm .gitignore');
   check('folders list before files, each with a chevron, collapsed',
     !!folder('data') && folder('data').getAttribute('aria-expanded') === 'false' &&
     !!folder('data').querySelector('.gs-fb-chev svg') && !fileBtn('data/raw/q3.csv') &&
@@ -560,7 +573,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await pending; await sleep(30);
     check(':wq closes vim', vimNode.hidden && !box3.querySelector('.gs-out').hidden && !box3.querySelector('.gs-input-row').hidden);
     check(':wq commits', (await commits()) === 1);
-    check('commit summary printed', /\[main [0-9a-f]{7}\] First line from vim/.test(box3.querySelector('.gs-out').textContent),
+    check('commit summary printed', /\[main \(root-commit\) [0-9a-f]{7}\] First line from vim/.test(box3.querySelector('.gs-out').textContent),
       box3.querySelector('.gs-out').textContent.slice(-200));
     check('vim commit can be undone', box3.querySelector('.gs-undo').disabled === false);
 

@@ -229,13 +229,17 @@
 
   /* --------------------------- tokenizing --------------------------- */
 
-  // Split a command line into tokens, honouring single/double quotes,
-  // and pull out redirection targets (> and >>).
-  function tokenize(line) {
-    var tokens = [];
+  // Split a command line into words, honouring single/double quotes, and
+  // pull out redirection operators (> and >>). Each word is { text, glob }:
+  // glob is true when it holds an unquoted *, ? or [, which the shell
+  // expands into matching file names, as bash does.
+  function tokenizeWords(line) {
+    var words = [];
     var cur = '';
     var has = false;
+    var glob = false;
     var quote = null;
+    function push() { words.push({ text: cur, glob: glob }); cur = ''; has = false; glob = false; }
     for (var i = 0; i < line.length; i++) {
       var ch = line[i];
       if (quote) {
@@ -246,19 +250,48 @@
       }
       if (ch === '"' || ch === "'") { quote = ch; has = true; continue; }
       if (ch === ' ' || ch === '\t') {
-        if (has) { tokens.push(cur); cur = ''; has = false; }
+        if (has) push();
         continue;
       }
       if (ch === '>' ) {
-        if (has) { tokens.push(cur); cur = ''; has = false; }
-        if (line[i + 1] === '>') { tokens.push('>>'); i++; } else { tokens.push('>'); }
+        if (has) push();
+        if (line[i + 1] === '>') { words.push({ text: '>>', glob: false }); i++; } else { words.push({ text: '>', glob: false }); }
         continue;
       }
+      if (ch === '*' || ch === '?' || ch === '[') glob = true;
       cur += ch; has = true;
     }
-    if (has) tokens.push(cur);
+    if (has) push();
     if (quote) throw new Error('unmatched quote');
-    return tokens;
+    return words;
+  }
+
+  function tokenize(line) {
+    return tokenizeWords(line).map(function (w) { return w.text; });
+  }
+
+  function hasGlob(s) { return /[*?[]/.test(s); }
+
+  // A glob as a regular expression. In the shell (`pathSep` true) * and ?
+  // stop at a slash; in a git pathspec they do not, so `git add '*.txt'`
+  // also stages notes/b.txt, as real git does.
+  function globRegex(pattern, pathSep) {
+    var any = pathSep ? '[^/]' : '.';
+    var re = '';
+    for (var i = 0; i < pattern.length; i++) {
+      var ch = pattern[i];
+      if (ch === '*') re += any + '*';
+      else if (ch === '?') re += any;
+      else if (ch === '[') {
+        var end = pattern.indexOf(']', i + 2);
+        if (end === -1) { re += '\\['; continue; }
+        var set = pattern.slice(i + 1, end);
+        if (set.charAt(0) === '!') set = '^' + set.slice(1);
+        re += '[' + set.replace(/\\/g, '\\\\') + ']';
+        i = end;
+      } else re += ch.replace(/[.+^${}()|\\\]]/g, '\\$&');
+    }
+    return new RegExp('^' + re + '$');
   }
 
   function splitRedirect(tokens) {
@@ -274,6 +307,144 @@
     }
     return out;
   }
+
+  /* ------------------------------ -h help ---------------------------- */
+
+  // What `git <command> -h` prints. The usage lines are git's own (as of
+  // git 2.55; tests/test-realgit.js checks them against the git it finds); the
+  // options are only those this sandbox understands, laid out the way
+  // git lays out its option lists, so what a learner copies into their
+  // notes is both real and something they can try here.
+  function opt(flags, desc) {
+    var pad = '    ' + flags;
+    return pad.length < 26 ? pad + new Array(27 - pad.length).join(' ') + desc
+      : pad + '\n' + new Array(27).join(' ') + desc;
+  }
+
+  var HELP = {
+    init: ['usage: git init [-q | --quiet] [--bare] [--template=<template-directory>]',
+      '                [--separate-git-dir <git-dir>] [--object-format=<format>]',
+      '                [--ref-format=<format>]',
+      '                [-b <branch-name> | --initial-branch=<branch-name>]',
+      '                [--shared[=<permissions>]] [<directory>]', '',
+      opt('-b, --initial-branch <name>', 'override the name of the initial branch')],
+    status: ['usage: git status [<options>] [--] [<pathspec>...]', '',
+      opt('--ignored', 'show ignored files')],
+    add: ['usage: git add [<options>] [--] <pathspec>...', '',
+      opt('-f, --force', 'allow adding otherwise ignored files'),
+      opt('-A, --all', 'add changes from all tracked and untracked files')],
+    commit: ['usage: git commit [-a | --interactive | --patch] [-s] [-v] [-u[<mode>]] [--amend]',
+      '                  [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>]',
+      '                  [-F <file> | -m <msg>] [--reset-author] [--allow-empty]',
+      '                  [--allow-empty-message] [--no-verify] [-e] [--author=<author>]',
+      '                  [--date=<date>] [--cleanup=<mode>] [--[no-]status]',
+      '                  [-i | -o] [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '                  [(--trailer <token>[(=|:)<value>])...] [-S[<keyid>]]',
+      '                  [--] [<pathspec>...]', '',
+      'Commit message options',
+      opt('-m, --message <message>', 'commit message'), '',
+      'Commit contents options',
+      opt('-a, --all', 'commit all changed files')],
+    rm: ['usage: git rm [-f | --force] [-n] [-r] [--cached] [--ignore-unmatch]',
+      '              [--quiet] [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '              [--] [<pathspec>...]', '',
+      opt('--cached', 'only remove from the index'),
+      opt('-r', 'allow recursive removal')],
+    restore: ['usage: git restore [<options>] [--source=<branch>] <file>...', '',
+      opt('-s, --source <tree-ish>', 'which tree-ish to checkout from'),
+      opt('-S, --staged', 'restore the index'),
+      opt('-W, --worktree', 'restore the working tree (default)')],
+    reset: ['usage: git reset [--mixed | --soft | --hard | --merge | --keep] [-q] [<commit>]',
+      '   or: git reset [-q] [<tree-ish>] [--] <pathspec>...',
+      '   or: git reset [-q] [--pathspec-from-file [--pathspec-file-nul]] [<tree-ish>]',
+      '   or: git reset --patch [<tree-ish>] [--] [<pathspec>...]', '',
+      opt('--mixed', 'reset HEAD and index'),
+      opt('--soft', 'reset only HEAD'),
+      opt('--hard', 'reset HEAD, index and working tree')],
+    log: ['usage: git log [<options>] [<revision-range>] [[--] <path>...]',
+      '   or: git show [<options>] <object>...', '',
+      opt('--oneline', 'show each commit on a single line')],
+    diff: ['usage: git diff [<options>] [<commit>] [--] [<path>...]',
+      '   or: git diff [<options>] --cached [--merge-base] [<commit>] [--] [<path>...]',
+      '   or: git diff [<options>] [--merge-base] <commit> [<commit>...] <commit> [--] [<path>...]',
+      '   or: git diff [<options>] <commit>...<commit> [--] [<path>...]',
+      '   or: git diff [<options>] <blob> <blob>',
+      '   or: git diff [<options>] --no-index [--] <path> <path> [<pathspec>...]'],
+    branch: ['usage: git branch [<options>] [-r | -a] [--merged] [--no-merged]',
+      '   or: git branch [<options>] [-f] [--recurse-submodules] <branch-name> [<start-point>]',
+      '   or: git branch [<options>] [-l] [<pattern>...]',
+      '   or: git branch [<options>] [-r] (-d | -D) <branch-name>...',
+      '   or: git branch [<options>] (-m | -M) [<old-branch>] <new-branch>',
+      '   or: git branch [<options>] (-c | -C) [<old-branch>] <new-branch>',
+      '   or: git branch [<options>] [-r | -a] [--points-at]',
+      '   or: git branch [<options>] [-r | -a] [--format]', '',
+      opt('-d, --delete', 'delete fully merged branch'),
+      opt('-D', 'delete branch (even if not merged)')],
+    checkout: ['usage: git checkout [<options>] <branch>',
+      '   or: git checkout [<options>] [<branch>] -- <file>...', '',
+      opt('-b <branch>', 'create and checkout a new branch'),
+      opt('--detach', 'detach HEAD at named commit')],
+    switch: ['usage: git switch [<options>] [<branch>]', '',
+      opt('-c, --create <branch>', 'create and switch to a new branch'),
+      opt('-d, --detach', 'detach HEAD at named commit')],
+    merge: ['usage: git merge [<options>] [<commit>...]',
+      '   or: git merge --abort',
+      '   or: git merge --continue', '',
+      opt('--abort', 'abort the current in-progress merge'),
+      opt('--continue', 'continue the current in-progress merge')],
+    remote: ['usage: git remote [-v | --verbose]',
+      '   or: git remote add [-t <branch>] [-m <master>] [-f] [--tags | --no-tags] [--mirror=<fetch|push>] <name> <url>',
+      '   or: git remote rename [--[no-]progress] <old> <new>',
+      '   or: git remote remove <name>',
+      '   or: git remote set-head <name> (-a | --auto | -d | --delete | <branch>)',
+      '   or: git remote [-v | --verbose] show [-n] <name>',
+      '   or: git remote prune [-n | --dry-run] <name>',
+      '   or: git remote [-v | --verbose] update [-p | --prune] [(<group> | <remote>)...]',
+      '   or: git remote set-branches [--add] <name> <branch>...',
+      '   or: git remote get-url [--push] [--all] <name>',
+      '   or: git remote set-url [--push] <name> <newurl> [<oldurl>]',
+      '   or: git remote set-url --add <name> <newurl>',
+      '   or: git remote set-url --delete <name> <url>', '',
+      opt('-v, --verbose', 'be verbose; must be placed before a subcommand')],
+    push: ['usage: git push [<options>] [<repository> [<refspec>...]]', '',
+      opt('-u, --set-upstream', 'set upstream for git pull/status')],
+    pull: ['usage: git pull [<options>] [<repository> [<refspec>...]]'],
+    fetch: ['usage: git fetch [<options>] [<repository> [<refspec>...]]',
+      '   or: git fetch [<options>] <group>',
+      '   or: git fetch --multiple [<options>] [(<repository>|<group>)...]',
+      '   or: git fetch --all [<options>]'],
+    clone: ['usage: git clone [<options>] [--] <repo> [<dir>]'],
+    config: ['usage: git config list [<file-option>] [<display-option>] [--includes]',
+      '   or: git config get [<file-option>] [<display-option>] [--includes] [--all] [--regexp] [--value=<pattern>] [--fixed-value] [--default=<default>] [--url=<url>] <name>',
+      '   or: git config set [<file-option>] [--type=<type>] [--all] [--value=<pattern>] [--fixed-value] <name> <value>',
+      '   or: git config unset [<file-option>] [--all] [--value=<pattern>] [--fixed-value] <name>',
+      '   or: git config rename-section [<file-option>] <old-name> <new-name>',
+      '   or: git config remove-section [<file-option>] <name>',
+      '   or: git config edit [<file-option>]',
+      '   or: git config [<file-option>] --get-colorbool <name> [<stdout-is-tty>]', '',
+      'Config file location',
+      opt('--global', 'use global config file'),
+      opt('--local', 'use repository config file')],
+    stash: ['usage: git stash list [<log-options>]',
+      '   or: git stash show [-u | --include-untracked | --only-untracked] [<diff-options>] [<stash>]',
+      '   or: git stash drop [-q | --quiet] [<stash>]',
+      '   or: git stash pop [--index] [-q | --quiet] [<stash>]',
+      '   or: git stash apply [--index] [-q | --quiet] [--label-ours=<label>] [--label-theirs=<label>] [--label-base=<label>] [<stash>]',
+      '   or: git stash branch <branchname> [<stash>]',
+      '   or: git stash [push] [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
+      '                 [-u | --include-untracked] [-a | --all] [(-m | --message) <message>]',
+      '                 [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '                 [--] [<pathspec>...]',
+      '   or: git stash save [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
+      '                 [-u | --include-untracked] [-a | --all] [<message>]',
+      '   or: git stash clear',
+      '   or: git stash create [<message>]',
+      '   or: git stash store [(-m | --message) <message>] [-q | --quiet] <commit>',
+      '   or: git stash export (--print | --to-ref <ref>) [<stash>...]',
+      '   or: git stash import <commit>'],
+    'check-ignore': ['usage: git check-ignore [<options>] <pathname>...',
+      '   or: git check-ignore [<options>] --stdin']
+  };
 
   /* ------------------------------ engine ---------------------------- */
 
@@ -291,14 +462,24 @@
     // created by `git remote add origin <url>`. Push/pull/fetch move objects
     // and refs between it and the local repo — nothing leaves the page.
     var remoteGitdir = '/origin';
+    // The mock remote's URL once it exists, "on GitHub". Whether the local
+    // repository knows it is a separate matter, kept where git keeps it:
+    // remote.origin.url in .git/config (see originUrl). The two differ
+    // before a clone, or after the learner deletes .git.
     var remoteUrl = null;
-    var upstreams = {};   // branch name -> true once `push -u` recorded it
+    // where HEAD was before the last checkout or switch (a branch name or
+    // a commit), for `git switch -`
+    var prevHead = null;
     // Merges that actually moved a ref ({ from, into }), via `git merge` or
     // `git pull`. The graph alone cannot distinguish "freshly branched off Y"
     // from "fast-forward merged into Y" — both leave X's tip an ancestor of
     // Y's — so `merged X into Y` conditions need this record.
     var mergesDone = [];
     var author = { name: 'Your Name', email: 'you@example.com' };
+    // `git config --global` settings other than user.*, keyed in lower
+    // case. The sandbox has no home folder, so they live here; the only
+    // one that changes anything is init.defaultBranch.
+    var globalConfig = {};
     var defaultBranch = options.defaultBranch || 'main';
     var repoReady = false;
     // Shell working directory, always `dir` or a folder inside it. The
@@ -325,6 +506,59 @@
     function rel(p) {
       var a = abs(p);
       return a.indexOf(dir + '/') === 0 ? a.slice(dir.length + 1) : a.replace(/^\//, '');
+    }
+
+    // What the shell makes of an unquoted glob: the matching paths, sorted,
+    // spelled as the learner typed the pattern, or null when nothing
+    // matches (bash then passes the pattern on unchanged). Dot files only
+    // match a pattern segment that starts with a dot.
+    async function expandGlob(pattern) {
+      var absolute = pattern.charAt(0) === '/';
+      var found = [{ at: absolute ? '' : cwd, shown: absolute ? '' : null }];
+      var segs = pattern.split('/');
+      for (var i = 0; i < segs.length; i++) {
+        var seg = segs[i];
+        var last = i === segs.length - 1;
+        if (seg === '' && (i === 0 || last)) continue;
+        var next = [];
+        for (var f = 0; f < found.length; f++) {
+          var here = found[f];
+          var join = function (name) {
+            return { at: here.at + '/' + name, shown: here.shown === null ? name : here.shown + '/' + name };
+          };
+          if (!hasGlob(seg)) { next.push(join(seg)); continue; }
+          var names;
+          try { names = await fs.promises.readdir(here.at || '/'); } catch (e) { continue; }
+          var re = globRegex(seg, true);
+          names.forEach(function (n) {
+            if (n.charAt(0) === '.' && seg.charAt(0) !== '.') return;
+            if (re.test(n)) next.push(join(n));
+          });
+        }
+        found = next;
+      }
+      var out = [];
+      for (var k = 0; k < found.length; k++) {
+        try { await fs.promises.stat(found[k].at); } catch (e) { continue; }
+        out.push(found[k].shown === null ? '.' : (absolute ? '/' : '') + found[k].shown);
+      }
+      return out.length ? out.sort() : null;
+    }
+
+    // A git pathspec as a test on repository paths (relative to the top,
+    // like statusMatrix reports them). Relative specs start at cwd, so
+    // `git add .` in a subfolder means that folder. A plain spec matches
+    // the path itself or anything below it; one with *, ? or [ is a glob
+    // over the whole path. Null if the spec points outside the project.
+    function pathspec(spec) {
+      var full = abs(spec);
+      if (!insideProject(full)) return null;
+      var base = full === dir ? '' : full.slice(dir.length + 1);
+      if (hasGlob(base)) {
+        var re = globRegex(base, false);
+        return function (p) { return re.test(p); };
+      }
+      return function (p) { return !base || p === base || p.indexOf(base + '/') === 0; };
     }
 
     async function ensureWorkdir() {
@@ -543,40 +777,119 @@
       return seen;
     }
 
-    async function setTrackingRef(branch, oid) {
-      await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
+    // remote.origin.url, or null when this repository has no origin
+    async function originUrl() {
+      if (!(await isRepo())) return null;
+      try { return (await gitlib.getConfig(opts({ path: 'remote.origin.url' }))) || null; }
+      catch (e) { return null; }
     }
 
-    // The "Your branch is ahead of 'origin/main' by 2 commits" lines of
-    // `git status`. Like real git it compares against the tracking ref,
-    // so a remote that moved on shows only after a fetch. Empty when the
-    // branch has no tracking ref.
-    async function trackingLines(branch) {
-      if (!remoteUrl || !branch) return [];
-      var tracked, local;
+    // One spelling of a URL for comparing: `git@github.com:a/b.git`,
+    // `https://github.com/a/b` and `https://github.com/a/b.git/` all agree.
+    function urlKey(u) {
+      return String(u).trim().toLowerCase()
+        .replace(/^[a-z+]+:\/\//, '').replace(/^[^@\/]+@/, '').replace(/^([^\/:]+):/, '$1/')
+        .replace(/\/+$/, '').replace(/\.git$/, '');
+    }
+
+    // origin/x (or remotes/origin/x, refs/remotes/origin/x) -> x, else null
+    function trackingName(spec) {
+      var m = /^(?:refs\/)?(?:remotes\/)?origin\/(.+)$/.exec(spec || '');
+      return m ? m[1] : null;
+    }
+
+    async function trackingOid(name) {
+      try { return await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + name })); }
+      catch (e) { return null; }
+    }
+
+    // the branches `git fetch` has recorded from origin, sorted; not
+    // origin/HEAD, which only points at one of them
+    async function trackingNames() {
+      var out = [];
+      async function walk(sub) {
+        var names = [];
+        try { names = await fs.promises.readdir(dir + '/.git/refs/remotes/origin' + sub); } catch (e) { return; }
+        for (var i = 0; i < names.length; i++) {
+          if (!sub && names[i] === 'HEAD') continue;
+          var p = dir + '/.git/refs/remotes/origin' + sub + '/' + names[i];
+          if ((await fs.promises.stat(p)).isDirectory()) await walk(sub + '/' + names[i]);
+          else out.push((sub + '/' + names[i]).slice(1));
+        }
+      }
+      await walk('');
+      return out.sort();
+    }
+
+    // The branch origin/HEAD points at (the remote's default branch, which
+    // fetch and clone record), or null
+    async function originHead() {
       try {
-        tracked = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + branch }));
-        local = await gitlib.resolveRef(opts({ ref: branch }));
-      } catch (e) { return []; }
-      var name = "'origin/" + branch + "'";
-      var localSet = await reachableFrom(local, opts);
-      var trackedSet = await reachableFrom(tracked, opts);
-      var ahead = 0, behind = 0;
-      Object.keys(localSet).forEach(function (o) { if (!trackedSet[o]) ahead++; });
-      Object.keys(trackedSet).forEach(function (o) { if (!localSet[o]) behind++; });
+        var t = await fs.promises.readFile(dir + '/.git/refs/remotes/origin/HEAD', 'utf8');
+        var m = /^ref: refs\/remotes\/origin\/(.+)$/.exec(t.trim());
+        return m ? m[1] : null;
+      } catch (e) { return null; }
+    }
+
+    // A branch's upstream lives in .git/config, as in git, so it survives
+    // undo and is what `git pull` and `git status` consult. Returns the
+    // remote branch's name, or null.
+    async function upstreamOf(branch) {
+      var merge = null;
+      try { merge = await gitlib.getConfig(opts({ path: 'branch.' + branch + '.merge' })); } catch (e) {}
+      return merge ? String(merge).replace(/^refs\/heads\//, '') : null;
+    }
+
+    // remoteBranch null removes the upstream
+    async function setUpstream(branch, remoteBranch) {
+      await gitlib.setConfig(opts({ path: 'branch.' + branch + '.remote', value: remoteBranch ? 'origin' : undefined }));
+      await gitlib.setConfig(opts({ path: 'branch.' + branch + '.merge', value: remoteBranch ? 'refs/heads/' + remoteBranch : undefined }));
+    }
+
+    // Where a new branch starts: { oid, tracks } where tracks names the
+    // remote branch when the start point is origin/x, as git then sets it
+    // as the upstream. Null if `spec` names nothing.
+    async function startPoint(spec) {
+      var t = trackingName(spec);
+      if (t) {
+        var toid = await trackingOid(t);
+        if (toid) return { oid: toid, tracks: t };
+      }
+      var oid = await resolveCommit(spec);
+      return oid ? { oid: oid, tracks: null } : null;
+    }
+
+    // What `git status` and `git checkout` say about a branch and its
+    // upstream: "Your branch is ahead of 'origin/main' by 1 commit." and the
+    // like. Compares with the remote-tracking branch, so news on the remote
+    // shows only after `git fetch`, as in git. Empty without an upstream.
+    async function trackingLines(branch) {
+      var up = await upstreamOf(branch);
+      if (!up) return [];
+      var name = "'origin/" + up + "'";
+      var theirs = await trackingOid(up);
+      if (!theirs) return ['Your branch is based on ' + name + ', but the upstream is gone.',
+        '  (use "git branch --unset-upstream" to fixup)'];
+      var mine;
+      try { mine = await gitlib.resolveRef(opts({ ref: branch })); } catch (e) { return []; }
+      var a = await reachableFrom(mine, opts), b = await reachableFrom(theirs, opts);
+      var ahead = Object.keys(a).filter(function (o) { return !b[o]; }).length;
+      var behind = Object.keys(b).filter(function (o) { return !a[o]; }).length;
       var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
       if (!ahead && !behind) return ['Your branch is up to date with ' + name + '.'];
-      if (ahead && behind) {
-        return ['Your branch and ' + name + ' have diverged,',
-          'and have ' + ahead + ' and ' + behind + ' different commits each, respectively.',
-          '  (use "git pull" if you want to integrate the remote branch with yours)'];
-      }
-      if (behind) {
-        return ['Your branch is behind ' + name + ' by ' + n(behind) + ', and can be fast-forwarded.',
-          '  (use "git pull" to update your local branch)'];
-      }
-      return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
+      if (!behind) return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
         '  (use "git push" to publish your local commits)'];
+      if (!ahead) return ['Your branch is behind ' + name + ' by ' + n(behind) + ', and can be fast-forwarded.',
+        '  (use "git pull" to update your local branch)'];
+      return ['Your branch and ' + name + ' have diverged,',
+        'and have ' + ahead + ' and ' + behind + ' different commits each, respectively.',
+        '  (use "git pull" if you want to integrate the remote branch with yours)'];
+    }
+
+    function prefixLines(lines) { return lines.length ? '\n' + lines.join('\n') : ''; }
+
+    async function setTrackingRef(branch, oid) {
+      await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
     }
 
     /* ------------------------- merge conflicts ---------------------- */
@@ -819,8 +1132,9 @@
 
       // remote-tracking refs (origin/*) appear as grey pills, like real git log
       if (remoteUrl) {
-        var tracked = [];
-        try { tracked = await fs.promises.readdir(dir + '/.git/refs/remotes/origin'); } catch (e) {}
+        // origin/HEAD is left out: a pill saying where the remote's
+        // default branch is would only crowd the graph
+        var tracked = await trackingNames();
         for (var t = 0; t < tracked.length; t++) {
           try {
             var toid = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + tracked[t] }));
@@ -885,7 +1199,7 @@
 
     /* --------------------------- git status ------------------------ */
 
-    // returns { staged:[], modified:[], untracked:[], deleted:[], stagedDeleted:[] }
+    // returns { staged:[], modified:[], untracked:[], deleted:[], stagedDeleted:[], ignored:[] }
     // isomorphic-git statusMatrix rows are [filepath, HEAD, WORKDIR, STAGE] where
     //   HEAD:    0 = absent,               1 = present
     //   WORKDIR: 0 = absent,               1 = same as HEAD, 2 = different from HEAD
@@ -899,10 +1213,18 @@
       var merge = await mergeState();
       var res = {
         staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [],
-        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge
+        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge,
+        ignored: []
       };
+      // statusMatrix lists every working file except those .gitignore
+      // matches (and does not track), so whatever it leaves out is ignored
+      var listed = {};
+      matrix.forEach(function (row) { listed[row[0]] = true; });
+      (await listFiles()).forEach(function (f) { if (!listed[f]) res.ignored.push(f); });
       var skip = {};
       res.conflicted.forEach(function (c) { skip[c.file] = true; });
+      // a file taken out of git (`git rm --cached`) but still on disk
+      var leftOnDisk = [];
       matrix.forEach(function (row) {
         var file = row[0], head = row[1], workdir = row[2], stage = row[3];
         if (skip[file]) return;
@@ -917,7 +1239,7 @@
         }
 
         // file was in the last commit
-        if (stage === 0) { res.stagedDeleted.push(file); if (workdir !== 0) res.untracked.push(file); return; }
+        if (stage === 0) { res.stagedDeleted.push(file); if (workdir !== 0) leftOnDisk.push(file); return; }
         if (workdir === 0) { res.deleted.push(file); return; }
         if (stage === 1) { if (workdir === 2) res.modified.push(file); return; }
         // stage 2 or 3 => something is staged
@@ -926,7 +1248,157 @@
           if (stage === 3) res.modified.push(file);        // staged one version, edited again
         }
       });
+      // statusMatrix still lists it because HEAD has it, so ask .gitignore
+      for (var i = 0; i < leftOnDisk.length; i++) {
+        if (await gitlib.isIgnored(opts({ filepath: leftOnDisk[i] }))) res.ignored.push(leftOnDisk[i]);
+        else res.untracked.push(leftOnDisk[i]);
+      }
+      res.ignored.sort();
       return res;
+    }
+
+    // Untracked (or ignored) files as `git status` lists them: a folder
+    // holding nothing else git knows about shows once, as `notes/`, instead
+    // of file by file. `others` are paths that keep a folder from
+    // collapsing on top of the tracked ones.
+    async function untrackedShown(untracked, others) {
+      var known = (await gitlib.statusMatrix(opts()))
+        .filter(function (row) { return row[1] !== 0 || row[3] !== 0; })
+        .map(function (row) { return row[0]; })
+        .concat(others || []);
+      var shown = [];
+      untracked.forEach(function (f) {
+        var parts = f.split('/');
+        var name = f;
+        for (var i = 1; i < parts.length; i++) {
+          var d = parts.slice(0, i).join('/') + '/';
+          if (!known.some(function (k) { return k.indexOf(d) === 0; })) { name = d; break; }
+        }
+        if (shown.indexOf(name) === -1) shown.push(name);
+      });
+      return shown.sort();
+    }
+
+    // `git rm` deletes a folder once its last file has gone, as git does
+    async function removeFileAndEmptyParents(p) {
+      try { await fs.promises.unlink(p); } catch (e) { return; }
+      var d = fs._dirname(p);
+      while (d !== dir && insideProject(d)) {
+        try { await fs.promises.rmdir(d); } catch (e) { return; }
+        d = fs._dirname(d);
+      }
+    }
+
+    // path -> blob oid for everything in the staging area
+    async function indexEntries() {
+      var out = {};
+      await gitlib.walk(opts({
+        trees: [gitlib.STAGE()],
+        map: async function (fp, entries) {
+          if (!entries[0]) return null;
+          if (fp !== '.' && (await entries[0].type()) === 'blob') out[fp] = await entries[0].oid();
+          return true;
+        }
+      }));
+      return out;
+    }
+
+    function ambiguous(word) {
+      return {
+        out: "fatal: ambiguous argument '" + word + "': unknown revision or path not in the working tree.\n" +
+          "Use '--' to separate paths from revisions, like this:\n" +
+          "'git <command> [<revision>...] -- [<file>...]'",
+        ok: false
+      };
+    }
+
+    // Is `spec` a path git could mean: on disk, staged, or in the last commit?
+    async function knownPath(spec) {
+      var match = pathspec(spec);
+      if (!match) return false;
+      try { await fs.promises.stat(abs(spec)); return true; } catch (e) {}
+      var pool = await gitlib.listFiles(opts());
+      try { pool = pool.concat(Object.keys(await flatTree(await gitlib.resolveRef(opts({ ref: 'HEAD' }))))); } catch (e) {}
+      return pool.some(match);
+    }
+
+    // What `git reset` prints after it has unstaged things: every tracked
+    // file whose working copy now differs from the staging area.
+    async function unstagedSummary() {
+      var st = await statusModel();
+      var rows = st.modified.map(function (f) { return 'M\t' + f; })
+        .concat(st.deleted.map(function (f) { return 'D\t' + f; }));
+      rows.sort(function (a, b) { return a.slice(2) < b.slice(2) ? -1 : 1; });
+      return rows.length ? 'Unstaged changes after reset:\n' + rows.join('\n') : '';
+    }
+
+    // Put the staged copy of each matching path back to how commit `oid`
+    // has it (or take it out of the staging area, if `oid` lacks it or
+    // there is no commit yet). Shared by `git reset <path>` and
+    // `git restore --staged <path>`; the working files are not touched.
+    async function unstagePaths(specs, oid, verb) {
+      var pool = {};
+      (await gitlib.listFiles(opts())).forEach(function (f) { pool[f] = true; });
+      if (oid) Object.keys(await flatTree(oid)).forEach(function (f) { pool[f] = true; });
+      var hits = [];
+      for (var i = 0; i < specs.length; i++) {
+        var match = pathspec(specs[i]);
+        var h = match ? Object.keys(pool).filter(match) : [];
+        if (!h.length) {
+          return verb === 'reset'
+            ? ambiguous(specs[i])
+            : { out: "error: pathspec '" + specs[i] + "' did not match any file(s) known to git", ok: false };
+        }
+        h.forEach(function (f) { if (hits.indexOf(f) === -1) hits.push(f); });
+      }
+      for (var j = 0; j < hits.length; j++) {
+        if (oid) await gitlib.resetIndex(opts({ filepath: hits[j], ref: oid }));
+        else await gitlib.remove(opts({ filepath: hits[j] }));
+      }
+      await markResolved(hits);
+      return { out: verb === 'reset' ? await unstagedSummary() : '', ok: true };
+    }
+
+    // `git reset [--soft|--mixed|--hard] <commit>`: move the current branch
+    // (or a detached HEAD) to `oid`; --mixed also resets the staging area
+    // to it, --hard the working files too. Any merge in progress is
+    // dropped, as in git.
+    async function resetTo2(oid, mode) {
+      var branch = await currentBranch();
+      var tracked = await gitlib.listFiles(opts());
+      await gitlib.writeRef(opts(branch
+        ? { ref: 'refs/heads/' + branch, value: oid, force: true }
+        : { ref: 'HEAD', value: oid, force: true }));
+      await clearMergeState();
+      if (mode === 'soft') return { out: '', ok: true };
+      var target = await flatTree(oid);
+      if (mode === 'hard') {
+        await gitlib.checkout(opts({ ref: branch || oid, force: true }));
+        // files git tracked that the commit does not have go away
+        for (var i = 0; i < tracked.length; i++) {
+          if (!target[tracked[i]]) await removeFileAndEmptyParents(dir + '/' + tracked[i]);
+        }
+        return { out: 'HEAD is now at ' + oid.slice(0, 7) + ' ' + await subjectOf(oid), ok: true };
+      }
+      var all = {};
+      tracked.concat(Object.keys(target)).forEach(function (f) { all[f] = true; });
+      var paths = Object.keys(all);
+      for (var j = 0; j < paths.length; j++) await gitlib.resetIndex(opts({ filepath: paths[j], ref: oid }));
+      return { out: await unstagedSummary(), ok: true };
+    }
+
+    // .git/config as `git config --list` prints it: section.key=value
+    async function localConfigLines() {
+      var text = '';
+      try { text = await fs.promises.readFile(dir + '/.git/config', 'utf8'); } catch (e) { return []; }
+      var out = [], section = '';
+      text.split('\n').forEach(function (line) {
+        var sec = /^\s*\[([^\s\]"]+)(?:\s+"([^"]*)")?\]/.exec(line);
+        if (sec) { section = sec[1].toLowerCase() + (sec[2] !== undefined ? '.' + sec[2] : ''); return; }
+        var kv = /^\s*([A-Za-z][\w-]*)\s*=\s*(.*)$/.exec(line);
+        if (kv && section) out.push(section + '.' + kv[1].toLowerCase() + '=' + kv[2].trim());
+      });
+      return out;
     }
 
     /* ---------------------------- commits --------------------------- */
@@ -934,6 +1406,8 @@
     async function makeCommit(msg, st) {
       var o = { message: msg, author: { name: author.name, email: author.email } };
       var merge = await mergeState();
+      var root = false;
+      try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) { root = true; }
       // concluding a conflicted merge: the commit gets both parents
       if (merge) o.parent = [await gitlib.resolveRef(opts({ ref: 'HEAD' })), merge.oid];
       var sha = await gitlib.commit(opts(o));
@@ -944,7 +1418,7 @@
       }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
-        out: '[' + (branch || 'detached HEAD') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        out: '[' + (branch || 'detached HEAD') + (root ? ' (root-commit)' : '') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
         ok: true
       };
     }
@@ -1013,7 +1487,15 @@
 
       if (!sub) return { out: usageGit(), ok: false };
 
-      if (sub !== 'init' && sub !== 'help' && sub !== 'config' && !(await isRepo())) {
+      // `git <command> -h` works anywhere, even outside a repository.
+      // Real git exits with 129 here; the sandbox counts it as success so
+      // the text is not shown as an error, and `> file` captures it.
+      if (rest.length === 1 && (rest[0] === '-h' || rest[0] === '--help') && HELP[sub]) {
+        return { out: HELP[sub].join('\n'), ok: true };
+      }
+      if (sub === 'help' && rest[0] && HELP[rest[0]]) return { out: HELP[rest[0]].join('\n'), ok: true };
+
+      if (sub !== 'init' && sub !== 'clone' && sub !== 'help' && sub !== 'config' && !(await isRepo())) {
         return { out: 'fatal: not a git repository (or any of the parent directories): .git\nHint: run `git init` first.', ok: false };
       }
 
@@ -1023,27 +1505,87 @@
             return { out: 'This sandbox keeps the repository at the top of the project.\nRun `cd ~` first, then `git init`.', ok: false };
           }
           if (await isRepo()) return { out: 'Reinitialized existing Git repository in ' + displayDir + '/.git/', ok: true };
-          await gitlib.init(opts({ defaultBranch: defaultBranch }));
+          var initial = globalConfig['init.defaultbranch'] || defaultBranch;
+          for (var ib = 0; ib < rest.length; ib++) {
+            if (rest[ib] === '-b' || rest[ib] === '--initial-branch') initial = rest[++ib] || initial;
+            else if (rest[ib].indexOf('--initial-branch=') === 0) initial = rest[ib].slice(17);
+          }
+          await gitlib.init(opts({ defaultBranch: initial }));
+          detachPoint = null;
+          prevHead = null;
           repoReady = true;
           return { out: 'Initialized empty Git repository in ' + displayDir + '/.git/', ok: true };
         }
 
         case 'config': {
-          if (rest[0] === 'user.name' && rest[1]) { author.name = rest.slice(1).join(' '); return { out: '', ok: true }; }
-          if (rest[0] === 'user.email' && rest[1]) { author.email = rest[1]; return { out: '', ok: true }; }
-          if (rest[0] === 'user.name') return { out: author.name, ok: true };
-          if (rest[0] === 'user.email') return { out: author.email, ok: true };
-          return { out: 'usage: git config user.name "Your Name"', ok: false };
+          var global = false, list = false, unset = false;
+          var cw = [];
+          // git 2.46+ spells the actions as subcommands: list, get, set, unset
+          var action = ['list', 'get', 'set', 'unset'].indexOf(rest[0]) !== -1 ? rest[0] : null;
+          if (action === 'list') list = true;
+          if (action === 'unset') unset = true;
+          rest.slice(action ? 1 : 0).forEach(function (a) {
+            if (a === '--global' || a === '--system') global = true;
+            else if (a === '-l' || a === '--list') list = true;
+            else if (a === '--unset') unset = true;
+            else if (a === '--local' || a === '--get' || a === '--add' || a === '--replace-all') { /* the default */ }
+            else cw.push(a);
+          });
+          var inRepo = await isRepo();
+          if (list) {
+            var all = ['user.name=' + author.name, 'user.email=' + author.email];
+            Object.keys(globalConfig).sort().forEach(function (k) { all.push(k + '=' + globalConfig[k]); });
+            if (!global && inRepo) all = all.concat(await localConfigLines());
+            return { out: all.join('\n'), ok: true };
+          }
+          if (!cw.length) return { out: HELP.config.join('\n'), ok: false };
+          var key = cw[0];
+          // section and variable names are case-insensitive in git
+          var lk = key.toLowerCase();
+          if (lk.indexOf('.') <= 0 || lk.charAt(lk.length - 1) === '.') {
+            return { out: 'error: key does not contain a section: ' + key, ok: false };
+          }
+          var value = cw.length > 1 ? cw.slice(1).join(' ') : null;
+          if (action === 'get' && value !== null) return { out: 'error: wrong number of arguments, should be 1', ok: false };
+          if (action === 'set' && value === null) return { out: 'error: wrong number of arguments, should be 2', ok: false };
+          // user.name and user.email sign the sandbox's commits, whichever file they are set in
+          if (lk === 'user.name' || lk === 'user.email') {
+            var field = lk === 'user.name' ? 'name' : 'email';
+            if (value === null && !unset) return { out: author[field], ok: true };
+            author[field] = unset ? (field === 'name' ? 'Your Name' : 'you@example.com') : value;
+            return { out: '', ok: true };
+          }
+          if (!global && !inRepo) {
+            if (value === null && !unset && lk in globalConfig) return { out: globalConfig[lk], ok: true };
+            return { out: 'fatal: not in a git directory', ok: false };
+          }
+          if (global) {
+            if (unset) delete globalConfig[lk];
+            else if (value === null) return lk in globalConfig ? { out: globalConfig[lk], ok: true } : { out: '', ok: false };
+            else globalConfig[lk] = value;
+            return { out: '', ok: true };
+          }
+          if (unset) { await gitlib.setConfig(opts({ path: key, value: undefined })); return { out: '', ok: true }; }
+          if (value === null) {
+            var got = await gitlib.getConfig(opts({ path: key }));
+            if (got === undefined || got === null) {
+              return lk in globalConfig ? { out: globalConfig[lk], ok: true } : { out: '', ok: false };
+            }
+            return { out: String(got), ok: true };
+          }
+          await gitlib.setConfig(opts({ path: key, value: value }));
+          return { out: '', ok: true };
         }
 
         case 'status': {
           var st = await statusModel();
           var lines = [await headLine()];
+          var stBranch = await currentBranch();
+          if (stBranch) lines = lines.concat(await trackingLines(stBranch));
           var anyCommit = true;
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
           if (!anyCommit) lines.push('', 'No commits yet');
-          else lines = lines.concat(await trackingLines(await currentBranch()));
           if (st.conflicted.length) {
             lines.push('You have unmerged paths.',
               '  (fix conflicts and run "git commit")',
@@ -1054,7 +1596,8 @@
           }
 
           if (st.staged.length || st.stagedDeleted.length) {
-            lines.push('', 'Changes to be committed:');
+            lines.push('', 'Changes to be committed:',
+              anyCommit ? '  (use "git restore --staged <file>..." to unstage)' : '  (use "git rm --cached <file>..." to unstage)');
             st.staged.forEach(function (s) { lines.push('  {g}' + s.kind + ':   ' + s.file + '{/}'); });
             st.stagedDeleted.forEach(function (f) { lines.push('  {g}deleted:    ' + f + '{/}'); });
           }
@@ -1063,17 +1606,31 @@
             st.conflicted.forEach(function (c) { lines.push('  {r}' + c.kind + ':   ' + c.file + '{/}'); });
           }
           if (st.modified.length || st.deleted.length) {
-            lines.push('', 'Changes not staged for commit:');
+            lines.push('', 'Changes not staged for commit:',
+              '  (use "git ' + (st.deleted.length ? 'add/rm' : 'add') + ' <file>..." to update what will be committed)',
+              '  (use "git restore <file>..." to discard changes in working directory)');
             st.modified.forEach(function (f) { lines.push('  {r}modified:   ' + f + '{/}'); });
             st.deleted.forEach(function (f) { lines.push('  {r}deleted:    ' + f + '{/}'); });
           }
           if (st.untracked.length) {
-            lines.push('', 'Untracked files:');
-            st.untracked.forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
+            lines.push('', 'Untracked files:', '  (use "git add <file>..." to include in what will be committed)');
+            (await untrackedShown(st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
-          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length &&
-              !st.untracked.length && !st.conflicted.length) {
-            lines.push('', 'nothing to commit, working tree clean');
+          if (rest.indexOf('--ignored') !== -1 && st.ignored.length) {
+            lines.push('', 'Ignored files:', '  (use "git add -f <file>..." to include in what will be committed)');
+            (await untrackedShown(st.ignored, st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
+          }
+          var anyStaged = st.staged.length || st.stagedDeleted.length;
+          if (!anyStaged) {
+            if (st.modified.length || st.deleted.length || st.conflicted.length) {
+              lines.push('', 'no changes added to commit (use "git add" and/or "git commit -a")');
+            } else if (st.untracked.length) {
+              lines.push('', 'nothing added to commit but untracked files present (use "git add" to track)');
+            } else if (!anyCommit) {
+              lines.push('', 'nothing to commit (create/copy files and use "git add" to track)');
+            } else {
+              lines.push('', 'nothing to commit, working tree clean');
+            }
           }
           return { out: lines.join('\n'), ok: true };
         }
@@ -1081,55 +1638,138 @@
         case 'add': {
           if (!rest.length) return { out: "Nothing specified, nothing added.\nhint: try 'git add .' or 'git add <file>'", ok: false };
           var added = [];
+          // statusMatrix leaves out files .gitignore matches; -f takes them too
+          var force = rest.indexOf('-f') !== -1 || rest.indexOf('--force') !== -1;
+          var m = await gitlib.statusMatrix(opts());
+          var st0 = await statusModel();
+          var conflictedNow = st0.conflicted.map(function (c) { return c.file; });
+          var ignoredNamed = [];
           for (var i = 0; i < rest.length; i++) {
             var spec = rest[i];
-            if (spec === '.' || spec === '-A' || spec === '--all' || spec === '*') {
-              var m = await gitlib.statusMatrix(opts());
-              // like real git, `.` and `*` mean "here and below"; -A is repo-wide
-              var under = (spec === '.' || spec === '*') && cwd !== dir ? rel(cwd) + '/' : '';
-              for (var j = 0; j < m.length; j++) {
-                var row = m[j];
-                if (under && row[0].indexOf(under) !== 0) continue;
-                if (row[2] === 0) await gitlib.remove(opts({ filepath: row[0] }));
-                else await gitlib.add(opts({ filepath: row[0] }));
-                added.push(row[0]);
-              }
-            } else {
-              var f = rel(spec);
-              try { await fs.promises.stat(abs(spec)); }
-              catch (e) {
-                // a conflicted file the learner deleted: staging the deletion resolves it
-                var gone = (await statusModel()).conflicted.some(function (c) { return c.file === f; });
-                if (!gone) return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
-                await gitlib.remove(opts({ filepath: f }));
-                added.push(f);
+            if (spec === '--' || (spec.charAt(0) === '-' && spec !== '-A' && spec !== '--all')) continue;
+            // -A is repo-wide; `.` means here and below, as in real git
+            var match = spec === '-A' || spec === '--all' ? pathspec(dir) : pathspec(spec);
+            if (!match) return { out: "fatal: " + spec + ": '" + spec + "' is outside repository at '" + displayDir + "'", ok: false };
+            var hit = m.filter(function (row) { return match(row[0]); }).map(function (row) { return row[0]; });
+            // a conflicted file the learner deleted: staging the deletion resolves it
+            conflictedNow.forEach(function (c) { if (match(c) && hit.indexOf(c) === -1) hit.push(c); });
+            if (force) {
+              st0.ignored.forEach(function (f) {
+                if (match(f) && hit.indexOf(f) === -1) hit.push(f);
+              });
+            }
+            if (!hit.length) {
+              var exists = true;
+              try { await fs.promises.stat(abs(spec)); } catch (e) { exists = false; }
+              // Naming an ignored file outright is refused (but the other
+              // paths still go in); a folder or glob that only reaches
+              // ignored files just matches nothing, as in real git.
+              if (exists && !hasGlob(spec) && await gitlib.isIgnored(opts({ filepath: rel(spec) }))) {
+                ignoredNamed.push(spec);
                 continue;
               }
-              await gitlib.add(opts({ filepath: f }));
-              added.push(f);
+              if (exists) continue;    // an empty folder: nothing to add, no complaint
+              return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
+            }
+            for (var j = 0; j < hit.length; j++) {
+              var gone = true;
+              try { gone = !(await fs.promises.stat(dir + '/' + hit[j])).isFile(); } catch (e) {}
+              if (gone) await gitlib.remove(opts({ filepath: hit[j] }));
+              else await gitlib.add(opts({ filepath: hit[j], force: force }));
+              added.push(hit[j]);
             }
           }
           await markResolved(added);
+          if (ignoredNamed.length) {
+            return {
+              out: 'The following paths are ignored by one of your .gitignore files:\n' +
+                ignoredNamed.join('\n') + '\n' +
+                '{y}hint: Use -f if you really want to add them.{/}',
+              ok: false
+            };
+          }
           return { out: '', ok: true, silentNote: added.length + ' path(s) staged' };
         }
 
         case 'rm': {
-          var target = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
-          if (!target) return { out: 'usage: git rm <file>', ok: false };
-          await gitlib.remove(opts({ filepath: rel(target) }));
-          try { await fs.promises.unlink(abs(target)); } catch (e) {}
-          await markResolved([rel(target)]);
-          return { out: "rm '" + rel(target) + "'", ok: true };
+          var cached = rest.indexOf('--cached') !== -1;
+          var recursive = rest.some(function (a) { return /^-[a-zA-Z]*r/.test(a) && a.charAt(1) !== '-'; });
+          var dashes = rest.indexOf('--');
+          var rmSpecs = rest.filter(function (a, n) { return (dashes !== -1 && n > dashes) || (a.charAt(0) !== '-'); });
+          if (!rmSpecs.length) return { out: 'usage: git rm [--cached] [-r] [--] <file>...', ok: false };
+          // only what git tracks can be removed: the index, plus files
+          // still in conflict
+          var inIndex = await gitlib.listFiles(opts());
+          (await mergeState() || { unresolved: [] }).unresolved.forEach(function (c) {
+            if (inIndex.indexOf(c.file) === -1) inIndex.push(c.file);
+          });
+          var doomed = [];
+          // check every path first: git removes nothing if one is wrong
+          for (var ri = 0; ri < rmSpecs.length; ri++) {
+            var rmMatch = pathspec(rmSpecs[ri]);
+            var rmHit = rmMatch ? inIndex.filter(rmMatch) : [];
+            if (!rmHit.length) return { out: "fatal: pathspec '" + rmSpecs[ri] + "' did not match any files", ok: false };
+            if (!recursive && !hasGlob(rmSpecs[ri]) && rmHit.some(function (f) { return f !== rel(rmSpecs[ri]); })) {
+              return { out: "fatal: not removing '" + rmSpecs[ri] + "' recursively without -r", ok: false };
+            }
+            rmHit.forEach(function (f) { if (doomed.indexOf(f) === -1) doomed.push(f); });
+          }
+          doomed.sort();
+          for (var rd = 0; rd < doomed.length; rd++) {
+            await gitlib.remove(opts({ filepath: doomed[rd] }));
+            // --cached takes the file out of git only; it stays on disk
+            if (!cached) await removeFileAndEmptyParents(dir + '/' + doomed[rd]);
+          }
+          await markResolved(doomed);
+          return { out: doomed.map(function (f) { return "rm '" + f + "'"; }).join('\n'), ok: true };
+        }
+
+        case 'check-ignore': {
+          var ciPaths = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (!ciPaths.length) return { out: 'fatal: no path specified', ok: false };
+          var ignoredOnes = [];
+          for (var ci = 0; ci < ciPaths.length; ci++) {
+            if (await gitlib.isIgnored(opts({ filepath: rel(ciPaths[ci]) }))) ignoredOnes.push(ciPaths[ci]);
+          }
+          // like git: prints the ignored ones, and fails if there were none
+          return { out: ignoredOnes.join('\n'), ok: ignoredOnes.length > 0 };
         }
 
         case 'commit': {
-          var msg = null;
+          // each -m is a paragraph of the message, as in git
+          var msgs = [];
+          var stageAll = false;
           for (var k = 0; k < rest.length; k++) {
-            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1] || ''; break; }
-            if (rest[k].indexOf('-m') === 0 && rest[k].length > 2) { msg = rest[k].slice(2); break; }
+            var ca = rest[k];
+            if (ca === '-m' || ca === '--message') { msgs.push(rest[++k] || ''); continue; }
+            if (ca.indexOf('--message=') === 0) { msgs.push(ca.slice(10)); continue; }
+            if (ca === '-a' || ca === '--all') { stageAll = true; continue; }
+            // bundled short options, as in `-am "message"` or `-mText`
+            if (/^-[a-zA-Z]/.test(ca)) {
+              for (var ck = 1; ck < ca.length; ck++) {
+                if (ca.charAt(ck) === 'a') stageAll = true;
+                else if (ca.charAt(ck) === 'm') {
+                  msgs.push(ck + 1 < ca.length ? ca.slice(ck + 1) : (rest[++k] || ''));
+                  break;
+                }
+              }
+            }
           }
+          var msg = msgs.length ? msgs.filter(Boolean).join('\n\n') : null;
           if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
+          if (st2.conflicted.length) return unmergedError('Committing');
+          if (stageAll) {
+            // -a stages every change to a file git already tracks, never
+            // an untracked one
+            var cm = await gitlib.statusMatrix(opts());
+            for (var cr = 0; cr < cm.length; cr++) {
+              if (cm[cr][1] === 0 && cm[cr][3] === 0) continue;
+              if (cm[cr][2] === 0) await gitlib.remove(opts({ filepath: cm[cr][0] }));
+              else await gitlib.add(opts({ filepath: cm[cr][0] }));
+            }
+            st2 = await statusModel();
+          }
           var blocked = await commitBlocker(st2);
           if (blocked) return blocked;
           if (msg === null) {
@@ -1144,8 +1784,23 @@
 
         case 'log': {
           var oneline = rest.indexOf('--oneline') !== -1;
+          // `git log origin/main`: start from a branch, remote-tracking
+          // branch or commit instead of HEAD
+          var logFrom = null;
+          for (var lf = 0; lf < rest.length; lf++) {
+            if (rest[lf] === '-n') { lf++; continue; }
+            if (rest[lf].charAt(0) === '-') continue;
+            var tn = trackingName(rest[lf]);
+            logFrom = (tn && await trackingOid(tn)) || await resolveCommit(rest[lf]);
+            if (!logFrom) {
+              return { out: "fatal: ambiguous argument '" + rest[lf] + "': unknown revision or path not in the working tree.\n" +
+                "Use '--' to separate paths from revisions, like this:\n" +
+                "'git <command> [<revision>...] -- [<file>...]'", ok: false };
+            }
+            break;
+          }
           var commits;
-          try { commits = await gitlib.log(opts({ depth: 50 })); }
+          try { commits = await gitlib.log(opts({ depth: 50, ref: logFrom || 'HEAD' })); }
           catch (e) { return { out: "fatal: your current branch does not have any commits yet", ok: false }; }
           if (!commits.length) return { out: 'fatal: your current branch does not have any commits yet', ok: false };
           // isomorphic-git's log revisits shared history once per merge parent
@@ -1156,20 +1811,38 @@
             return true;
           });
           var g = await graphModel();
+          // --all: every commit any branch or origin/* reaches, newest first
+          if (rest.indexOf('--all') !== -1) {
+            commits = [];
+            for (var ga = 0; ga < g.commits.length; ga++) commits.push(await gitlib.readCommit(opts({ oid: g.commits[ga].oid })));
+          }
+          // -3, -n 3, --max-count=3
+          var maxCount = null;
+          for (var lr = 0; lr < rest.length; lr++) {
+            if (/^-\d+$/.test(rest[lr])) maxCount = parseInt(rest[lr].slice(1), 10);
+            else if (rest[lr] === '-n') maxCount = parseInt(rest[lr + 1], 10);
+            else if (rest[lr].indexOf('--max-count=') === 0) maxCount = parseInt(rest[lr].slice(12), 10);
+          }
+          if (maxCount !== null && !isNaN(maxCount)) commits = commits.slice(0, maxCount);
           var refsByOid = {};
           g.commits.forEach(function (c) { if (c.refs.length) refsByOid[c.oid] = c.refs; });
           // a detached HEAD points at a commit, not a branch: `(HEAD, main)`
           if (g.detached) refsByOid[g.headOid] = [{ name: 'HEAD' }].concat(refsByOid[g.headOid] || []);
+          var remoteHead = await originHead();
+          var rhOid = remoteHead ? await trackingOid(remoteHead) : null;
+          if (rhOid) refsByOid[rhOid] = (refsByOid[rhOid] || []).concat([{ name: 'origin/HEAD' }]);
           var outLines = [];
           commits.forEach(function (c) {
             var decor = refsByOid[c.oid]
-              ? ' {y}(' + refsByOid[c.oid].map(function (r) { return r.isHead ? 'HEAD -> ' + r.name : r.name; }).join(', ') + '){/}'
+              ? ' {y}(' + refsByOid[c.oid].slice().sort(function (x, y) { return (y.isHead || y.name === 'HEAD') - (x.isHead || x.name === 'HEAD'); })
+                  .map(function (r) { return r.isHead ? 'HEAD -> ' + r.name : r.name; }).join(', ') + '){/}'
               : '';
             if (oneline) {
               outLines.push('{y}' + c.oid.slice(0, 7) + '{/}' + decor + ' ' + c.commit.message.split('\n')[0]);
             } else {
               outLines.push('{y}commit ' + c.oid + '{/}' + decor);
               outLines.push('Author: ' + c.commit.author.name + ' <' + c.commit.author.email + '>');
+              outLines.push('Date:   ' + gitDate(c.commit.author));
               outLines.push('');
               outLines.push('    ' + c.commit.message.split('\n')[0]);
               outLines.push('');
@@ -1179,23 +1852,88 @@
         }
 
         case 'branch': {
-          var del = rest.indexOf('-d') !== -1 || rest.indexOf('-D') !== -1;
-          var names = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          var del = false, listAll = false, listRemote = false, upTo = null, unsetUp = false;
+          var names = [];
+          for (var bi = 0; bi < rest.length; bi++) {
+            var ba = rest[bi];
+            if (ba === '-d' || ba === '-D' || ba === '--delete') del = true;
+            else if (ba === '-a' || ba === '--all') listAll = true;
+            else if (ba === '-r' || ba === '--remotes') listRemote = true;
+            else if (ba === '-u' || ba === '--set-upstream-to') upTo = rest[++bi] || '';
+            else if (ba.indexOf('--set-upstream-to=') === 0) upTo = ba.slice(18);
+            else if (ba === '--unset-upstream') unsetUp = true;
+            else if (ba.charAt(0) !== '-') names.push(ba);
+          }
           var all = await gitlib.listBranches(opts());
           var cur = await currentBranch();
+          if (del && listRemote) {
+            // `git branch -d -r origin/x` forgets a remote-tracking branch
+            var gone = trackingName(names[0] || '');
+            var goneOid = gone ? await trackingOid(gone) : null;
+            if (!goneOid) return { out: "error: remote-tracking branch '" + (names[0] || '') + "' not found.", ok: false };
+            await gitlib.deleteRef(opts({ ref: 'refs/remotes/origin/' + gone }));
+            return { out: 'Deleted remote-tracking branch origin/' + gone + ' (was ' + goneOid.slice(0, 7) + ').', ok: true };
+          }
           if (del) {
             if (!names.length) return { out: 'fatal: branch name required', ok: false };
             if (names[0] === cur) return { out: "error: cannot delete branch '" + names[0] + "' checked out at '" + displayDir + "'", ok: false };
             if (all.indexOf(names[0]) === -1) return { out: "error: branch '" + names[0] + "' not found.", ok: false };
+            var delOid = await gitlib.resolveRef(opts({ ref: names[0] }));
             await gitlib.deleteBranch(opts({ ref: names[0] }));
-            return { out: "Deleted branch " + names[0], ok: true };
+            await setUpstream(names[0], null);
+            return { out: 'Deleted branch ' + names[0] + ' (was ' + delOid.slice(0, 7) + ').', ok: true };
+          }
+          if (upTo !== null || unsetUp) {
+            var forBranch = names[0] || cur;
+            if (!forBranch) return { out: 'fatal: could not set upstream of HEAD when it does not point to any branch.', ok: false };
+            if (all.indexOf(forBranch) === -1) return { out: "fatal: branch '" + forBranch + "' does not exist", ok: false };
+            if (unsetUp) {
+              if (!(await upstreamOf(forBranch))) return { out: "fatal: branch '" + forBranch + "' has no upstream information", ok: false };
+              await setUpstream(forBranch, null);
+              return { out: '', ok: true };
+            }
+            var upName = trackingName(upTo);
+            if (!upName || !(await trackingOid(upName))) {
+              return {
+                out: "fatal: the requested upstream branch '" + upTo + "' does not exist\n" +
+                  'hint:\n' +
+                  'hint: If you are planning on basing your work on an upstream\n' +
+                  'hint: branch that already exists at the remote, you may need to\n' +
+                  'hint: run "git fetch" to retrieve it.\n' +
+                  'hint:\n' +
+                  'hint: If you are planning to push out a new local branch that\n' +
+                  'hint: will track its remote counterpart, you may want to use\n' +
+                  'hint: "git push -u" to set the upstream config as you push.',
+                ok: false
+              };
+            }
+            await setUpstream(forBranch, upName);
+            return { out: "branch '" + forBranch + "' set up to track 'origin/" + upName + "'.", ok: true };
           }
           if (!names.length) {
-            var listed = all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
-            if (!cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
+            var listed = listRemote ? [] : all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
+            if (!listRemote && !cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
+            if (listAll || listRemote) {
+              var oh = await originHead();
+              if (oh) listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/HEAD{/} -> origin/' + oh);
+              (await trackingNames()).forEach(function (t) {
+                listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/' + t + '{/}');
+              });
+            }
             return { out: listed.join('\n'), ok: true };
           }
           if (all.indexOf(names[0]) !== -1) return { out: "fatal: a branch named '" + names[0] + "' already exists", ok: false };
+          if (names[1]) {
+            // `git branch <name> <start-point>`; starting from origin/x tracks it
+            var start = await startPoint(names[1]);
+            if (!start) return { out: "fatal: not a valid object name: '" + names[1] + "'", ok: false };
+            await gitlib.writeRef(opts({ ref: 'refs/heads/' + names[0], value: start.oid }));
+            if (start.tracks) {
+              await setUpstream(names[0], start.tracks);
+              return { out: "branch '" + names[0] + "' set up to track 'origin/" + start.tracks + "'.", ok: true };
+            }
+            return { out: '', ok: true, silentNote: 'created branch ' + names[0] };
+          }
           try { await gitlib.branch(opts({ ref: names[0] })); }
           catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
           return { out: '', ok: true, silentNote: 'created branch ' + names[0] };
@@ -1203,10 +1941,33 @@
 
         case 'switch':
         case 'checkout': {
-          var create = rest.indexOf('-b') !== -1 || rest.indexOf('-c') !== -1;
-          var names2 = rest.filter(function (a) { return a.charAt(0) !== '-'; });
-          if (!names2.length) return { out: 'fatal: missing branch name', ok: false };
+          var create = null, track = false, detach = false, names2 = [];
+          for (var si = 0; si < rest.length; si++) {
+            var sa = rest[si];
+            if (sa === '-b' || sa === '-c' || sa === '--create') {
+              create = rest[++si];
+              if (!create) return { out: "error: switch `" + sa.replace(/^-+/, '') + "' requires a value", ok: false };
+            }
+            else if (sa === '-t' || sa === '--track') track = true;
+            else if (sa === '--detach' || sa === '-d') detach = true;
+            else if (sa === '-' || sa.charAt(0) !== '-') names2.push(sa);
+          }
+          // `--track origin/x` names the new branch after the remote one
+          if (track && !create) {
+            if (!names2[0] || !trackingName(names2[0])) {
+              return { out: 'fatal: missing branch name; try -' + (sub === 'switch' ? 'c' : 'b'), ok: false };
+            }
+            create = trackingName(names2[0]);
+          }
+          if (!create && !names2.length) return { out: 'fatal: missing branch name', ok: false };
           var name = names2[0];
+          // `-` is the branch (or commit) you were on before
+          if (name === '-' && !create) {
+            if (!prevHead) return { out: 'fatal: invalid reference: @{-1}', ok: false };
+            name = prevHead;
+            // back to a detached commit: checkout does that; switch wants --detach
+            if (/^[0-9a-f]{40}$/.test(name) && sub === 'checkout') detach = true;
+          }
           var all2 = await gitlib.listBranches(opts());
           var midMerge = await statusModel();
           if (midMerge.conflicted.length) {
@@ -1216,48 +1977,84 @@
               ok: false
             };
           }
+          // What to switch to: an existing branch (target2 null), a new
+          // branch at newStart, or a commit to detach at (target2).
+          var target2 = null, newStart = null;
+          if (!create && !detach && all2.indexOf(name) === -1 && await trackingOid(name)) {
+            // git's guess: `git switch feature` when only origin/feature exists
+            create = name;
+            name = 'origin/' + name;
+          }
           if (create) {
-            if (all2.indexOf(name) !== -1) return { out: "fatal: a branch named '" + name + "' already exists", ok: false };
-            // like real git, switching away drops a merge whose conflicts
-            // are all resolved but not yet committed
-            if (midMerge.merging) await clearMergeState();
-            await gitlib.branch(opts({ ref: name, checkout: true }));
-            return { out: "Switched to a new branch '" + name + "'", ok: true };
-          }
-          var detach = rest.indexOf('--detach') !== -1 || rest.indexOf('-d') !== -1;
-          var target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
-          if (all2.indexOf(name) === -1 && !target2) {
-            return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git " + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + "` to create it", ok: false };
-          }
-          // `git switch` only moves between branches unless told to detach
-          if (target2 && sub === 'switch' && !detach) {
-            return { out: "fatal: a branch is expected, got commit '" + name + "'\n" +
-              'hint: If you want to detach HEAD at the commit, try again with the --detach option.', ok: false };
+            if (all2.indexOf(create) !== -1) return { out: "fatal: a branch named '" + create + "' already exists", ok: false };
+            if (name) {
+              newStart = await startPoint(name);
+              if (!newStart) {
+                return { out: "fatal: '" + name + "' is not a commit and a branch '" + create + "' cannot be created from it", ok: false };
+              }
+            }
+          } else {
+            target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
+            if (all2.indexOf(name) === -1 && !target2) {
+              return { out: (sub === 'switch' ? 'fatal: invalid reference: ' + name
+                  : "error: pathspec '" + name + "' did not match any file(s) known to git") +
+                '\nhint: use `git ' + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + '` to create it', ok: false };
+            }
+            // `git switch` only moves between branches unless told to detach
+            if (target2 && sub === 'switch' && !detach) {
+              return { out: "fatal: a branch is expected, got commit '" + name + "'\n" +
+                'hint: If you want to detach HEAD at the commit, try again with the --detach option.', ok: false };
+            }
           }
           var wasBranch = await currentBranch();
           var wasOid = null;
           try { wasOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
-          var newOid = target2 || await gitlib.resolveRef(opts({ ref: name }));
+          if (create && !newStart) {
+            // a new branch right here: nothing to check out, and it works
+            // before the first commit too
+            if (midMerge.merging) await clearMergeState();
+            await gitlib.branch(opts({ ref: create, checkout: true }));
+            prevHead = wasBranch || wasOid;
+            return { out: "Switched to a new branch '" + create + "'", ok: true };
+          }
+          var branchTo = create || (target2 ? null : name);
+          var newOid = target2 || (newStart ? newStart.oid : await gitlib.resolveRef(opts({ ref: name })));
           var clobbered = midMerge.merging ? [] : await overwrittenBy(newOid, midMerge);
           if (clobbered.length) {
             return { out: 'error: Your local changes to the following files would be overwritten by checkout:\n' +
               clobbered.map(function (f) { return '\t' + f; }).join('\n') + '\n' +
               'Please commit your changes or stash them before you switch branches.\nAborting', ok: false };
           }
+          if (branchTo && branchTo === wasBranch) {
+            return { out: "Already on '" + branchTo + "'" + prefixLines(await trackingLines(branchTo)), ok: true };
+          }
           if (midMerge.merging) await clearMergeState();
+          var tracksNote = '';
+          if (create) {
+            await gitlib.writeRef(opts({ ref: 'refs/heads/' + create, value: newOid }));
+            // starting from origin/x sets it as the upstream, as git does
+            if (newStart.tracks) {
+              await setUpstream(create, newStart.tracks);
+              tracksNote = "\nbranch '" + create + "' set up to track 'origin/" + newStart.tracks + "'.";
+            }
+          }
           // isomorphic-git's checkout rewrites the index and working tree
           // even when the target is the commit we are already on, dropping
           // staged and modified files; real git carries them over, so when
           // nothing differs only HEAD moves
           if (wasOid && wasOid === newOid) {
             await gitlib.writeRef(opts(target2 ? { ref: 'HEAD', value: target2, force: true }
-              : { ref: 'HEAD', value: 'refs/heads/' + name, symbolic: true, force: true }));
+              : { ref: 'HEAD', value: 'refs/heads/' + branchTo, symbolic: true, force: true }));
           } else {
-            try { await gitlib.checkout(opts({ ref: target2 || name })); }
+            try { await gitlib.checkout(opts({ ref: target2 || branchTo })); }
             catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
           }
+          prevHead = wasBranch || wasOid;
           var leaving = !wasBranch && wasOid && wasOid !== target2 ? await leavingDetached(wasOid) : '';
-          if (!target2) return { out: leaving + "Switched to branch '" + name + "'", ok: true };
+          if (create) return { out: leaving + "Switched to a new branch '" + create + "'" + tracksNote, ok: true };
+          if (!target2) {
+            return { out: leaving + "Switched to branch '" + name + "'" + prefixLines(await trackingLines(name)), ok: true };
+          }
           detachPoint = target2;
           var landed = 'HEAD is now at ' + target2.slice(0, 7) + ' ' + await subjectOf(target2);
           if (!wasBranch) return { out: leaving + landed, ok: true };
@@ -1269,8 +2066,9 @@
               'If you want to create a new branch to retain commits you create, you may\n' +
               'do so (now or later) by using -c with the switch command. Example:\n\n' +
               '  git switch -c <new-branch-name>\n\n' +
-              'Or go back to where you were with:\n\n' +
-              '  git switch ' + wasBranch + '\n\n' +
+              'Or undo this operation with:\n\n' +
+              '  git switch -\n\n' +
+              'Turn off this advice by setting config variable advice.detachedHead to false\n\n' +
               landed,
             ok: true
           };
@@ -1302,39 +2100,111 @@
             return { out: 'fatal: this sandbox can only merge into a branch, and HEAD is detached.\n' +
               'Switch to a branch first, or create one here with `git switch -c <name>`.', ok: false };
           }
-          var known = await gitlib.listBranches(opts());
-          if (known.indexOf(theirs) === -1) return { out: "merge: " + theirs + " - not something we can merge", ok: false };
           if (theirs === ours) return { out: 'Already up to date.', ok: true };
+          // a local branch, a remote-tracking branch such as origin/main
+          // (what `git fetch` brought in), or any commit
+          var known = await gitlib.listBranches(opts());
+          var theirRef = null, mergeMsg;
+          // git leaves " into main" out of the message (merge.suppressDest)
+          var into = ours === 'main' || ours === 'master' ? '' : ' into ' + ours;
+          if (known.indexOf(theirs) !== -1) {
+            theirRef = theirs;
+            mergeMsg = "Merge branch '" + theirs + "'" + into;
+          } else if (trackingName(theirs) && await trackingOid(trackingName(theirs))) {
+            theirRef = 'refs/remotes/origin/' + trackingName(theirs);
+            mergeMsg = "Merge remote-tracking branch '" + theirs + "'" + into;
+          } else {
+            theirRef = await resolveCommit(theirs);
+            mergeMsg = "Merge commit '" + theirs + "'" + into;
+          }
+          if (!theirRef) return { out: 'merge: ' + theirs + ' - not something we can merge', ok: false };
+          var oursBefore = await gitlib.resolveRef(opts({ ref: ours }));
           var result;
           try {
-            result = await mergeInto(ours, theirs, theirs, "Merge branch '" + theirs + "' into " + ours);
+            result = await mergeInto(ours, theirRef, theirs, mergeMsg);
           } catch (e) {
             return { out: 'fatal: ' + e.message, ok: false };
           }
           if (result.conflict) return result.conflict;
           if (result.alreadyMerged) return { out: 'Already up to date.', ok: true };
-          if (result.fastForward) return { out: 'Updating ' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
-          return { out: "Merge made by the 'recursive' strategy.", ok: true };
+          if (result.fastForward) return { out: 'Updating ' + oursBefore.slice(0, 7) + '..' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
+          return { out: "Merge made by the 'ort' strategy.", ok: true };
         }
 
         case 'remote': {
+          var linked = await originUrl();
           if (rest[0] === 'add') {
-            if (rest[1] !== 'origin' || !rest[2]) return { out: 'usage: git remote add origin <url>', ok: false };
-            if (remoteUrl) return { out: 'error: remote origin already exists.', ok: false };
-            await gitlib.init({ fs: fs, gitdir: remoteGitdir, bare: true, defaultBranch: defaultBranch });
-            remoteUrl = rest[2];
+            if (!rest[1] || !rest[2]) return { out: 'usage: git remote add <name> <url>', ok: false };
+            if (rest[1] !== 'origin') {
+              return { out: 'This sandbox has a single remote, and it must be called origin:\n' +
+                '  git remote add origin ' + rest[2], ok: false };
+            }
+            if (linked) return { out: 'error: remote origin already exists.', ok: false };
+            // the first `remote add` creates the mock remote; after that
+            // (say, in a fresh `git init`) it only links to it again
+            if (!remoteUrl) {
+              await gitlib.init({ fs: fs, gitdir: remoteGitdir, bare: true, defaultBranch: defaultBranch });
+              remoteUrl = rest[2];
+            }
+            await gitlib.addRemote(opts({ remote: 'origin', url: rest[2] }));
             return { out: '', ok: true };
           }
-          if (!rest.length) return { out: remoteUrl ? 'origin' : '', ok: true };
-          if (rest[0] === '-v') {
-            if (!remoteUrl) return { out: '', ok: true };
-            return { out: 'origin\t' + remoteUrl + ' (fetch)\norigin\t' + remoteUrl + ' (push)', ok: true };
+          if (rest[0] === 'remove' || rest[0] === 'rm') {
+            if (rest[1] !== 'origin' || !linked) return { out: "error: No such remote: '" + (rest[1] || '') + "'", ok: false };
+            await gitlib.deleteRemote(opts({ remote: 'origin' }));
+            await fs.promises.rm(dir + '/.git/refs/remotes/origin', { recursive: true, force: true });
+            return { out: '', ok: true };
           }
-          return { out: 'usage: git remote [-v] | git remote add origin <url>', ok: false };
+          if (!rest.length) return { out: linked ? 'origin' : '', ok: true };
+          if (rest[0] === '-v') {
+            if (!linked) return { out: '', ok: true };
+            return { out: 'origin\t' + linked + ' (fetch)\norigin\t' + linked + ' (push)', ok: true };
+          }
+          return { out: 'usage: git remote [-v] | git remote add origin <url> | git remote remove origin', ok: false };
+        }
+
+        case 'clone': {
+          var cargs = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          var curl = cargs[0];
+          if (!curl) return { out: 'fatal: You must specify a repository to clone.\n\n' + HELP.clone.join('\n'), ok: false };
+          if (cargs[1] && cargs[1] !== '.') {
+            return { out: 'This sandbox keeps the repository in the project folder itself,\n' +
+              'so `git clone <url>` clones into it, as `git clone <url> .` would.', ok: false };
+          }
+          if (cwd !== dir) {
+            return { out: 'This sandbox keeps the repository at the top of the project.\nRun `cd ~` first, then `git clone`.', ok: false };
+          }
+          if (!remoteUrl || urlKey(curl) !== urlKey(remoteUrl)) {
+            return { out: "fatal: repository '" + curl + "' does not exist" +
+              (remoteUrl ? "\nhint: this exercise's remote is " + remoteUrl : ''), ok: false };
+          }
+          if ((await isRepo()) || (await fs.promises.readdir(dir)).length) {
+            return { out: "fatal: destination path '.' already exists and is not an empty directory.", ok: false };
+          }
+          var rbranches = await listRemoteBranchNames();
+          var rhead = null;
+          try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+          if (rbranches.indexOf(rhead) === -1) rhead = rbranches[0] || rhead || defaultBranch;
+          await gitlib.init(opts({ defaultBranch: rhead }));
+          await gitlib.addRemote(opts({ remote: 'origin', url: curl }));
+          detachPoint = null;
+          prevHead = null;
+          if (!rbranches.length) {
+            return { out: "Cloning into '.'...\nwarning: You appear to have cloned an empty repository.", ok: true };
+          }
+          await copyObjects(remoteGitdir, dir + '/.git');
+          for (var cb = 0; cb < rbranches.length; cb++) await setTrackingRef(rbranches[cb], await remoteBranchOid(rbranches[cb]));
+          // like git: one local branch, the remote's default, tracking it
+          await gitlib.writeRef(opts({ ref: 'refs/heads/' + rhead, value: await remoteBranchOid(rhead) }));
+          await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/HEAD', value: 'refs/remotes/origin/' + rhead, symbolic: true }));
+          await setUpstream(rhead, rhead);
+          await gitlib.checkout(opts({ ref: rhead }));
+          return { out: "Cloning into '.'...\ndone.", ok: true };
         }
 
         case 'push': {
-          if (!remoteUrl) return { out: 'fatal: No configured push destination.\nAdd a remote first: git remote add origin <url>', ok: false };
+          var pushUrl = await originUrl();
+          if (!pushUrl) return { out: 'fatal: No configured push destination.\nAdd a remote first: git remote add origin <url>', ok: false };
           var setUp = rest.indexOf('-u') !== -1 || rest.indexOf('--set-upstream') !== -1;
           var words = rest.filter(function (a) { return a.charAt(0) !== '-'; });
           if (words[0] && words[0] !== 'origin') return { out: "fatal: '" + words[0] + "' does not appear to be a git repository", ok: false };
@@ -1342,7 +2212,7 @@
           if (!pbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
           var locals = await gitlib.listBranches(opts());
           if (locals.indexOf(pbr) === -1) return { out: 'error: src refspec ' + pbr + ' does not match any', ok: false };
-          if (!words[1] && !upstreams[pbr]) {
+          if (!words[1] && !(await upstreamOf(pbr))) {
             return {
               out: 'fatal: The current branch ' + pbr + ' has no upstream branch.\n' +
                    'To push the current branch and set the remote as upstream, use\n\n' +
@@ -1352,14 +2222,18 @@
           }
           var localOid = await gitlib.resolveRef(opts({ ref: pbr }));
           var remoteOid = await remoteBranchOid(pbr);
-          if (setUp) upstreams[pbr] = true;
-          if (remoteOid === localOid) return { out: 'Everything up-to-date', ok: true };
+          var upNote = '';
+          if (setUp && (await upstreamOf(pbr)) !== pbr) {
+            await setUpstream(pbr, pbr);
+            upNote = "branch '" + pbr + "' set up to track 'origin/" + pbr + "'.";
+          }
+          if (remoteOid === localOid) return { out: (upNote ? upNote + '\n' : '') + 'Everything up-to-date', ok: true };
           if (remoteOid) {
             // only fast-forward pushes are allowed, like a real remote
             var pushedSet = await reachableFrom(localOid, opts);
             if (!pushedSet[remoteOid]) {
               return {
-                out: 'To ' + remoteUrl + '\n' +
+                out: 'To ' + pushUrl + '\n' +
                      ' {r}! [rejected]{/}        ' + pbr + ' -> ' + pbr + ' (fetch first)\n' +
                      'hint: Updates were rejected because the remote contains work that you do\n' +
                      'hint: not have locally. Pull the remote changes ({y}git pull{/}) before pushing again.',
@@ -1371,16 +2245,17 @@
           await fs.promises.mkdir(remoteGitdir + '/refs/heads', { recursive: true });
           await fs.promises.writeFile(remoteGitdir + '/refs/heads/' + pbr, localOid + '\n');
           await setTrackingRef(pbr, localOid);
-          var pushOut = ['To ' + remoteUrl];
+          var pushOut = ['To ' + pushUrl];
           pushOut.push(remoteOid
             ? '   ' + remoteOid.slice(0, 7) + '..' + localOid.slice(0, 7) + '  ' + pbr + ' -> ' + pbr
             : ' * [new branch]      ' + pbr + ' -> ' + pbr);
-          if (setUp) pushOut.push("branch '" + pbr + "' set up to track 'origin/" + pbr + "'.");
+          if (upNote) pushOut.push(upNote);
           return { out: pushOut.join('\n'), ok: true };
         }
 
         case 'fetch': {
-          if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var fetchUrl = await originUrl();
+          if (!fetchUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
           var rnames = await listRemoteBranchNames();
           await copyObjects(remoteGitdir, dir + '/.git');
           var updated = [];
@@ -1394,12 +2269,25 @@
               ? '   ' + cur.slice(0, 7) + '..' + rOid.slice(0, 7) + '  ' + rnames[fi] + '       -> origin/' + rnames[fi]
               : ' * [new branch]      ' + rnames[fi] + '       -> origin/' + rnames[fi]);
           }
+          // like git 2.48+, the first fetch also records which branch is the
+          // remote's default, as origin/HEAD (silently)
+          if (!(await originHead())) {
+            var rhead = null;
+            try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+            if (rhead && rnames.indexOf(rhead) !== -1) {
+              await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/HEAD', value: 'refs/remotes/origin/' + rhead, symbolic: true, force: true }));
+            }
+          }
           if (!updated.length) return { out: '', ok: true };
-          return { out: ['From ' + remoteUrl].concat(updated).join('\n'), ok: true };
+          return { out: ['From ' + fetchUrl].concat(updated).join('\n'), ok: true };
         }
 
         case 'pull': {
-          if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var pullUrl = await originUrl();
+          if (!pullUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          if (rest.indexOf('--rebase') !== -1 || rest.indexOf('-r') !== -1) {
+            return { out: 'This sandbox has no rebase, so `git pull` always merges.\nRun `git pull` without --rebase.', ok: false };
+          }
           var inMerge2 = await statusModel();
           if (inMerge2.conflicted.length) return unmergedError('Pulling');
           if (inMerge2.merging) {
@@ -1408,16 +2296,40 @@
           }
           var lbr = await currentBranch();
           if (!lbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
+          var pwords = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (pwords[0] && pwords[0] !== 'origin') {
+            return { out: "fatal: '" + pwords[0] + "' does not appear to be a git repository\n" +
+              'fatal: Could not read from remote repository.\n\n' +
+              'Please make sure you have the correct access rights\nand the repository exists.', ok: false };
+          }
+          // `git pull origin <branch>` names the branch; plain `git pull`
+          // takes the upstream that `push -u`, `clone` or `--track` set
+          var fromBranch = pwords[1] || await upstreamOf(lbr);
           var fetched = await gitCommand(['fetch']);
-          var theirOid = await remoteBranchOid(lbr);
-          if (!theirOid) return { out: "fatal: origin has no branch named '" + lbr + "' to pull from.", ok: false };
-          var oursOid = await gitlib.resolveRef(opts({ ref: lbr }));
           var prefix2 = fetched.out ? fetched.out + '\n' : '';
+          if (!fromBranch) {
+            return {
+              out: prefix2 + (pwords[0]
+                ? "You asked to pull from the remote 'origin', but did not specify\n" +
+                  'a branch. Because this is not the default configured remote\n' +
+                  'for your current branch, you must specify a branch on the command line.'
+                : 'There is no tracking information for the current branch.\n' +
+                  'Please specify which branch you want to merge with.\n' +
+                  'See git-pull(1) for details.\n\n' +
+                  '    git pull <remote> <branch>\n\n' +
+                  'If you wish to set tracking information for this branch you can do so with:\n\n' +
+                  '    git branch --set-upstream-to=origin/<branch> ' + lbr),
+              ok: false
+            };
+          }
+          var theirOid = await remoteBranchOid(fromBranch);
+          if (!theirOid) return { out: prefix2 + "fatal: couldn't find remote ref " + fromBranch, ok: false };
+          var oursOid = await gitlib.resolveRef(opts({ ref: lbr }));
           if (theirOid === oursOid) return { out: prefix2 + 'Already up to date.', ok: true };
           var pres;
           try {
-            pres = await mergeInto(lbr, 'refs/remotes/origin/' + lbr, 'origin/' + lbr,
-              "Merge branch '" + lbr + "' of " + remoteUrl);
+            pres = await mergeInto(lbr, 'refs/remotes/origin/' + fromBranch, 'origin/' + fromBranch,
+              "Merge branch '" + fromBranch + "' of " + pullUrl);
           } catch (e) {
             return { out: prefix2 + 'fatal: ' + e.message, ok: false };
           }
@@ -1427,7 +2339,7 @@
           }
           if (pres.alreadyMerged) return { out: prefix2 + 'Already up to date.', ok: true };
           if (pres.fastForward) return { out: prefix2 + 'Updating ' + oursOid.slice(0, 7) + '..' + theirOid.slice(0, 7) + '\nFast-forward', ok: true };
-          return { out: prefix2 + "Merge made by the 'recursive' strategy.", ok: true };
+          return { out: prefix2 + "Merge made by the 'ort' strategy.", ok: true };
         }
 
         case 'diff': {
@@ -1448,6 +2360,101 @@
             chunks.push(simpleDiff(oldTxt, newTxt));
           }
           return { out: chunks.join('\n'), ok: true };
+        }
+
+        case 'reset': {
+          var mode = null;
+          var before = [], after = [], seenDashes = false;
+          for (var ra = 0; ra < rest.length; ra++) {
+            var a1 = rest[ra];
+            if (seenDashes) { after.push(a1); continue; }
+            if (a1 === '--') { seenDashes = true; continue; }
+            if (a1 === '--soft' || a1 === '--mixed' || a1 === '--hard') { mode = a1.slice(2); continue; }
+            if (a1 === '--merge' || a1 === '--keep') { mode = 'hard'; continue; }
+            if (a1.charAt(0) === '-') continue;
+            before.push(a1);
+          }
+          // the first word may name a commit; everything else is a path
+          var resetTo = null;
+          if (before.length) {
+            resetTo = await resolveCommit(before[0]);
+            if (resetTo) before.shift();
+          }
+          var resetPaths = before.concat(after);
+          var headNow = null;
+          try { headNow = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          if (resetPaths.length) {
+            // a word before `--` that is neither a commit nor a known path
+            if (!seenDashes && !(await knownPath(before[0] || resetPaths[0]))) return ambiguous(before[0] || resetPaths[0]);
+            if (mode === 'soft' || mode === 'hard') {
+              return { out: 'fatal: Cannot do ' + mode + ' reset with paths.', ok: false };
+            }
+            return unstagePaths(resetPaths, resetTo || headNow, 'reset');
+          }
+          if (!headNow) {
+            // nothing committed yet: emptying the staging area is all a reset can do
+            var staged0 = await gitlib.listFiles(opts());
+            for (var s0 = 0; s0 < staged0.length; s0++) await gitlib.remove(opts({ filepath: staged0[s0] }));
+            return { out: '', ok: true };
+          }
+          return resetTo2(resetTo || headNow, mode || 'mixed');
+        }
+
+        case 'restore': {
+          var staged = false, worktree = false, source = null, rPaths = [], dashes2 = false;
+          for (var rs = 0; rs < rest.length; rs++) {
+            var a2 = rest[rs];
+            if (dashes2) { rPaths.push(a2); continue; }
+            if (a2 === '--') { dashes2 = true; continue; }
+            if (a2 === '--staged' || a2 === '-S') staged = true;
+            else if (a2 === '--worktree' || a2 === '-W') worktree = true;
+            else if (a2 === '-SW' || a2 === '-WS') { staged = true; worktree = true; }
+            else if (a2 === '-s' || a2 === '--source') source = rest[++rs];
+            else if (a2.indexOf('--source=') === 0) source = a2.slice(9);
+            else if (a2.indexOf('-s') === 0 && a2.length > 2) source = a2.slice(2);
+            else if (a2.charAt(0) !== '-') rPaths.push(a2);
+          }
+          if (!staged) worktree = true;
+          if (!rPaths.length) return { out: 'fatal: you must specify path(s) to restore', ok: false };
+          var sourceOid = null;
+          if (source) {
+            sourceOid = await resolveCommit(source);
+            if (!sourceOid) return { out: 'fatal: could not resolve ' + source, ok: false };
+          }
+          var unresolved = (await statusModel()).conflicted.map(function (c) { return c.file; });
+          var headOid2 = null;
+          try { headOid2 = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          if (staged) {
+            // before the first commit, unstaging takes the file out of the index
+            var unstaged = await unstagePaths(rPaths, sourceOid || headOid2, 'restore');
+            if (!unstaged.ok || !worktree) return unstaged.ok ? { out: '', ok: true } : unstaged;
+          }
+          // the working copy comes back from the source commit if one was
+          // given (or with --staged, from HEAD), else from the staging area
+          var fromCommit = sourceOid || (staged ? headOid2 : null);
+          var known = fromCommit ? await flatTree(fromCommit) : await indexEntries();
+          var inIndexNow = await indexEntries();
+          var targets = [];
+          for (var rp = 0; rp < rPaths.length; rp++) {
+            var rm2 = pathspec(rPaths[rp]);
+            var pool = Object.keys(known);
+            // with a source, files the source lacks are removed again
+            if (fromCommit) Object.keys(inIndexNow).forEach(function (f) { if (pool.indexOf(f) === -1) pool.push(f); });
+            var rh = rm2 ? pool.filter(rm2) : [];
+            if (!rh.length) return { out: "error: pathspec '" + rPaths[rp] + "' did not match any file(s) known to git", ok: false };
+            for (var u = 0; u < rh.length; u++) {
+              if (unresolved.indexOf(rh[u]) !== -1) return { out: "error: path '" + rh[u] + "' is unmerged", ok: false };
+              if (targets.indexOf(rh[u]) === -1) targets.push(rh[u]);
+            }
+          }
+          for (var t = 0; t < targets.length; t++) {
+            var where = dir + '/' + targets[t];
+            if (!known[targets[t]]) { await removeFileAndEmptyParents(where); continue; }
+            var bytes = (await gitlib.readBlob(opts({ oid: known[targets[t]] }))).blob;
+            await fs.promises.mkdir(fs._dirname(where), { recursive: true });
+            await fs.promises.writeFile(where, bytes);
+          }
+          return { out: '', ok: true };
         }
 
         case 'help':
@@ -1471,6 +2478,21 @@
         else break;
       }
       return out;
+    }
+
+    // A commit's date as `git log` prints it: "Thu Oct 22 21:36:29 2026 +0000",
+    // in the author's own timezone. isomorphic-git stores the offset the way
+    // Date#getTimezoneOffset does, in minutes and with the sign flipped.
+    function gitDate(who) {
+      var off = -(who.timezoneOffset || 0);
+      var d = new Date((who.timestamp + off * 60) * 1000);
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      var a = Math.abs(off);
+      return days[d.getUTCDay()] + ' ' + months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' ' +
+        pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + ' ' +
+        d.getUTCFullYear() + ' ' + (off < 0 ? '-' : '+') + pad(Math.floor(a / 60)) + pad(a % 60);
     }
 
     function simpleDiff(oldTxt, newTxt) {
@@ -1574,13 +2596,17 @@
       return [
         'Supported git commands in this sandbox:',
         '  git init                      git status',
-        '  git add <file> | .            git commit -m "message"',
+        '  git add <file> | .            git commit [-a] -m "message"',
+        '  git restore [--staged] <file> git reset [<file>]',
+        '  git reset [--hard] <commit>',
+        '  git rm [--cached] <file>      git check-ignore <file>',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
         '  git checkout <commit>         git switch --detach <commit>',
         '  git switch [-c] <branch>      git merge <branch> | --abort',
         '  git remote add origin <url>   git push [-u origin <branch>]',
         '  git fetch                     git pull',
+        '  git clone <url>',
         '  git config user.name "..."'
       ].join('\n');
     }
@@ -1591,28 +2617,40 @@
       switch (cmd) {
         case 'ls': {
           var showAll = args.indexOf('-a') !== -1 || args.indexOf('-la') !== -1 || args.indexOf('-al') !== -1;
-          var lsArg = args.filter(function (a) { return a.charAt(0) !== '-'; })[0];
-          var lsDir = abs(lsArg);
-          var entries;
-          try { entries = await fs.promises.readdir(lsDir); }
-          catch (e) { return { out: 'ls: ' + lsArg + ': No such file or directory', ok: false }; }
-          if (!showAll) entries = entries.filter(function (e) { return e.charAt(0) !== '.'; });
-          if (!entries.length) return { out: '', ok: true };
-          var marked = [];
-          for (var i = 0; i < entries.length; i++) {
-            var s = await fs.promises.stat(lsDir + '/' + entries[i]);
-            marked.push(s.isDirectory() ? '{b}' + entries[i] + '/{/}' : entries[i]);
+          var lsArgs = args.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (!lsArgs.length) lsArgs = [null];
+          // like ls: files named on the line first, then each folder's contents
+          var lsFiles = [], lsDirs = [], lsErrs = [];
+          for (var la = 0; la < lsArgs.length; la++) {
+            var ls1;
+            try { ls1 = await fs.promises.stat(abs(lsArgs[la])); }
+            catch (e) { lsErrs.push('ls: ' + lsArgs[la] + ': No such file or directory'); continue; }
+            if (ls1.isDirectory()) lsDirs.push(lsArgs[la]); else lsFiles.push(lsArgs[la]);
           }
-          return { out: marked.join('  '), ok: true };
+          var blocks = lsFiles.length ? [lsFiles.join('  ')] : [];
+          for (var ld = 0; ld < lsDirs.length; ld++) {
+            var lsDir = abs(lsDirs[ld]);
+            var entries = await fs.promises.readdir(lsDir);
+            if (!showAll) entries = entries.filter(function (e) { return e.charAt(0) !== '.'; });
+            var marked = [];
+            for (var i = 0; i < entries.length; i++) {
+              var s = await fs.promises.stat(lsDir + '/' + entries[i]);
+              marked.push(s.isDirectory() ? '{b}' + entries[i] + '/{/}' : entries[i]);
+            }
+            var heading = lsArgs.length > 1 ? lsDirs[ld] + ':\n' : '';
+            if (heading || marked.length) blocks.push(heading + marked.join('  '));
+          }
+          var lsOut = lsErrs.concat(blocks).join('\n\n');
+          return { out: lsOut, ok: !lsErrs.length };
         }
         case 'cat': {
           if (!args.length) return { out: 'usage: cat <file>', ok: false };
-          try {
-            var txt = await fs.promises.readFile(abs(args[0]), 'utf8');
-            return { out: txt.replace(/\n$/, ''), ok: true };
-          } catch (e) {
-            return { out: 'cat: ' + args[0] + ': No such file or directory', ok: false };
+          var txt = '';
+          for (var ci = 0; ci < args.length; ci++) {
+            try { txt += await fs.promises.readFile(abs(args[ci]), 'utf8'); }
+            catch (e) { return { out: (txt ? txt.replace(/\n$/, '') + '\n' : '') + 'cat: ' + args[ci] + ': No such file or directory', ok: false }; }
           }
+          return { out: txt.replace(/\n$/, ''), ok: true };
         }
         case 'echo': {
           var text = args.join(' ');
@@ -1635,13 +2673,23 @@
           return { out: '', ok: true, silentNote: 'touched ' + args.join(' ') };
         }
         case 'rm': {
+          var rmFlags = args.filter(function (a) { return /^-[a-zA-Z]+$/.test(a); }).join('');
+          var rmRecursive = /[rR]/.test(rmFlags), rmForce = /f/.test(rmFlags);
           var files = args.filter(function (a) { return a.charAt(0) !== '-'; });
-          if (!files.length) return { out: 'usage: rm <file>', ok: false };
+          if (!files.length) return rmForce ? { out: '', ok: true } : { out: 'usage: rm [-rf] <file>...', ok: false };
+          var rmErrs = [];
           for (var r = 0; r < files.length; r++) {
-            try { await fs.promises.unlink(abs(files[r])); }
-            catch (e) { return { out: 'rm: ' + files[r] + ': No such file or directory', ok: false }; }
+            var rp = abs(files[r]);
+            // the project folder itself, or anything outside it (where the
+            // mock remote lives), is off limits
+            if (rp === dir || !insideProject(rp)) { rmErrs.push("rm: refusing to remove '" + files[r] + "'"); continue; }
+            var rst = null;
+            try { rst = await fs.promises.stat(rp); } catch (e) {}
+            if (!rst) { if (!rmForce) rmErrs.push("rm: cannot remove '" + files[r] + "': No such file or directory"); continue; }
+            if (rst.isDirectory() && !rmRecursive) { rmErrs.push("rm: cannot remove '" + files[r] + "': Is a directory"); continue; }
+            await fs.promises.rm(rp, { recursive: true });
           }
-          return { out: '', ok: true };
+          return { out: rmErrs.join('\n'), ok: !rmErrs.length };
         }
         case 'mkdir': {
           if (!args.length) return { out: 'usage: mkdir <dir>', ok: false };
@@ -1708,16 +2756,24 @@
       line = String(line || '').trim();
       if (!line) return { out: '', ok: true, kind: 'empty' };
 
-      var tokens;
-      try { tokens = tokenize(line); }
+      var words;
+      try { words = tokenizeWords(line); }
       catch (e) { return { out: 'sh: ' + e.message, ok: false, kind: 'error' }; }
+
+      await ensureWorkdir();
+      await ensureCwd();
+
+      var tokens = [];
+      for (var w = 0; w < words.length; w++) {
+        var afterRedirect = w > 0 && (words[w - 1].text === '>' || words[w - 1].text === '>>');
+        var expanded = words[w].glob && !afterRedirect ? await expandGlob(words[w].text) : null;
+        if (expanded) tokens = tokens.concat(expanded);
+        else tokens.push(words[w].text);
+      }
 
       var parsed = splitRedirect(tokens);
       var args = parsed.args;
       var cmd = args[0];
-
-      await ensureWorkdir();
-      await ensureCwd();
 
       try {
         if (cmd === 'git') {
@@ -1725,10 +2781,13 @@
           r.kind = 'git';
           // a checkout or merge may have removed the folder we are in
           await ensureCwd();
-          return r;
+          return await redirectOutput(r, parsed);
         }
         var sh = await shellCommand(cmd, args.slice(1), parsed.redirect, parsed.target);
-        if (sh) { sh.kind = 'shell'; return sh; }
+        if (sh) {
+          sh.kind = 'shell';
+          return cmd === 'echo' ? sh : await redirectOutput(sh, parsed);
+        }
         return {
           out: cmd + ': command not found\nType `help` to see what this sandbox supports.',
           ok: false, kind: 'error'
@@ -1736,6 +2795,22 @@
       } catch (e) {
         return { out: 'error: ' + (e && e.message ? e.message : String(e)), ok: false, kind: 'error' };
       }
+    }
+
+    // `command > file` / `>> file`: what the command printed goes into the
+    // file instead of the terminal, as in a shell. Errors stay on screen,
+    // as stderr would; `echo` handles its own redirection.
+    async function redirectOutput(r, parsed) {
+      if (!parsed.redirect || r.editor) return r;
+      if (!parsed.target) return { out: 'sh: syntax error near unexpected token `newline\'', ok: false, kind: 'error' };
+      if (!r.ok) return r;
+      var p = abs(parsed.target);
+      var text = r.out ? String(r.out).replace(/\{[gryb\/w]\}/g, '') + '\n' : '';
+      var prev = '';
+      if (parsed.redirect === '>>') { try { prev = await fs.promises.readFile(p, 'utf8'); } catch (e) {} }
+      try { await fs.promises.writeFile(p, prev + text); }
+      catch (e) { return { out: 'sh: ' + parsed.target + ': No such file or directory', ok: false, kind: r.kind }; }
+      return { out: '', ok: true, kind: r.kind, silentNote: 'wrote ' + rel(parsed.target) };
     }
 
     /* ------------------------- undo snapshots ------------------------ */
@@ -1759,9 +2834,10 @@
       return {
         store: cloneStore(fs._store),
         remoteUrl: remoteUrl,
-        upstreams: JSON.parse(JSON.stringify(upstreams)),
+        prevHead: prevHead,
         merges: mergesDone.map(function (m) { return { from: m.from, into: m.into }; }),
         author: { name: author.name, email: author.email },
+        globalConfig: JSON.parse(JSON.stringify(globalConfig)),
         repoReady: repoReady,
         cwd: cwd,
         prevCwd: prevCwd
@@ -1774,9 +2850,10 @@
       fs._store.clear();
       cloned.forEach(function (v, k) { fs._store.set(k, v); });
       remoteUrl = snap.remoteUrl;
-      upstreams = JSON.parse(JSON.stringify(snap.upstreams));
+      prevHead = snap.prevHead || null;
       mergesDone = snap.merges.map(function (m) { return { from: m.from, into: m.into }; });
       author = { name: snap.author.name, email: snap.author.email };
+      globalConfig = JSON.parse(JSON.stringify(snap.globalConfig || {}));
       repoReady = snap.repoReady;
       cwd = snap.cwd || dir;
       prevCwd = snap.prevCwd || dir;
@@ -1787,8 +2864,8 @@
     function changedSince(snap) {
       if (remoteUrl !== snap.remoteUrl) return true;
       if (mergesDone.length !== snap.merges.length) return true;
-      if (JSON.stringify(upstreams) !== JSON.stringify(snap.upstreams)) return true;
       if (author.name !== snap.author.name || author.email !== snap.author.email) return true;
+      if (JSON.stringify(globalConfig) !== JSON.stringify(snap.globalConfig || {})) return true;
       if (fs._store.size !== snap.store.size) return true;
       var diff = false;
       fs._store.forEach(function (node, key) {
@@ -1812,9 +2889,10 @@
       base.fs = fs;
       repoReady = false;
       remoteUrl = null;
-      upstreams = {};
+      prevHead = null;
       mergesDone = [];
       author = { name: 'Your Name', email: 'you@example.com' };
+      globalConfig = {};
       cwd = dir;
       prevCwd = dir;
       await ensureWorkdir();
@@ -1873,6 +2951,7 @@
     createSandbox: createSandbox,
     createMemFS: createMemFS,
     tokenize: tokenize,
+    tokenizeWords: tokenizeWords,
     splitRedirect: splitRedirect
   };
 });
@@ -3302,11 +4381,14 @@
     var clean = isRepo ? [] : (files || [])
       .filter(function (f) { return !accounted[f]; })
       .map(function (f) { return { f: f, k: 'not in git yet' }; });
+    // Files .gitignore matches are there on disk but invisible to git, so
+    // they show as quiet chips: proof that the ignore rule works.
+    var ignored = isRepo ? (status.ignored || []).map(function (f) { return { f: f, k: 'ignored', quiet: true }; }) : [];
 
     function col(title, note, items, kind) {
       var chips = items.length
         ? items.map(function (it) {
-            var quiet = it.k === 'not in git yet';
+            var quiet = it.k === 'not in git yet' || it.quiet;
             var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
               (it.conflict ? ' gs-chip-conflict' : '');
             return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
@@ -3325,7 +4407,7 @@
       : [];
 
     node.innerHTML =
-      col('Working directory', 'what you edit', needAdd.concat(clean), 'work') +
+      col('Working directory', 'what you edit', needAdd.concat(clean, ignored), 'work') +
       '<div class="gs-arrow"><span>git add</span><i class="gs-arrow-g">→</i></div>' +
       col('Staging area', 'what goes in next commit', staged, 'stage') +
       '<div class="gs-arrow"><span>git commit</span><i class="gs-arrow-g">→</i></div>' +
@@ -4073,6 +5155,7 @@
       if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
       if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
       if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
+      if ((status.ignored || []).indexOf(f) !== -1) return { k: 'I', label: 'ignored', cls: 'ignored', quiet: true };
       return null;
     }
 
@@ -4111,7 +5194,10 @@
     }
 
     function changedUnder(node) {
-      if (node.type === 'file') return !!fileMark(node.key, lastStatus);
+      if (node.type === 'file') {
+        var m = fileMark(node.key, lastStatus);
+        return !!m && !m.quiet;
+      }
       return Object.keys(node.children).some(function (k) { return changedUnder(node.children[k]); });
     }
 
@@ -4438,7 +5524,7 @@
       var graph = await sb.graphModel();
       var isRepo = await sb.isRepo();
       var status = isRepo ? await sb.statusModel()
-        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
+        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false, ignored: [] };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
       var chipsBefore = chipRects(stagesNode);
@@ -4834,13 +5920,19 @@
       return [
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
-        '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
-        '       branch [-d], checkout [-b] <branch|commit>, switch [-c|--detach],',
-        '       merge [--abort], config,',
-        '       remote add origin, push [-u], pull, fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '{y}git{/}    init, status, add [-f], rm [--cached], commit [-a] [-m], log [--oneline], diff,',
+        '       restore [--staged], reset [--soft|--hard] [<commit>|<file>],',
+        '       branch [-d] [-a], checkout [-b] <branch|commit>, checkout --track,',
+        '       switch [-c|--detach] <branch>, switch -,',
+        '       merge [--abort], config [--global],',
+        '       remote add origin, clone, push [-u], pull [origin <branch>], fetch',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm [-r],',
         '       mkdir, cd, pwd',
+        '       any command > file (or >> file) writes its output to a file',
         '{y}other{/}  help, clear, reset, undo',
+        '       {y}*{/} and {y}?{/} match file names: git add *.txt',
+        '',
+        '{y}git <command> -h{/} shows how a git command is used.',
         '',
         '{y}git commit{/} without -m opens {y}vim{/}, as real git usually does.',
         'Press {y}i{/} to type, {y}Esc{/} to stop typing, then {y}:wq{/} and Enter to',
