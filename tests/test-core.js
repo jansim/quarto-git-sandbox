@@ -861,6 +861,60 @@ async function scenario(name, fn) {
     check('push after resolving', r.ok && /main -> main/.test(r.out), r.out);
   });
 
+  /* ---------------- globs ---------------- */
+  await scenario('globs', async ({ sb, run, check }) => {
+    const words = Core.tokenizeWords('git add *.txt "*.md" \'a?\'');
+    check('unquoted * is a glob', words[2].glob === true && words[3].glob === false && words[4].glob === false, JSON.stringify(words));
+    await run('git init');
+    await run('echo a > a.txt');
+    await run('echo b > b.txt');
+    await run('echo c > c.csv');
+    await run('echo h > .hidden.txt');
+    await run('mkdir notes');
+    await run('echo n > notes/n.txt');
+    let r = await run('echo *.txt');
+    check('shell expands *.txt, sorted, no dot files', r.out === 'a.txt b.txt', r.out);
+    r = await run('echo .*.txt');
+    check('a leading dot matches dot files', r.out === '.hidden.txt', r.out);
+    r = await run('echo notes/*');
+    check('glob below a folder', r.out === 'notes/n.txt', r.out);
+    r = await run('echo *.pdf');
+    check('no match leaves the pattern as typed', r.out === '*.pdf', r.out);
+    r = await run('echo "*.txt"');
+    check('quoted glob is not expanded', r.out === '*.txt', r.out);
+    r = await run('echo [ab].txt ?.csv');
+    check('[set] and ? work', r.out === 'a.txt b.txt c.csv', r.out);
+    r = await run('ls *.txt');
+    check('ls lists the matching files', r.ok && r.out === 'a.txt  b.txt', r.out);
+    r = await run('cat *.txt');
+    check('cat several files', r.out === 'a\nb', r.out);
+
+    r = await run('git add *.txt');
+    let st = await sb.statusModel();
+    check('git add *.txt stages the top-level txt files', r.ok &&
+      st.staged.map(x => x.file).join() === 'a.txt,b.txt', JSON.stringify(st.staged));
+    await sb.git.remove({ fs: sb.fs, dir: sb.dir, filepath: 'a.txt' });
+    await sb.git.remove({ fs: sb.fs, dir: sb.dir, filepath: 'b.txt' });
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('quoted pathspec glob also matches in subfolders, like git', r.ok &&
+      st.staged.map(x => x.file).join() === '.hidden.txt,a.txt,b.txt,notes/n.txt', JSON.stringify(st.staged));
+    r = await run('git add "*.pdf"');
+    check('pathspec glob with no match fails', !r.ok && /pathspec '\*\.pdf' did not match any files/.test(r.out), r.out);
+    await run('git commit -m "Text files"');
+    await run('rm a.txt');
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('pathspec glob stages a deletion', r.ok && st.stagedDeleted.join() === 'a.txt', JSON.stringify(st));
+    await run('cd notes');
+    await run('echo m > m.txt');
+    await run('echo x > ../x.txt');
+    r = await run('git add "*.txt"');
+    st = await sb.statusModel();
+    check('pathspec glob is relative to the current folder', r.ok &&
+      st.staged.map(x => x.file).join() === 'notes/m.txt', JSON.stringify(st.staged));
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));

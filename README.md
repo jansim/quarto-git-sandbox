@@ -272,6 +272,13 @@ Policy. `when:` does not, which is another reason to prefer it.
 `touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
 `undo`, and the authoring-only `rewind <n>`
 
+**Globs:** an unquoted `*`, `?` or `[…]` expands to the matching file
+names before the command runs, as in bash, so `git add *.txt` stages the
+`.txt` files in the current folder and `ls data/*.csv` lists the CSVs in
+`data`. A pattern that matches nothing is passed on as typed. Quoted, the
+pattern reaches git as a pathspec, where `*` also crosses folders: `git add
+"*.txt"` stages every `.txt` file from here down, as real git does.
+
 `cd` moves around inside the project folder, and the prompt shows where you
 are. Relative paths in shell and git commands resolve from there, and
 `git add .` stages only the current folder and below, as in real git. `cd`,

@@ -1934,6 +1934,7 @@
         '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
         '       mkdir, cd, pwd',
         '{y}other{/}  help, clear, reset, undo',
+        '       {y}*{/} and {y}?{/} match file names: git add *.txt',
         '',
         '{y}git commit{/} without -m opens {y}vim{/}, as real git usually does.',
         'Press {y}i{/} to type, {y}Esc{/} to stop typing, then {y}:wq{/} and Enter to',

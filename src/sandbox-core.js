@@ -219,13 +219,17 @@
 
   /* --------------------------- tokenizing --------------------------- */
 
-  // Split a command line into tokens, honouring single/double quotes,
-  // and pull out redirection targets (> and >>).
-  function tokenize(line) {
-    var tokens = [];
+  // Split a command line into words, honouring single/double quotes, and
+  // pull out redirection operators (> and >>). Each word is { text, glob }:
+  // glob is true when it holds an unquoted *, ? or [, which the shell
+  // expands into matching file names, as bash does.
+  function tokenizeWords(line) {
+    var words = [];
     var cur = '';
     var has = false;
+    var glob = false;
     var quote = null;
+    function push() { words.push({ text: cur, glob: glob }); cur = ''; has = false; glob = false; }
     for (var i = 0; i < line.length; i++) {
       var ch = line[i];
       if (quote) {
@@ -236,19 +240,48 @@
       }
       if (ch === '"' || ch === "'") { quote = ch; has = true; continue; }
       if (ch === ' ' || ch === '\t') {
-        if (has) { tokens.push(cur); cur = ''; has = false; }
+        if (has) push();
         continue;
       }
       if (ch === '>' ) {
-        if (has) { tokens.push(cur); cur = ''; has = false; }
-        if (line[i + 1] === '>') { tokens.push('>>'); i++; } else { tokens.push('>'); }
+        if (has) push();
+        if (line[i + 1] === '>') { words.push({ text: '>>', glob: false }); i++; } else { words.push({ text: '>', glob: false }); }
         continue;
       }
+      if (ch === '*' || ch === '?' || ch === '[') glob = true;
       cur += ch; has = true;
     }
-    if (has) tokens.push(cur);
+    if (has) push();
     if (quote) throw new Error('unmatched quote');
-    return tokens;
+    return words;
+  }
+
+  function tokenize(line) {
+    return tokenizeWords(line).map(function (w) { return w.text; });
+  }
+
+  function hasGlob(s) { return /[*?[]/.test(s); }
+
+  // A glob as a regular expression. In the shell (`pathSep` true) * and ?
+  // stop at a slash; in a git pathspec they do not, so `git add '*.txt'`
+  // also stages notes/b.txt, as real git does.
+  function globRegex(pattern, pathSep) {
+    var any = pathSep ? '[^/]' : '.';
+    var re = '';
+    for (var i = 0; i < pattern.length; i++) {
+      var ch = pattern[i];
+      if (ch === '*') re += any + '*';
+      else if (ch === '?') re += any;
+      else if (ch === '[') {
+        var end = pattern.indexOf(']', i + 2);
+        if (end === -1) { re += '\\['; continue; }
+        var set = pattern.slice(i + 1, end);
+        if (set.charAt(0) === '!') set = '^' + set.slice(1);
+        re += '[' + set.replace(/\\/g, '\\\\') + ']';
+        i = end;
+      } else re += ch.replace(/[.+^${}()|\\\]]/g, '\\$&');
+    }
+    return new RegExp('^' + re + '$');
   }
 
   function splitRedirect(tokens) {
@@ -315,6 +348,59 @@
     function rel(p) {
       var a = abs(p);
       return a.indexOf(dir + '/') === 0 ? a.slice(dir.length + 1) : a.replace(/^\//, '');
+    }
+
+    // What the shell makes of an unquoted glob: the matching paths, sorted,
+    // spelled as the learner typed the pattern, or null when nothing
+    // matches (bash then passes the pattern on unchanged). Dot files only
+    // match a pattern segment that starts with a dot.
+    async function expandGlob(pattern) {
+      var absolute = pattern.charAt(0) === '/';
+      var found = [{ at: absolute ? '' : cwd, shown: absolute ? '' : null }];
+      var segs = pattern.split('/');
+      for (var i = 0; i < segs.length; i++) {
+        var seg = segs[i];
+        var last = i === segs.length - 1;
+        if (seg === '' && (i === 0 || last)) continue;
+        var next = [];
+        for (var f = 0; f < found.length; f++) {
+          var here = found[f];
+          var join = function (name) {
+            return { at: here.at + '/' + name, shown: here.shown === null ? name : here.shown + '/' + name };
+          };
+          if (!hasGlob(seg)) { next.push(join(seg)); continue; }
+          var names;
+          try { names = await fs.promises.readdir(here.at || '/'); } catch (e) { continue; }
+          var re = globRegex(seg, true);
+          names.forEach(function (n) {
+            if (n.charAt(0) === '.' && seg.charAt(0) !== '.') return;
+            if (re.test(n)) next.push(join(n));
+          });
+        }
+        found = next;
+      }
+      var out = [];
+      for (var k = 0; k < found.length; k++) {
+        try { await fs.promises.stat(found[k].at); } catch (e) { continue; }
+        out.push(found[k].shown === null ? '.' : (absolute ? '/' : '') + found[k].shown);
+      }
+      return out.length ? out.sort() : null;
+    }
+
+    // A git pathspec as a test on repository paths (relative to the top,
+    // like statusMatrix reports them). Relative specs start at cwd, so
+    // `git add .` in a subfolder means that folder. A plain spec matches
+    // the path itself or anything below it; one with *, ? or [ is a glob
+    // over the whole path. Null if the spec points outside the project.
+    function pathspec(spec) {
+      var full = abs(spec);
+      if (!insideProject(full)) return null;
+      var base = full === dir ? '' : full.slice(dir.length + 1);
+      if (hasGlob(base)) {
+        var re = globRegex(base, false);
+        return function (p) { return re.test(p); };
+      }
+      return function (p) { return !base || p === base || p.indexOf(base + '/') === 0; };
     }
 
     async function ensureWorkdir() {
@@ -883,6 +969,25 @@
       return res;
     }
 
+    // Untracked files as `git status` lists them: a folder holding nothing
+    // git knows about shows once, as `notes/`, instead of file by file.
+    async function untrackedShown(untracked) {
+      var known = (await gitlib.statusMatrix(opts()))
+        .filter(function (row) { return row[1] !== 0 || row[3] !== 0; })
+        .map(function (row) { return row[0]; });
+      var shown = [];
+      untracked.forEach(function (f) {
+        var parts = f.split('/');
+        var name = f;
+        for (var i = 1; i < parts.length; i++) {
+          var d = parts.slice(0, i).join('/') + '/';
+          if (!known.some(function (k) { return k.indexOf(d) === 0; })) { name = d; break; }
+        }
+        if (shown.indexOf(name) === -1) shown.push(name);
+      });
+      return shown.sort();
+    }
+
     /* ---------------------------- commits --------------------------- */
 
     async function makeCommit(msg, st) {
@@ -1024,7 +1129,7 @@
           }
           if (st.untracked.length) {
             lines.push('', 'Untracked files:');
-            st.untracked.forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
+            (await untrackedShown(st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
           var anyStaged = st.staged.length || st.stagedDeleted.length;
           if (!anyStaged && !st.conflicted.length) {
@@ -1044,32 +1149,29 @@
         case 'add': {
           if (!rest.length) return { out: "Nothing specified, nothing added.\nhint: try 'git add .' or 'git add <file>'", ok: false };
           var added = [];
+          var m = await gitlib.statusMatrix(opts());
+          var conflictedNow = (await statusModel()).conflicted.map(function (c) { return c.file; });
           for (var i = 0; i < rest.length; i++) {
             var spec = rest[i];
-            if (spec === '.' || spec === '-A' || spec === '--all' || spec === '*') {
-              var m = await gitlib.statusMatrix(opts());
-              // like real git, `.` and `*` mean "here and below"; -A is repo-wide
-              var under = (spec === '.' || spec === '*') && cwd !== dir ? rel(cwd) + '/' : '';
-              for (var j = 0; j < m.length; j++) {
-                var row = m[j];
-                if (under && row[0].indexOf(under) !== 0) continue;
-                if (row[2] === 0) await gitlib.remove(opts({ filepath: row[0] }));
-                else await gitlib.add(opts({ filepath: row[0] }));
-                added.push(row[0]);
-              }
-            } else {
-              var f = rel(spec);
-              try { await fs.promises.stat(abs(spec)); }
-              catch (e) {
-                // a conflicted file the learner deleted: staging the deletion resolves it
-                var gone = (await statusModel()).conflicted.some(function (c) { return c.file === f; });
-                if (!gone) return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
-                await gitlib.remove(opts({ filepath: f }));
-                added.push(f);
-                continue;
-              }
-              await gitlib.add(opts({ filepath: f }));
-              added.push(f);
+            if (spec === '--' || (spec.charAt(0) === '-' && spec !== '-A' && spec !== '--all')) continue;
+            // -A is repo-wide; `.` means here and below, as in real git
+            var match = spec === '-A' || spec === '--all' ? pathspec(dir) : pathspec(spec);
+            if (!match) return { out: "fatal: " + spec + ": '" + spec + "' is outside repository at '" + displayDir + "'", ok: false };
+            var hit = m.filter(function (row) { return match(row[0]); }).map(function (row) { return row[0]; });
+            // a conflicted file the learner deleted: staging the deletion resolves it
+            conflictedNow.forEach(function (c) { if (match(c) && hit.indexOf(c) === -1) hit.push(c); });
+            if (!hit.length) {
+              var exists = true;
+              try { await fs.promises.stat(abs(spec)); } catch (e) { exists = false; }
+              if (exists) continue;    // an empty folder: nothing to add, no complaint
+              return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
+            }
+            for (var j = 0; j < hit.length; j++) {
+              var gone = true;
+              try { gone = !(await fs.promises.stat(dir + '/' + hit[j])).isFile(); } catch (e) {}
+              if (gone) await gitlib.remove(opts({ filepath: hit[j] }));
+              else await gitlib.add(opts({ filepath: hit[j] }));
+              added.push(hit[j]);
             }
           }
           await markResolved(added);
@@ -1573,28 +1675,40 @@
       switch (cmd) {
         case 'ls': {
           var showAll = args.indexOf('-a') !== -1 || args.indexOf('-la') !== -1 || args.indexOf('-al') !== -1;
-          var lsArg = args.filter(function (a) { return a.charAt(0) !== '-'; })[0];
-          var lsDir = abs(lsArg);
-          var entries;
-          try { entries = await fs.promises.readdir(lsDir); }
-          catch (e) { return { out: 'ls: ' + lsArg + ': No such file or directory', ok: false }; }
-          if (!showAll) entries = entries.filter(function (e) { return e.charAt(0) !== '.'; });
-          if (!entries.length) return { out: '', ok: true };
-          var marked = [];
-          for (var i = 0; i < entries.length; i++) {
-            var s = await fs.promises.stat(lsDir + '/' + entries[i]);
-            marked.push(s.isDirectory() ? '{b}' + entries[i] + '/{/}' : entries[i]);
+          var lsArgs = args.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (!lsArgs.length) lsArgs = [null];
+          // like ls: files named on the line first, then each folder's contents
+          var lsFiles = [], lsDirs = [], lsErrs = [];
+          for (var la = 0; la < lsArgs.length; la++) {
+            var ls1;
+            try { ls1 = await fs.promises.stat(abs(lsArgs[la])); }
+            catch (e) { lsErrs.push('ls: ' + lsArgs[la] + ': No such file or directory'); continue; }
+            if (ls1.isDirectory()) lsDirs.push(lsArgs[la]); else lsFiles.push(lsArgs[la]);
           }
-          return { out: marked.join('  '), ok: true };
+          var blocks = lsFiles.length ? [lsFiles.join('  ')] : [];
+          for (var ld = 0; ld < lsDirs.length; ld++) {
+            var lsDir = abs(lsDirs[ld]);
+            var entries = await fs.promises.readdir(lsDir);
+            if (!showAll) entries = entries.filter(function (e) { return e.charAt(0) !== '.'; });
+            var marked = [];
+            for (var i = 0; i < entries.length; i++) {
+              var s = await fs.promises.stat(lsDir + '/' + entries[i]);
+              marked.push(s.isDirectory() ? '{b}' + entries[i] + '/{/}' : entries[i]);
+            }
+            var heading = lsArgs.length > 1 ? lsDirs[ld] + ':\n' : '';
+            if (heading || marked.length) blocks.push(heading + marked.join('  '));
+          }
+          var lsOut = lsErrs.concat(blocks).join('\n\n');
+          return { out: lsOut, ok: !lsErrs.length };
         }
         case 'cat': {
           if (!args.length) return { out: 'usage: cat <file>', ok: false };
-          try {
-            var txt = await fs.promises.readFile(abs(args[0]), 'utf8');
-            return { out: txt.replace(/\n$/, ''), ok: true };
-          } catch (e) {
-            return { out: 'cat: ' + args[0] + ': No such file or directory', ok: false };
+          var txt = '';
+          for (var ci = 0; ci < args.length; ci++) {
+            try { txt += await fs.promises.readFile(abs(args[ci]), 'utf8'); }
+            catch (e) { return { out: (txt ? txt.replace(/\n$/, '') + '\n' : '') + 'cat: ' + args[ci] + ': No such file or directory', ok: false }; }
           }
+          return { out: txt.replace(/\n$/, ''), ok: true };
         }
         case 'echo': {
           var text = args.join(' ');
@@ -1690,16 +1804,24 @@
       line = String(line || '').trim();
       if (!line) return { out: '', ok: true, kind: 'empty' };
 
-      var tokens;
-      try { tokens = tokenize(line); }
+      var words;
+      try { words = tokenizeWords(line); }
       catch (e) { return { out: 'sh: ' + e.message, ok: false, kind: 'error' }; }
+
+      await ensureWorkdir();
+      await ensureCwd();
+
+      var tokens = [];
+      for (var w = 0; w < words.length; w++) {
+        var afterRedirect = w > 0 && (words[w - 1].text === '>' || words[w - 1].text === '>>');
+        var expanded = words[w].glob && !afterRedirect ? await expandGlob(words[w].text) : null;
+        if (expanded) tokens = tokens.concat(expanded);
+        else tokens.push(words[w].text);
+      }
 
       var parsed = splitRedirect(tokens);
       var args = parsed.args;
       var cmd = args[0];
-
-      await ensureWorkdir();
-      await ensureCwd();
 
       try {
         if (cmd === 'git') {
@@ -1855,6 +1977,7 @@
     createSandbox: createSandbox,
     createMemFS: createMemFS,
     tokenize: tokenize,
+    tokenizeWords: tokenizeWords,
     splitRedirect: splitRedirect
   };
 });

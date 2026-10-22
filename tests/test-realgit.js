@@ -208,6 +208,18 @@ async function scenario(name, steps) {
     'git pull'
   ]);
 
+  await scenario('globs', [
+    { cmd: 'git init', setup: true },
+    { cmd: 'echo a > a.txt && echo b > b.txt && echo c > c.csv && mkdir notes && echo n > notes/n.txt', setup: true },
+    { cmd: 'echo *.txt', exact: true },
+    { cmd: 'echo *.pdf', exact: true },
+    'git add *.txt',
+    'git status',
+    'git add "*.pdf"',
+    'git add "*.txt"',
+    'git status'
+  ]);
+
   console.log('\n===== real git comparison =====');
   console.log('passed: ' + pass + '   failed: ' + fail);
   if (fail) {
