@@ -113,6 +113,7 @@ tasks:
 | `tree-view` | The commit tree beside the box, drawn like [Learn Git Branching](https://learngitbranching.js.org/). `true` shows it, `false` leaves it out, and `toggle` (the default) puts a button in the header that opens it. |
 | `editor` | `false` removes the Editor tab, leaving a terminal-only box. Default `true`. |
 | `panels` | The views below the terminal (File Status, Changes, History, Remote). `true` shows them, `false` leaves them out, and `toggle` (the default) shows them with a chevron that folds them away. |
+| `share` | The `id` of another exercise whose repository this box is a view of: same files and history, its own title, tasks and layout. Takes no `seed`. |
 | `panel-tabs` | Which of those views to offer, e.g. `[files, history]`. Any of `files`, `changes`, `history`, `remote`; all four by default. The first one listed opens first. |
 
 Two notes on quoting, because both bite:

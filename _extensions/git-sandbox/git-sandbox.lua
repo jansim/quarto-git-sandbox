@@ -17,6 +17,9 @@ local yaml = dofile(pandoc.path.join({ script_dir, 'yaml.lua' }))
 
 local counter = 0
 local seen_ids = {}
+-- `share:` targets, checked once the whole document has been read, since a
+-- view may come before the exercise it shares
+local shares = {}
 
 ------------------------------------------------------------------ messages
 
@@ -113,7 +116,8 @@ local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
   donenote = true, ['tree-view'] = true, ['tree_view'] = true,
-  editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true
+  editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true,
+  share = true
 }
 local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
@@ -138,6 +142,18 @@ local function build_config(cfg, problems)
   for _, h in ipairs(as_array(cfg.hints)) do out.hints[#out.hints + 1] = tostring(h) end
 
   if cfg.seed ~= nil and cfg.seed ~= '' then out.seed = tostring(cfg.seed) end
+
+  -- another view of an exercise's repository: same files and history, its
+  -- own title, tasks and layout
+  if cfg.share ~= nil and cfg.share ~= '' then
+    out.share = slugify(cfg.share)
+    if out.share == '' then
+      problems[#problems + 1] = '"share" must name the id of another exercise'
+    elseif out.seed then
+      problems[#problems + 1] = '"seed" cannot be combined with "share": the shared repository is ' ..
+        'set up by the seed of the exercise it shares'
+    end
+  end
 
   -- yaml.lua leaves scalars as strings, so spell out what counts as on.
   -- Returns true, false, 'toggle' (when allowed), or nil if unset or bad.
@@ -274,6 +290,15 @@ function CodeBlock(el)
   end
   seen_ids[id] = true
 
+  if config.share then
+    if config.share == id then
+      warn(('exercise "%s" shares itself; drop the "share" option'):format(id))
+      config.share = nil
+    else
+      shares[#shares + 1] = { from = id, to = config.share }
+    end
+  end
+
   if not quarto.doc.isFormat('html:js') then
     return static_fallback(cfg, config)
   end
@@ -292,4 +317,15 @@ function CodeBlock(el)
     pandoc.RawBlock('html',
       '<script>(window.__gsPending=window.__gsPending||[]).push(["#' .. id .. '",' .. json .. ']);</script>')
   })
+end
+
+-- Runs after every block: a `share:` naming no exercise still works (the
+-- view starts with an empty repository), but it is almost certainly a typo.
+function Pandoc(doc)
+  for _, sh in ipairs(shares) do
+    if not seen_ids[sh.to] then
+      warn(('exercise "%s" shares "%s", but no exercise has that id'):format(sh.from, sh.to))
+    end
+  end
+  return nil
 end

@@ -87,9 +87,9 @@ function outText(win, hostId) {
 
   // whichever ids the page used (hand-written qmd or the extension)
   const ALL_IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
-  check('page has seven demo boxes', ALL_IDS.length === 7, JSON.stringify(ALL_IDS));
-  // the conflict box is looked up by id; the others by position
-  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow');
+  check('page has eight demo boxes', ALL_IDS.length === 8, JSON.stringify(ALL_IDS));
+  // later additions are looked up by id; the original six by position
+  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow' && id !== 'tree-flow-view');
   const [ID1, ID2, ID3, ID4, ID5, ID6] = IDS;
 
   for (const id of ALL_IDS) {
@@ -319,6 +319,18 @@ function outText(win, hostId) {
     const st = tasksState(win, id);
     check('tree-flow all 3 tasks complete', st.done === 3, st.text);
     check('tree-flow fast-forward moves main to C2', /main\* at C2/.test(label()), label());
+
+    // the box after it is another view of the same repository
+    const view = 'tree-flow-view';
+    const vtype = typer(win, view);
+    const vgraph = () => win.document.querySelector('#' + view + ' .gs-graph').textContent;
+    check('the shared view shows the work done above', /Start the report/.test(vgraph()), vgraph());
+    check('the shared view offers only History',
+      Array.from(win.document.querySelectorAll('#' + view + ' .gs-tab')).filter(t => !t.hidden).length === 1);
+    await vtype('git branch -d report');
+    check('the shared view\'s task ticks', tasksState(win, view).done === 1, tasksState(win, view).text);
+    await sleep(100);
+    check('a change in the view reaches the box above', !/report\*? at/.test(label()), label());
   }
 
   /* ---------------- isolation between boxes ---------------- */

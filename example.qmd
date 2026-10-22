@@ -506,6 +506,40 @@ tree-view: true
 ```
 ````
 
+## Another view of the same repository
+
+`share: <id>` makes a box another view of an earlier exercise: the same
+files and history, with its own title, tasks, terminal and layout. Work
+done in either shows up in both. Use it to come back to a repository later
+in a lesson, or on a later slide of a reveal.js deck, without starting over.
+The box below shares `tree-flow` above: try a command in either.
+
+```git-sandbox
+id: tree-flow-view
+share: tree-flow
+title: The same repository, later on
+intro: |
+  This box shares its repository with "Branch, commit, merge" above.
+  Anything you did there is already here.
+hints: [git log --oneline, git branch -d report]
+panel-tabs: [history]
+tasks:
+  - text: Delete the merged `report` branch
+    when: merged report into main and not branch report
+```
+
+````markdown
+```git-sandbox
+share: tree-flow
+title: The same repository, later on
+```
+````
+
+The view has no `seed` of its own: the exercise it shares sets the
+repository up. **Reset** in any view starts the shared repository over from
+that seed, and **Undo** takes back the latest change if it was made in the
+same view.
+
 ## Optional: trimming the box
 
 Each part of the box beyond the terminal can be offered, folded, or left

@@ -615,6 +615,71 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check('remote graphs have no toggles', box.querySelectorAll('.gs-remote-graph .gs-cd-toggle').length === 0);
   }
 
+  /* ---------------- multiple views of one repository ---------------- */
+  {
+    const add = (id) => {
+      const b = win.document.createElement('div');
+      b.id = id;
+      win.document.body.appendChild(b);
+      return b;
+    };
+    const ba = add('shared-a'), bb = add('shared-b');
+    const A = win.GitSandboxUI.mount('#shared-a', {
+      title: 'First look', seed: 'git init\necho one > a.txt\ngit add .\ngit commit -m one',
+      tasks: [{ text: 'two commits', check: (c) => c.graph.commits.length >= 2 }]
+    });
+    const B = win.GitSandboxUI.mount('#shared-b', {
+      title: 'Later slide', share: 'shared-a', treeView: true, panelTabs: ['history'],
+      tasks: [{ text: 'a branch', check: (c) => c.graph.branches.length >= 2 },
+              { text: 'two commits', check: (c) => c.graph.commits.length >= 2 }]
+    });
+    await A.ready; await B.ready;
+    await sleep(30);
+    const circles = (b) => b.querySelectorAll('.gs-graph circle').length;
+    check('a view shares the sandbox', A.sandbox === B.sandbox);
+    check('a view shows the origin\'s seeded history', circles(bb) === 1, circles(bb));
+    check('a view keeps its own title', /Later slide/.test(bb.querySelector('.gs-eyebrow').textContent));
+    check('a view keeps its own layout', !!bb.querySelector('.gs-tree:not([hidden])') && !ba.querySelector('.gs-tree:not([hidden])'));
+
+    await A.run('echo two > b.txt');
+    await A.run('git add .');
+    await A.run('git commit -m two');
+    await sleep(30);
+    check('a commit in the origin shows in the view', circles(bb) === 2, circles(bb));
+    check('the view\'s own tasks tick from it', bb.querySelectorAll('.gs-task.is-done').length === 1,
+      bb.querySelector('.gs-tasks').textContent);
+    check('the view\'s terminal stays its own', !/git commit/.test(bb.querySelector('.gs-out').textContent));
+
+    await B.run('git branch feature');
+    await sleep(30);
+    check('a change in the view shows in the origin', /feature/.test(ba.querySelector('.gs-graph').textContent));
+    check('the origin cannot undo past the view\'s change', ba.querySelector('.gs-undo').disabled === true);
+    await A.run('undo');
+    check('and says why', /another view/.test(ba.querySelector('.gs-out').textContent));
+    check('the view can undo its own change', bb.querySelector('.gs-undo').disabled === false);
+    await B.run('undo');
+    await sleep(30);
+    check('undo in the view reaches the origin', !/feature/.test(ba.querySelector('.gs-graph').textContent));
+    check('then the origin can undo again', ba.querySelector('.gs-undo').disabled === false);
+
+    await B.run('reset');
+    await sleep(30);
+    check('reset in a view restarts the shared repository from the origin\'s seed', circles(ba) === 1 && circles(bb) === 1,
+      circles(ba) + ' ' + circles(bb));
+    check('the origin hears about it', /reset from another view/.test(ba.querySelector('.gs-out').textContent));
+
+    // a view that comes first waits for its origin's seed
+    const bc = add('early-view');
+    const C = win.GitSandboxUI.mount('#early-view', { share: 'late-origin' });
+    await C.ready;
+    check('a view before its origin starts empty', /No commits yet/.test(bc.querySelector('.gs-graph').textContent));
+    const bd = add('late-origin');
+    const D = win.GitSandboxUI.mount('#late-origin', { seed: 'git init\necho x > x.txt\ngit add .\ngit commit -m x' });
+    await D.ready;
+    await sleep(30);
+    check('and catches up when the origin seeds it', circles(bc) === 1, circles(bc));
+  }
+
   /* ---------------- File Status animations ---------------- */
   {
     // jsdom has no layout and no Web Animations API, so stand in for both:

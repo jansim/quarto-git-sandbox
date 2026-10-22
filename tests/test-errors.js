@@ -40,7 +40,9 @@ function render(fixture) {
 
     // eight bad blocks, and the duplicate-id pair which should still render
     const errors = (html.match(/gs-config-error/g) || []).length;
-    check('nine config errors reported', errors === 9, 'found ' + errors);
+    check('ten config errors reported', errors === 10, 'found ' + errors);
+    check('a view cannot have its own seed',
+      /(&quot;|")seed(&quot;|") cannot be combined with (&quot;|")share(&quot;|")/.test(html));
     check('says tree-view must be true, false or toggle',
       /(&quot;|")tree-view(&quot;|") must be true, false or toggle, got (&quot;|")sometimes(&quot;|")/.test(html));
     check('says editor must be true or false (no toggle)',

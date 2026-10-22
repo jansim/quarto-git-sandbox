@@ -74,6 +74,15 @@ panels: toggle
 panel-tabs: [files, graph]
 ```
 
+## A view of another exercise with a seed of its own
+
+```git-sandbox
+title: Seeded view
+share: duplicated
+seed: |
+  git init
+```
+
 ## Options that are not key/value at all
 
 ```git-sandbox

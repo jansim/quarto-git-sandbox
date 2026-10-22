@@ -3110,6 +3110,30 @@
 
   /* ------------------------------- mount ----------------------------- */
 
+  // Exercises that share one repository (`share: <id>`), by that id. The
+  // exercise with the id is the origin and seeds it; every view of it gets
+  // the same sandbox, and they keep each other up to date. The undo stack
+  // belongs to the group: it holds the repository's history, whichever
+  // view a change was made in.
+  var groups = {};
+
+  function groupFor(key, config) {
+    var g = key ? groups[key] : null;
+    if (g) return g;
+    g = {
+      sb: root.GitSandboxCore.createSandbox({
+        git: root.git,
+        displayDir: (config.prompt || '~/project').replace(/\s*\$\s*$/, '')
+      }),
+      seed: null,
+      ready: Promise.resolve(),
+      undo: [],
+      members: []
+    };
+    if (key) groups[key] = g;
+    return g;
+  }
+
   function mount(selector, config) {
     config = config || {};
     var host = typeof selector === 'string' ? document.querySelector(selector) : selector;
@@ -3130,15 +3154,23 @@
       return null;
     }
 
-    var sb = root.GitSandboxCore.createSandbox({
-      git: root.git,
-      displayDir: (config.prompt || '~/project').replace(/\s*\$\s*$/, '')
-    });
+    // `share: <id>` makes this box another view of exercise <id>'s
+    // repository: its own title, tasks, terminal and layout, the same files
+    // and history.
+    var shareKey = config.share ? String(config.share) : null;
+    var group = groupFor(shareKey || host.id || null, config);
+    var isOrigin = !shareKey;
+    var sb = group.sb;
+    var self = {};
+    group.members.push(self);
     var history = [];
     var histIdx = -1;
     var busy = false;
     var tasks = normaliseTasks(config.tasks);
     var seed = normaliseSeed(config.seed);
+    // only the origin seeds a shared repository; a view that mounts before
+    // its origin starts empty and catches up when the origin arrives
+    if (isOrigin) group.seed = seed;
     var intro = normaliseIntro(config.intro);
     // The learngitbranching-style pane: `tree-view: true` shows it beside
     // the box, 'toggle' (the default) puts a button in the header that
@@ -3309,8 +3341,31 @@
     // ticks, the command history and the terminal together, so the undone
     // command leaves no trace anywhere. Only commands that actually changed
     // state get an entry, so `undo` never appears to do nothing.
-    var undoStack = [];
+    var undoStack = group.undo;
     var UNDO_DEPTH = 20;
+
+    function pushUndo(snap) {
+      snap.owner = self;
+      undoStack.push(snap);
+      if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+    }
+
+    // can this view undo? only its own change, and only the latest one:
+    // undoing past a change made in another view would take that back too
+    function canUndo() {
+      var top = undoStack[undoStack.length - 1];
+      return !!top && top.owner === self;
+    }
+
+    // the other views of a shared repository redraw after every change
+    // here; `note` is a line for their terminals
+    function notifyViews(note) {
+      group.members.forEach(function (m) {
+        if (m === self || !m.refresh) return;
+        if (note) m.note(note);
+        m.refresh();
+      });
+    }
 
     function captureUndo(line) {
       return {
@@ -3325,13 +3380,15 @@
     }
 
     function doUndo() {
-      var entry = undoStack.pop();
-      if (!entry) {
+      if (!canUndo()) {
         write('<span class="gs-echo-prompt">' +
           esc(host.querySelector('.gs-prompt').textContent) + '</span> undo', 'gs-echo');
-        writeText('Nothing to undo.');
+        writeText(undoStack.length
+          ? 'The last change was made in another view of this repository. Undo it there.'
+          : 'Nothing to undo.');
         return;
       }
+      var entry = undoStack.pop();
       sb.restore(entry.core);
       // C-names given out since the snapshot are handed back, so the next
       // commit reuses the undone one's name
@@ -3751,11 +3808,9 @@
         renderEditor();
         return false;
       }
-      if (sb.changedSince(snap.core)) {
-        undoStack.push(snap);
-        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
-      }
+      if (sb.changedSince(snap.core)) pushUndo(snap);
       await refresh();
+      notifyViews();
       input.disabled = false;
       busy = false;
       return true;
@@ -4022,7 +4077,7 @@
       }
       renderTasks();
 
-      undoBtn.disabled = !undoStack.length;
+      undoBtn.disabled = !canUndo();
 
       var br = graph.head;
       // follows `cd`, so the prompt always says which folder paths resolve in
@@ -4272,6 +4327,7 @@
         // never reaches the engine: undo is a sandbox affordance, not git
         doUndo();
         await refresh();
+        notifyViews();
         input.disabled = false;
         busy = false;
         input.focus();
@@ -4294,16 +4350,15 @@
       else { writeText(r.out, r.ok ? '' : 'gs-err'); }
       // a merge that stops on conflicts fails but still changes the repo,
       // and undoing it is the quickest way back out
-      if (trimmed !== 'reset' && sb.changedSince(snap.core)) {
-        undoStack.push(snap);
-        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
-      }
+      var changed = sb.changedSince(snap.core);
+      if (trimmed !== 'reset' && changed) pushUndo(snap);
       // Switch before the refresh too, so the panel is on screen while its
       // chips move; and after, for a tab the refresh has just revealed.
       var want = r.ok ? tabFor(line) : null;
       if (want) selectTab(want);
       await refresh();
       if (want) selectTab(want);
+      if (changed && trimmed !== 'reset') notifyViews();
       input.disabled = false;
       busy = false;
       input.focus();
@@ -4349,7 +4404,10 @@
       ] : []).join('\n');
     }
 
-    async function doReset() {
+    // `initial`: the box is mounting, not being reset by the learner. A
+    // view of a shared repository then shows it as it stands instead of
+    // starting it over.
+    async function doReset(initial) {
       if (vim) {
         // abandon the commit in progress; the submit waiting on it bows out
         vim.abandon();
@@ -4362,7 +4420,7 @@
       // go too or they re-complete themselves on the very next refresh.
       history.length = 0;
       histIdx = 0;
-      undoStack.length = 0;
+      if (!(initial && !isOrigin)) undoStack.length = 0;
       tasks.forEach(function (t) { t._done = false; t._wasDone = false; });
       selectTab(defaultTab);
       // unsaved drafts belong to the run being thrown away
@@ -4380,7 +4438,14 @@
       commitInfo = {};
       stagesInstant = true;
       try {
-        await sb.reset(seed);
+        if (initial && !isOrigin) {
+          await group.ready;
+        } else {
+          // a view's Reset starts the shared repository over from its seed
+          var resetting = sb.reset(group.seed);
+          group.ready = resetting.then(function () {}, function () {});
+          await resetting;
+        }
       } catch (e) {
         writeText('{r}This exercise could not be set up: ' + e.message + '{/}', 'gs-err');
         await refresh();
@@ -4388,6 +4453,7 @@
       }
       intro.forEach(function (l) { writeText(l); });
       await refresh();
+      if (!(initial && !isOrigin)) notifyViews(initial ? '' : '{y}This repository was reset from another view.{/}');
     }
 
     form.addEventListener('submit', function (e) {
@@ -4417,7 +4483,9 @@
     host.querySelector('.gs-out').addEventListener('click', function () { input.focus(); });
 
     renderHints();
-    var ready = doReset();
+    var ready = doReset(true);
+    self.refresh = function () { return ready.then(refresh); };
+    self.note = function (text) { writeText(text); };
 
     return { sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks, tree: tree };
   }

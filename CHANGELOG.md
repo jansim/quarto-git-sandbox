@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- New `share: <id>` option: a box can be another view of an earlier
+  exercise's repository, with its own title, tasks, terminal and layout but
+  the same files and history. Work in either view shows up in both, so a
+  lesson (or a later reveal.js slide) can come back to a repository without
+  starting over. The shared repository is seeded by the exercise it
+  belongs to; Reset in any view starts it over, and Undo takes back the
+  latest change only from the view that made it. A `share` naming no
+  exercise is reported when rendering.
 - More of the box can be configured per exercise:
   - `tree-view` now takes `true`, `false` or `toggle`, and `toggle` is the
     new default: every box gets a small commit-graph button in its header
