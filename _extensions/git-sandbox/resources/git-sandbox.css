@@ -786,8 +786,34 @@
 /* graph */
 
 /* Deep histories scroll inside the panel instead of stretching the box. */
-.gs-graph-scroll { overflow-x: hidden; max-height: 360px; overflow-y: auto; }
+.gs-graph-scroll { position: relative; overflow-x: hidden; max-height: 360px; overflow-y: auto; }
 .gs-graph { display: block; width: 100%; }
+
+/* A commit's contents, opened from the chevron at the end of its row and
+   laid over the gap the graph leaves under that row. */
+.gs-cd-toggle { cursor: pointer; outline: none; }
+.gs-cd-toggle-bg { fill: transparent; stroke: transparent; }
+.gs-cd-toggle:hover .gs-cd-toggle-bg { fill: var(--gs-off-white); stroke: var(--gs-blue-50); }
+.gs-cd-toggle:focus-visible .gs-cd-toggle-bg { stroke: var(--gs-blue-vibrant); stroke-width: 2; }
+.gs-cd-toggle.is-open .gs-cd-toggle-bg { fill: var(--gs-blue-50); }
+.gs-cd-chev { fill: none; stroke: var(--gs-blue-500); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.gs-cd-layer { position: absolute; top: 0; left: 0; right: 0; height: 0; }
+.gs-cd {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--gs-blue-50);
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-size: 12px;
+  color: var(--gs-gray);
+}
+.gs-cd-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--gs-gray-body); margin-bottom: 4px; }
+.gs-cd-oid { font-family: var(--gs-mono); font-size: 11px; color: var(--gs-gray); word-break: break-all; }
+.gs-cd-msg { white-space: pre-wrap; font-size: 13px; color: var(--gs-blue-500); margin-bottom: 6px; }
+.gs-cd-note { color: var(--gs-gray-body); margin-bottom: 6px; }
+.gs-cd-note code { font-family: var(--gs-mono); font-size: 11px; }
+.gs-cd .gs-diff-file:not(:last-child) { margin-bottom: 6px; }
 .gs-sha  { font-family: var(--gs-mono); font-size: 12px; fill: var(--gs-gray-body); }
 .gs-msg  { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray); }
 .gs-ref  { font-family: var(--gs-mono); font-size: 11px; fill: var(--gs-blue-500); }

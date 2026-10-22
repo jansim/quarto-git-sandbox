@@ -16,7 +16,8 @@
 Interactive Git exercises for Quarto documents. Each exercise is a **real Git
 repository running in the reader's browser**. Learners type real `git`
 commands and watch a working-directory/staging/repository diagram, a live
-diff of what changed, and a live commit graph update as they go. Exercises
+diff of what changed, and a live commit graph update as they go; a chevron
+on each commit in the graph opens what that commit changed. Exercises
 can also add a **mock remote**: a second repository inside the page that
 learners `push` to, `fetch` and `pull` from, drawn as its own commit graph,
 including realistic rejected pushes when the remote is ahead.

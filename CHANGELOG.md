@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Each commit in the **History** graph has a chevron at the end of its row
+  that opens the commit's contents underneath it, as `git show` would: the
+  full hash, author, date and message, and every file it added, changed or
+  deleted with a line diff. Merge commits are compared with their first
+  parent, so they show what the merge brought in. Several commits can be
+  open at once, they stay open as the learner keeps working, and the
+  chevrons are keyboard buttons. The sandbox API gains `commitDetails(oid)`.
 - `git commit` no longer switches the panels below the terminal to
   **History**; it stays on **File Status**, where the commit can now be
   seen happening. The File Status view animates: `git add` glides a file's

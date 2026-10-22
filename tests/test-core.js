@@ -602,6 +602,42 @@ async function scenario(name, fn) {
     check('git init in a subfolder explains', !r.ok && /cd ~/.test(r.out), r.out);
   });
 
+  /* ---------------- commit details (History view) ---------------- */
+  await scenario('commit details', async ({ sb, run, check }) => {
+    for (const l of ['git init', 'mkdir src', 'echo "one" > a.txt', 'echo "x" > src/b.txt', 'git add .',
+      'git commit -m "First"', 'echo "two" >> a.txt', 'git rm src/b.txt', 'echo "c" > c.txt', 'git add .',
+      'git commit -m "Second"']) await run(l);
+    const g = await sb.graphModel();
+    const second = await sb.commitDetails(g.commits[0].oid);
+    check('details carry the full message and author', second.message === 'Second' && second.author === 'Your Name' &&
+      second.oid === g.commits[0].oid && second.parents.length === 1, JSON.stringify(second));
+    check('details list changed files with their kind',
+      JSON.stringify(second.files.map(f => [f.file, f.kind])) ===
+      JSON.stringify([['a.txt', 'modified'], ['c.txt', 'new'], ['src/b.txt', 'deleted']]),
+      JSON.stringify(second.files.map(f => [f.file, f.kind])));
+    const a = second.files[0];
+    check('a modified file carries a line diff',
+      a.lines.some(l => l.t === '+' && l.text === 'two') && a.lines.some(l => l.t === ' ' && l.text === 'one'),
+      JSON.stringify(a.lines));
+    const first = await sb.commitDetails(g.commits[1].oid);
+    check('the first commit compares with nothing', first.parents.length === 0 &&
+      first.files.every(f => f.kind === 'new') && first.files.length === 2, JSON.stringify(first.files));
+
+    await run('git checkout -b side');
+    await run('echo "s" > s.txt');
+    await run('git add .');
+    await run('git commit -m "Side"');
+    await run('git checkout main');
+    await run('echo "m" > m.txt');
+    await run('git add .');
+    await run('git commit -m "Main"');
+    await run('git merge side');
+    const merge = await sb.commitDetails((await sb.graphModel()).commits[0].oid);
+    check('a merge shows what it brought in (against the first parent)',
+      merge.parents.length === 2 && JSON.stringify(merge.files.map(f => f.file)) === '["s.txt"]',
+      JSON.stringify(merge.files));
+  });
+
   /* ---------------- merge conflicts ---------------- */
   const conflictSetup = async (run) => {
     for (const l of ['git init', 'echo "base" > f.txt', 'echo "keep" > d.txt', 'git add .', 'git commit -m one',

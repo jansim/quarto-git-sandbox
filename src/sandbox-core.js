@@ -1299,17 +1299,74 @@
           oldTxt = new TextDecoder().decode(blob.blob);
         }
         if (workdir !== 0) newTxt = await fs.promises.readFile(dir + '/' + file, 'utf8');
-        // Strip one trailing newline per side so the panel never shows a
-        // phantom blank last line.
-        oldTxt = oldTxt.replace(/\n$/, '');
-        newTxt = newTxt.replace(/\n$/, '');
-        var lines;
-        if (kind === 'new') lines = newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
-        else if (kind === 'deleted') lines = oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
-        else lines = diffLines(oldTxt, newTxt);
-        files.push({ file: file, kind: kind, lines: lines });
+        files.push({ file: file, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
       }
       return { files: files };
+    }
+
+    // One file's lines for the diff views; kind is 'new', 'modified' or
+    // 'deleted'. One trailing newline per side is dropped so the panel never
+    // shows a phantom blank last line.
+    function fileDiff(kind, oldTxt, newTxt) {
+      oldTxt = oldTxt.replace(/\n$/, '');
+      newTxt = newTxt.replace(/\n$/, '');
+      if (kind === 'new') return newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
+      if (kind === 'deleted') return oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
+      return diffLines(oldTxt, newTxt);
+    }
+
+    // path -> blob oid for every file in a commit's tree
+    async function flatTree(commitOid) {
+      var out = {};
+      async function walkTree(treeOid, prefix) {
+        var t = await gitlib.readTree(opts({ oid: treeOid }));
+        for (var i = 0; i < t.tree.length; i++) {
+          var e = t.tree[i];
+          if (e.type === 'tree') await walkTree(e.oid, prefix + e.path + '/');
+          else if (e.type === 'blob') out[prefix + e.path] = e.oid;
+        }
+      }
+      var c = await gitlib.readCommit(opts({ oid: commitOid }));
+      await walkTree(c.commit.tree, '');
+      return out;
+    }
+
+    async function blobText(oid) {
+      var b = await gitlib.readBlob(opts({ oid: oid }));
+      if (b.blob.indexOf(0) !== -1) return null;
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(b.blob); }
+      catch (e) { return null; }
+    }
+
+    // What `git show` would tell you about one commit: who, when, the full
+    // message, and what it changed. A merge commit is compared with its
+    // first parent, as `git show --first-parent` does, so it lists what the
+    // merge brought in. files: [{ file, kind, lines, binary }].
+    async function commitDetails(oid) {
+      var c = await gitlib.readCommit(opts({ oid: oid }));
+      var parents = c.commit.parent || [];
+      var mine = await flatTree(oid);
+      var theirs = parents.length ? await flatTree(parents[0]) : {};
+      var paths = {};
+      Object.keys(mine).concat(Object.keys(theirs)).forEach(function (p) { paths[p] = true; });
+      var files = [];
+      var sorted = Object.keys(paths).sort();
+      for (var i = 0; i < sorted.length; i++) {
+        var f = sorted[i];
+        if (mine[f] === theirs[f]) continue;
+        var kind = !theirs[f] ? 'new' : (!mine[f] ? 'deleted' : 'modified');
+        var oldTxt = theirs[f] ? await blobText(theirs[f]) : '';
+        var newTxt = mine[f] ? await blobText(mine[f]) : '';
+        if (oldTxt === null || newTxt === null) { files.push({ file: f, kind: kind, lines: [], binary: true }); continue; }
+        files.push({ file: f, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
+      }
+      var a = c.commit.author;
+      return {
+        oid: oid, short: oid.slice(0, 7), parents: parents,
+        author: a.name, email: a.email, timestamp: a.timestamp,
+        message: (c.commit.message || '').replace(/\n+$/, ''),
+        files: files
+      };
     }
 
     function usageGit() {
@@ -1577,6 +1634,7 @@
       graphModel: graphModel,
       statusModel: statusModel,
       diffModel: diffModel,
+      commitDetails: commitDetails,
       remoteModel: remoteModel,
       pwd: displayCwd,
       // cwd relative to the project folder: '' at its top, 'src/lib' below

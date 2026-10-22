@@ -1309,17 +1309,74 @@
           oldTxt = new TextDecoder().decode(blob.blob);
         }
         if (workdir !== 0) newTxt = await fs.promises.readFile(dir + '/' + file, 'utf8');
-        // Strip one trailing newline per side so the panel never shows a
-        // phantom blank last line.
-        oldTxt = oldTxt.replace(/\n$/, '');
-        newTxt = newTxt.replace(/\n$/, '');
-        var lines;
-        if (kind === 'new') lines = newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
-        else if (kind === 'deleted') lines = oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
-        else lines = diffLines(oldTxt, newTxt);
-        files.push({ file: file, kind: kind, lines: lines });
+        files.push({ file: file, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
       }
       return { files: files };
+    }
+
+    // One file's lines for the diff views; kind is 'new', 'modified' or
+    // 'deleted'. One trailing newline per side is dropped so the panel never
+    // shows a phantom blank last line.
+    function fileDiff(kind, oldTxt, newTxt) {
+      oldTxt = oldTxt.replace(/\n$/, '');
+      newTxt = newTxt.replace(/\n$/, '');
+      if (kind === 'new') return newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
+      if (kind === 'deleted') return oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
+      return diffLines(oldTxt, newTxt);
+    }
+
+    // path -> blob oid for every file in a commit's tree
+    async function flatTree(commitOid) {
+      var out = {};
+      async function walkTree(treeOid, prefix) {
+        var t = await gitlib.readTree(opts({ oid: treeOid }));
+        for (var i = 0; i < t.tree.length; i++) {
+          var e = t.tree[i];
+          if (e.type === 'tree') await walkTree(e.oid, prefix + e.path + '/');
+          else if (e.type === 'blob') out[prefix + e.path] = e.oid;
+        }
+      }
+      var c = await gitlib.readCommit(opts({ oid: commitOid }));
+      await walkTree(c.commit.tree, '');
+      return out;
+    }
+
+    async function blobText(oid) {
+      var b = await gitlib.readBlob(opts({ oid: oid }));
+      if (b.blob.indexOf(0) !== -1) return null;
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(b.blob); }
+      catch (e) { return null; }
+    }
+
+    // What `git show` would tell you about one commit: who, when, the full
+    // message, and what it changed. A merge commit is compared with its
+    // first parent, as `git show --first-parent` does, so it lists what the
+    // merge brought in. files: [{ file, kind, lines, binary }].
+    async function commitDetails(oid) {
+      var c = await gitlib.readCommit(opts({ oid: oid }));
+      var parents = c.commit.parent || [];
+      var mine = await flatTree(oid);
+      var theirs = parents.length ? await flatTree(parents[0]) : {};
+      var paths = {};
+      Object.keys(mine).concat(Object.keys(theirs)).forEach(function (p) { paths[p] = true; });
+      var files = [];
+      var sorted = Object.keys(paths).sort();
+      for (var i = 0; i < sorted.length; i++) {
+        var f = sorted[i];
+        if (mine[f] === theirs[f]) continue;
+        var kind = !theirs[f] ? 'new' : (!mine[f] ? 'deleted' : 'modified');
+        var oldTxt = theirs[f] ? await blobText(theirs[f]) : '';
+        var newTxt = mine[f] ? await blobText(mine[f]) : '';
+        if (oldTxt === null || newTxt === null) { files.push({ file: f, kind: kind, lines: [], binary: true }); continue; }
+        files.push({ file: f, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
+      }
+      var a = c.commit.author;
+      return {
+        oid: oid, short: oid.slice(0, 7), parents: parents,
+        author: a.name, email: a.email, timestamp: a.timestamp,
+        message: (c.commit.message || '').replace(/\n+$/, ''),
+        files: files
+      };
     }
 
     function usageGit() {
@@ -1587,6 +1644,7 @@
       graphModel: graphModel,
       statusModel: statusModel,
       diffModel: diffModel,
+      commitDetails: commitDetails,
       remoteModel: remoteModel,
       pwd: displayCwd,
       // cwd relative to the project folder: '' at its top, 'src/lib' below
@@ -2638,7 +2696,22 @@
 
   /* --------------------------- commit graph -------------------------- */
 
-  function renderGraph(svg, model) {
+  // x where a commit row's text (refs, sha, message) starts
+  function graphTextX(model) {
+    var maxLane = 0;
+    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
+    return 22 + maxLane * 24 + 22 + 6;
+  }
+
+  // `extra`, for the local history only: { onToggle(oid), open: { oid: px } }.
+  // Each row then gets a chevron that opens the commit's contents, and an
+  // open row grows by its px so the details (an HTML layer the caller
+  // places) fit beneath it with the lanes running on past them. Returns
+  // { detailTop: { oid: y } } for that placement.
+  function renderGraph(svg, model, extra) {
+    extra = extra || {};
+    var open = extra.open || {};
+    var layout = { detailTop: {} };
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     var NS = 'http://www.w3.org/2000/svg';
 
@@ -2655,13 +2728,12 @@
       t.setAttribute('class', 'gs-empty-text');
       t.textContent = 'No commits yet.';
       svg.appendChild(t);
-      return;
+      return layout;
     }
 
     var rowH = 44, laneW = 24, padTop = 26, padLeft = 22, lineH = 17;
-    var maxLane = 0;
-    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
-    var graphW = padLeft + maxLane * laneW + 22;
+    var graphW = graphTextX(model) - 6;
+    var toggleW = extra.onToggle ? 28 : 0;
 
     // Wrap a commit message to a character budget, breaking on spaces and
     // hard-breaking any single word longer than the line.
@@ -2692,10 +2764,11 @@
         return lay;
       });
       var shaX = tx, msgX = tx + 62;
-      var maxChars = Math.max(8, Math.floor((W - msgX - 12) / 6.8));
+      var maxChars = Math.max(8, Math.floor((W - msgX - 12 - toggleW) / 6.8));
       var lines = wrapWords(c.message, maxChars);
+      var baseH = Math.max(rowH, lines.length * lineH + 20);
       return { refLayouts: refLayouts, shaX: shaX, msgX: msgX, lines: lines,
-               h: Math.max(rowH, lines.length * lineH + 20) };
+               baseH: baseH, h: baseH + (open[c.oid] || 0) };
     });
 
     // Second pass: stack rows so a wrapped message never overlaps the next.
@@ -2791,7 +2864,46 @@
         msg.appendChild(ts);
       });
       svg.appendChild(msg);
+
+      if (extra.onToggle) {
+        svg.appendChild(commitToggle(NS, c, W - 22, cy, !!open[c.oid], extra.onToggle));
+        if (open[c.oid]) layout.detailTop[c.oid] = tops[i] + row.baseH - 6;
+      }
     });
+    return layout;
+  }
+
+  // The chevron at the end of a history row: a keyboard-reachable SVG
+  // button that opens or closes the commit's contents.
+  function commitToggle(NS, c, x, cy, isOpen, onToggle) {
+    var g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'gs-cd-toggle' + (isOpen ? ' is-open' : ''));
+    g.setAttribute('role', 'button');
+    g.setAttribute('tabindex', '0');
+    g.setAttribute('data-oid', c.oid);
+    g.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    g.setAttribute('aria-label', (isOpen ? 'Hide' : 'Show') + ' the contents of commit ' + c.short);
+    var title = document.createElementNS(NS, 'title');
+    title.textContent = isOpen ? 'Hide contents' : 'Show contents';
+    g.appendChild(title);
+    var hit = document.createElementNS(NS, 'rect');
+    hit.setAttribute('x', x - 11); hit.setAttribute('y', cy - 11);
+    hit.setAttribute('width', 22); hit.setAttribute('height', 22);
+    hit.setAttribute('rx', 5);
+    hit.setAttribute('class', 'gs-cd-toggle-bg');
+    g.appendChild(hit);
+    var chev = document.createElementNS(NS, 'path');
+    // points right when closed and down when open, like the file browser's
+    chev.setAttribute('d', isOpen
+      ? 'M' + (x - 4) + ',' + (cy - 2) + ' l4,4 l4,-4'
+      : 'M' + (x - 2) + ',' + (cy - 4) + ' l4,4 l-4,4');
+    chev.setAttribute('class', 'gs-cd-chev');
+    g.appendChild(chev);
+    g.addEventListener('click', function () { onToggle(c.oid); });
+    g.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(c.oid); }
+    });
+    return g;
   }
 
   /* ------------------------------ diff panel ------------------------- */
@@ -2805,23 +2917,46 @@
       node.innerHTML = '<div class="gs-diff-empty">Working directory clean — no changes since the last commit.</div>';
       return;
     }
-    node.innerHTML = model.files.map(function (f) {
-      var rows = f.lines.map(function (l) {
-        var cls = l.t === '+' ? ' gs-diff-add' : (l.t === '-' ? ' gs-diff-del' : '');
-        return '<div class="gs-diff-line' + cls + '">' +
-          '<span class="gs-diff-num">' + (l.a || '') + '</span>' +
-          '<span class="gs-diff-num">' + (l.b || '') + '</span>' +
-          '<span class="gs-diff-sign">' + (l.t === ' ' ? '' : l.t) + '</span>' +
-          '<span class="gs-diff-text">' + esc(l.text) + '</span>' +
-        '</div>';
-      }).join('');
-      return '<div class="gs-diff-file">' +
-        '<div class="gs-diff-filehead">' +
-          '<span class="gs-diff-name">' + esc(f.file) + '</span>' +
-          '<span class="gs-diff-kind gs-diff-kind-' + f.kind + '">' + f.kind + '</span>' +
-        '</div>' + rows +
-      '</div>';
-    }).join('');
+    node.innerHTML = model.files.map(diffFileHtml).join('');
+  }
+
+  // one file's block in a diff view (the Changes panel, a commit's contents)
+  function diffFileHtml(f) {
+    var rows = f.binary
+      ? '<div class="gs-diff-line"><span class="gs-diff-text">Binary file, not shown.</span></div>'
+      : f.lines.map(function (l) {
+          var cls = l.t === '+' ? ' gs-diff-add' : (l.t === '-' ? ' gs-diff-del' : '');
+          return '<div class="gs-diff-line' + cls + '">' +
+            '<span class="gs-diff-num">' + (l.a || '') + '</span>' +
+            '<span class="gs-diff-num">' + (l.b || '') + '</span>' +
+            '<span class="gs-diff-sign">' + (l.t === ' ' ? '' : l.t) + '</span>' +
+            '<span class="gs-diff-text">' + esc(l.text) + '</span>' +
+          '</div>';
+        }).join('');
+    return '<div class="gs-diff-file">' +
+      '<div class="gs-diff-filehead">' +
+        '<span class="gs-diff-name">' + esc(f.file) + '</span>' +
+        '<span class="gs-diff-kind gs-diff-kind-' + f.kind + '">' + f.kind + '</span>' +
+      '</div>' + rows +
+    '</div>';
+  }
+
+  // The contents of one commit, shown under its row in the History graph.
+  function commitDetailsHtml(d) {
+    var when = new Date(d.timestamp * 1000);
+    var whenText = isNaN(when.getTime()) ? '' : when.toLocaleString();
+    var note = d.parents.length > 1
+      ? '<div class="gs-cd-note">A merge of ' + d.parents.map(function (p) { return '<code>' + p.slice(0, 7) + '</code>'; }).join(' and ') +
+        '. Changes are shown against the first parent, so they are what the merge brought in.</div>'
+      : (!d.parents.length ? '<div class="gs-cd-note">The first commit: everything in it is new.</div>' : '');
+    var files = d.files.length
+      ? d.files.map(diffFileHtml).join('')
+      : '<div class="gs-diff-empty">No file changes.</div>';
+    return '<div class="gs-cd-meta"><code class="gs-cd-oid">' + esc(d.oid) + '</code>' +
+        '<span>' + esc(d.author) + ' &lt;' + esc(d.email) + '&gt;</span>' +
+        (whenText ? '<span>' + esc(whenText) + '</span>' : '') + '</div>' +
+      '<div class="gs-cd-msg">' + esc(d.message) + '</div>' + note +
+      '<div class="gs-cd-files" aria-label="Files changed">' + files + '</div>';
   }
 
   /* -------------------------- staging diagram ------------------------ */
@@ -3077,7 +3212,8 @@
             '<div class="gs-diff"></div>' +
           '</section>' +
           '<section class="gs-panel" role="tabpanel" data-panel="history" hidden>' +
-            '<div class="gs-graph-scroll"><svg class="gs-graph" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
+            '<div class="gs-graph-scroll"><svg class="gs-graph" xmlns="http://www.w3.org/2000/svg"></svg>' +
+              '<div class="gs-cd-layer"></div></div>' +
           '</section>' +
           '<section class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
             '<div class="gs-remote" hidden>' +
@@ -3104,6 +3240,11 @@
     var stagesNode = host.querySelector('.gs-stages');
     var diffNode = host.querySelector('.gs-diff');
     var svg = host.querySelector('.gs-graph');
+    var cdLayer = host.querySelector('.gs-cd-layer');
+    // History rows opened to show what the commit changed. Details are
+    // cached by oid: a commit never changes, it can only go away.
+    var openCommits = {};
+    var commitInfo = {};
     var remoteWrap = host.querySelector('.gs-remote');
     var remoteSvg = host.querySelector('.gs-remote-graph');
     var remoteSync = host.querySelector('.gs-remote-sync');
@@ -3226,7 +3367,7 @@
       var w = svg.clientWidth;
       if (lastGraph && w && w !== lastGraphW) {
         lastGraphW = w;
-        renderGraph(svg, lastGraph);
+        drawHistory(lastGraph);
       }
       var rw = remoteSvg.clientWidth;
       if (lastRemoteGraph && rw && rw !== lastRemoteGraphW) {
@@ -3725,13 +3866,13 @@
       stagesInstant = false;
       lastCommitCount = graph.commits.length;
       renderDiff(diffNode, diff);
-      renderGraph(svg, graph);
+      lastGraph = graph;
+      drawHistory(graph);
       lastTree = await sb.listTree();
       fileSet = {};
       lastTree.forEach(function (e) { if (e.type === 'file') fileSet[e.path] = true; });
       lastStatus = isRepo ? status : null;
       await syncEditor();
-      lastGraph = graph;
       lastGraphW = svg.clientWidth;
       if (tree) drawTree(graph);
 
@@ -3805,6 +3946,47 @@
       // a stopped merge shows as (main|MERGING), as git's own prompt does
       host.querySelector('.gs-prompt').textContent =
         sb.pwd() + (br ? ' (' + br + (status.merging ? '|MERGING' : '') + ')' : '') + ' $';
+    }
+
+    // The history graph, with the contents of each opened commit laid out
+    // under its row: the details are HTML (diffs need text layout), placed
+    // over a gap the graph leaves for them.
+    function drawHistory(graph) {
+      cdLayer.innerHTML = '';
+      var heights = {}, nodes = {};
+      var left = graphTextX(graph);
+      var width = Math.max(160, (svg.clientWidth || 640) - left - 40);
+      graph.commits.forEach(function (c) {
+        if (!openCommits[c.oid] || !commitInfo[c.oid]) return;
+        var n = el('div', 'gs-cd', commitDetailsHtml(commitInfo[c.oid]));
+        n.setAttribute('data-oid', c.oid);
+        n.style.left = left + 'px';
+        n.style.width = width + 'px';
+        cdLayer.appendChild(n);
+        nodes[c.oid] = n;
+        // jsdom (and a hidden panel) has no layout: estimate instead
+        heights[c.oid] = (n.offsetHeight || 90 + commitInfo[c.oid].files.reduce(function (sum, f) {
+          return sum + 30 + f.lines.length * 18;
+        }, 0)) + 14;
+      });
+      var lay = renderGraph(svg, graph, { open: heights, onToggle: toggleCommit });
+      Object.keys(nodes).forEach(function (oid) { nodes[oid].style.top = lay.detailTop[oid] + 'px'; });
+    }
+
+    async function toggleCommit(oid) {
+      if (openCommits[oid]) {
+        delete openCommits[oid];
+      } else {
+        if (!commitInfo[oid]) {
+          try { commitInfo[oid] = await sb.commitDetails(oid); }
+          catch (e) { return; }
+        }
+        openCommits[oid] = true;
+      }
+      if (lastGraph) drawHistory(lastGraph);
+      // the redraw replaced the button; keep keyboard focus on it
+      var again = svg.querySelector('.gs-cd-toggle[data-oid="' + oid + '"]');
+      if (again && again.focus) again.focus();
     }
 
     function drawTree(graph) {
@@ -4110,6 +4292,8 @@
       upLevels = 0;
       expanded = {};
       if (tree) { tree.reset(); treeInstant = true; }
+      openCommits = {};
+      commitInfo = {};
       stagesInstant = true;
       try {
         await sb.reset(seed);

@@ -569,6 +569,52 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       bad.querySelector('.gs-out').textContent);
   }
 
+  /* ---------------- commit contents in the History view ---------------- */
+  {
+    const box = win.document.createElement('div');
+    box.id = 'cdbox';
+    win.document.body.appendChild(box);
+    const h = win.GitSandboxUI.mount('#cdbox', {
+      seed: 'git init\necho "hello" > a.txt\ngit add .\ngit commit -m "First"\necho "world" >> a.txt\n' +
+        'echo "<b>" > tag.txt\ngit add .\ngit commit -m "Second line" -m "With a body"'
+    });
+    await h.ready;
+    const toggles = () => box.querySelectorAll('.gs-graph .gs-cd-toggle');
+    check('every history row has a contents toggle', toggles().length === 2, toggles().length);
+    check('toggles are keyboard buttons', Array.from(toggles()).every(t =>
+      t.getAttribute('role') === 'button' && t.getAttribute('tabindex') === '0' &&
+      t.getAttribute('aria-expanded') === 'false' && /Show the contents of commit [0-9a-f]{7}/.test(t.getAttribute('aria-label'))));
+    check('nothing open to begin with', box.querySelectorAll('.gs-cd').length === 0);
+    const svgH = () => Number(box.querySelector('.gs-graph').getAttribute('height'));
+    const closedH = svgH();
+    toggles()[0].dispatchEvent(new win.Event('click'));
+    await sleep(60);
+    const cd = box.querySelector('.gs-cd');
+    check('clicking the toggle opens the commit', !!cd);
+    check('details show the message, files and a diff',
+      !!cd && /Second line/.test(cd.textContent) && /a\.txt/.test(cd.textContent) && /tag\.txt/.test(cd.textContent) &&
+      cd.querySelectorAll('.gs-diff-add').length === 2, cd ? cd.textContent : '');
+    check('file text is escaped', !!cd && !cd.querySelector('b') && /<b>/.test(cd.textContent));
+    check('details show the full hash', !!cd && /[0-9a-f]{40}/.test(cd.querySelector('.gs-cd-oid').textContent));
+    check('the graph makes room for the details', svgH() > closedH, svgH() + ' vs ' + closedH);
+    check('the toggle says it is open', toggles()[0].getAttribute('aria-expanded') === 'true' &&
+      /Hide the contents/.test(toggles()[0].getAttribute('aria-label')));
+    check('details sit below their row', parseFloat(cd.style.top) > 20, cd.style.top);
+
+    toggles()[1].dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(60);
+    check('Enter opens a second commit', box.querySelectorAll('.gs-cd').length === 2);
+    check('the first commit says it is the first', /first commit/.test(box.querySelectorAll('.gs-cd')[1].textContent));
+    await h.run('echo "more" > b.txt');
+    check('open commits stay open across commands', box.querySelectorAll('.gs-cd').length === 2);
+    toggles()[0].dispatchEvent(new win.Event('click'));
+    await sleep(30);
+    check('clicking again closes it', box.querySelectorAll('.gs-cd').length === 1);
+    await h.run('reset');
+    check('reset closes everything', box.querySelectorAll('.gs-cd').length === 0);
+    check('remote graphs have no toggles', box.querySelectorAll('.gs-remote-graph .gs-cd-toggle').length === 0);
+  }
+
   /* ---------------- File Status animations ---------------- */
   {
     // jsdom has no layout and no Web Animations API, so stand in for both:
