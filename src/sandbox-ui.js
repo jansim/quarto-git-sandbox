@@ -296,8 +296,9 @@
   }
 
   // A ref label centred on y, styled like the commit tree's: a tinted box
-  // outlined in the branch colour, bolder for HEAD, dashed grey for remote
-  // refs. `rl` is { label, w, isHead, remote }.
+  // outlined in the branch colour, bolder for HEAD, grey for remote refs:
+  // dashed for the local repo's remote-tracking copies, solid for the
+  // remote's own branches. `rl` is { label, w, isHead, remote, onRemote }.
   function drawRef(svg, rl, x, y, h, padX, color) {
     var NS = 'http://www.w3.org/2000/svg';
     var rect = document.createElementNS(NS, 'rect');
@@ -307,7 +308,7 @@
     if (rl.remote) {
       rect.setAttribute('fill', '#FFFFFF');
       rect.setAttribute('stroke', '#717171');
-      rect.setAttribute('stroke-dasharray', '3 2');
+      if (!rl.onRemote) rect.setAttribute('stroke-dasharray', '3 2');
     } else {
       rect.setAttribute('fill', tint(color, rl.isHead ? 0.62 : 0.85));
       rect.setAttribute('stroke', color);
@@ -325,8 +326,9 @@
   // local/remote view. Narrower lanes and smaller type; ref labels get a
   // line of their own above the sha and message (wrapping onto more lines
   // when they don't fit), and the message is cut to one line, with the
-  // full text on hover.
-  function renderCompactGraph(svg, model) {
+  // full text on hover. `onRemote` marks the remote's own graph, whose
+  // labels are its branches rather than tracking copies of them.
+  function renderCompactGraph(svg, model, onRemote) {
     var NS = 'http://www.w3.org/2000/svg';
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     var W = svg.clientWidth || 320;
@@ -356,7 +358,7 @@
         var label = (r.isHead ? 'HEAD → ' : '') + r.name;
         var w = label.length * (r.isHead ? 6.5 : 6.1) + 10;
         if (line.length && lx + w > W - 6) { refLines.push(line); line = []; lx = textX; }
-        line.push({ label: label, x: lx, w: w, isHead: r.isHead, remote: r.remote });
+        line.push({ label: label, x: lx, w: w, isHead: r.isHead, remote: r.remote, onRemote: !!onRemote });
         lx += w + 4;
       });
       if (line.length) refLines.push(line);
@@ -1119,7 +1121,7 @@
       var rw = remoteSvg.clientWidth;
       if (lastRemoteGraph && rw && rw !== lastRemoteGraphW) {
         lastRemoteGraphW = rw;
-        renderCompactGraph(remoteSvg, lastRemoteGraph);
+        renderCompactGraph(remoteSvg, lastRemoteGraph, true);
       }
       var lw = localSvg.clientWidth;
       if (lastRemoteGraph && lastGraph && lw && lw !== lastLocalGraphW) {
@@ -1695,7 +1697,7 @@
         remoteName = remote.name;
         drawRemoteName(remote);
         renderCompactGraph(localSvg, graph);
-        renderCompactGraph(remoteSvg, remote.graph);
+        renderCompactGraph(remoteSvg, remote.graph, true);
         lastRemoteGraph = remote.graph;
         lastRemoteGraphW = remoteSvg.clientWidth;
         lastLocalGraphW = localSvg.clientWidth;

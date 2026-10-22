@@ -303,6 +303,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     String(host.querySelectorAll('.gs-remote-graph circle').length));
   check('compact rows show the HEAD ref', /HEAD → main/.test(host.querySelector('.gs-local-graph').textContent),
     host.querySelector('.gs-local-graph').textContent);
+  const refBox = (sel) => {
+    const t = [...host.querySelectorAll(sel + ' text.gs-ref-remote')].find((n) => n.textContent === 'origin/main');
+    return t && t.previousElementSibling;
+  };
+  check('local half dashes the remote-tracking origin/main',
+    refBox('.gs-local-graph') && refBox('.gs-local-graph').getAttribute('stroke-dasharray') === '3 2');
+  check('remote half draws its own origin/main solid',
+    refBox('.gs-remote-graph') && !refBox('.gs-remote-graph').hasAttribute('stroke-dasharray'));
 
   // workspace title bar: Terminal and Editor tabs over the dark pane
   const view = () => host.querySelector('.gs-wtab.is-active').getAttribute('data-view');
