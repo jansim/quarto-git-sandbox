@@ -3044,10 +3044,11 @@
   // `git add` visibly carries a file from the working directory to the
   // staging area and `git commit` carries the staged files into the
   // repository. `before` is chipRects() from just before the render. Chips
-  // that moved glide from where they were (FLIP), committed ones fly into
-  // the repository as ghosts, and new ones fade in. A no-op where the Web
-  // Animations API is missing, the panel is hidden, or the reader asked for
-  // reduced motion.
+  // that changed column glide across one after another (FLIP), chips that
+  // only shifted within a column settle into place, committed ones shrink
+  // into a dot on their way into the repository, and new ones fade in once
+  // the travellers have left. A no-op where the Web Animations API is
+  // missing, the panel is hidden, or the reader asked for reduced motion.
   function animateStages(node, before, committed) {
     if (!before || typeof node.animate !== 'function') return;
     if (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -3055,51 +3056,99 @@
     var now = chipRects(node);
     var repo = node.querySelector('.gs-chip-repo');
     var repoBox = repo ? chipBox(node, repo) : null;
-    var ease = { duration: 480, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' };
-    var claimed = {};
+    // eases in and out, so the eye catches the start and the landing
+    var travel = 'cubic-bezier(0.45, 0, 0.25, 1)';
+    var STAGGER = 70, MAX_STAGGER = 350;
+    var claimed = {}, travellers = 0, ghosts = 0;
 
+    function stagger(n) { return Math.min(n * STAGGER, MAX_STAGGER); }
+
+    // across columns: slow enough to follow, lifted while in the air
     function glide(el, from, to) {
       var dx = from.x - to.x, dy = from.y - to.y;
       if (!dx && !dy) return;
-      el.animate([{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'none' }], ease);
+      el.animate([
+        { transform: 'translate(' + dx + 'px, ' + dy + 'px)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
+        { transform: 'translate(' + dx / 2 + 'px, ' + dy / 2 + 'px) scale(1.04)', boxShadow: '0 4px 12px rgba(17,28,38,0.18)', offset: 0.5 },
+        { transform: 'none', boxShadow: '0 0 0 rgba(0,0,0,0)' }
+      ], { duration: 560, delay: stagger(travellers++), easing: travel, fill: 'backwards' });
+    }
+
+    // within a column: closing the gap a departing chip left behind
+    function settle(el, from, to) {
+      var dx = from.x - to.x, dy = from.y - to.y;
+      if (!dx && !dy) return;
+      el.animate([{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'none' }],
+        { duration: 380, delay: 120, easing: 'cubic-bezier(0.3, 0, 0.2, 1)', fill: 'backwards' });
+    }
+
+    // into the repository: a copy of the staged chip folds into a dot,
+    // hops across, and drops into the repository chip
+    var DOT = 12, FLY = 900;
+    function commitGhost(old) {
+      var ghost = old.el.cloneNode(true);
+      // not a real chip: keep it out of the next chipRects()
+      ghost.removeAttribute('data-col');
+      ghost.removeAttribute('data-file');
+      ghost.classList.add('gs-chip-ghost');
+      node.appendChild(ghost);
+      var cx = old.x + old.w / 2, cy = old.y + old.h / 2;
+      var tx = repoBox.x + repoBox.w / 2, ty = repoBox.y + repoBox.h / 2;
+      var mx = (cx + tx) / 2, my = Math.min(cy, ty) - 28;
+      // the old chip is detached by now; the ghost has its classes
+      var chipStyle = root.getComputedStyle ? root.getComputedStyle(ghost) : null;
+      var chip = {
+        borderRadius: '4px', padding: (chipStyle && chipStyle.padding) || '3px 6px',
+        backgroundColor: (chipStyle && chipStyle.backgroundColor) || '#DBE6D3',
+        color: (chipStyle && chipStyle.color) || '#394D27', opacity: 1
+      };
+      // the dot takes the commit graph's blue
+      var dot = { borderRadius: '50%', padding: '0px', backgroundColor: '#447099', color: 'rgba(0,0,0,0)', opacity: 1 };
+      // a keyframe centred on (x, y): `size` square, or the chip's own box;
+      // `easing` shapes the stretch from this keyframe to the next
+      function at(x, y, size, look, offset, easing, extra) {
+        var w = size || old.w, h = size || old.h;
+        var f = { left: x - w / 2 + 'px', top: y - h / 2 + 'px', width: w + 'px', height: h + 'px',
+                  offset: offset, easing: easing || 'linear' };
+        Object.keys(look).forEach(function (k) { f[k] = look[k]; });
+        Object.keys(extra || {}).forEach(function (k) { f[k] = extra[k]; });
+        return f;
+      }
+      ghost.animate([
+        at(cx, cy, 0, chip, 0, 'ease-in-out'),     // fold into a dot in place
+        at(cx, cy, DOT, dot, 0.3, 'ease-in'),       // rise, speeding up
+        at(mx, my, DOT, dot, 0.65, 'ease-out'),     // and come down softly
+        at(tx, ty, DOT, dot, 0.92, 'ease-in'),
+        at(tx, ty, 4, dot, 1, null, { opacity: 0 }) // sink into the chip
+      ], { duration: FLY, delay: stagger(ghosts++), fill: 'both' })
+        .onfinish = function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); };
     }
 
     Object.keys(before).forEach(function (key) {
       var old = before[key];
       var colName = key.slice(0, key.indexOf(':'));
       var file = key.slice(key.indexOf(':') + 1);
-      if (now[key]) { glide(now[key].el, old, now[key]); claimed[key] = true; return; }
-      if (colName === 'stage' && committed && repoBox) {
-        // into the repository: a copy of the old chip flies there and fades
-        var ghost = old.el.cloneNode(true);
-        ghost.classList.add('gs-chip-ghost');
-        ghost.style.left = old.x + 'px';
-        ghost.style.top = old.y + 'px';
-        ghost.style.width = old.w + 'px';
-        node.appendChild(ghost);
-        var dx = repoBox.x + repoBox.w / 2 - (old.x + old.w / 2);
-        var dy = repoBox.y + repoBox.h / 2 - (old.y + old.h / 2);
-        // stays solid for most of the trip, so the eye can follow it
-        ghost.animate([
-          { transform: 'none', opacity: 1 },
-          { transform: 'translate(' + dx * 0.85 + 'px, ' + dy * 0.85 + 'px) scale(0.85)', opacity: 0.9, offset: 0.7 },
-          { transform: 'translate(' + dx + 'px, ' + dy + 'px) scale(0.5)', opacity: 0 }
-        ], { duration: 650, easing: ease.easing }).onfinish = function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); };
-        return;
-      }
+      if (now[key]) { settle(now[key].el, old, now[key]); claimed[key] = true; return; }
+      if (colName === 'stage' && committed && repoBox) { commitGhost(old); return; }
       // across to the other column: `git add` (work -> stage) or back
       var other = (colName === 'work' ? 'stage' : 'work') + ':' + file;
       if (now[other] && !before[other]) { glide(now[other].el, old, now[other]); claimed[other] = true; }
     });
 
+    // newcomers wait until the travellers are under way
+    var lastStart = stagger(Math.max(travellers, ghosts) - 1);
     Object.keys(now).forEach(function (key) {
       // the repository chip is relabelled ("3 commits"), not new
       if (claimed[key] || before[key] || key.indexOf('repo:') === 0) return;
-      now[key].el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, delay: committed ? 200 : 0, fill: 'backwards' });
+      now[key].el.animate([{ opacity: 0 }, { opacity: 1 }],
+        { duration: 360, delay: (ghosts ? 300 : 120) + lastStart, easing: 'ease-out', fill: 'backwards' });
     });
-    if (committed && repo) {
-      repo.animate([{ transform: 'none' }, { transform: 'scale(1.06)' }, { transform: 'none' }],
-        { duration: 360, delay: 520 });
+    if (ghosts && repo) {
+      // the new count shows as the last dot lands, with a small bump
+      var land = lastStart + FLY * 0.92;
+      repo.animate([{ color: 'rgba(0,0,0,0)' }, { color: 'rgba(0,0,0,0)' }], { duration: land });
+      repo.animate([{ transform: 'none' }, { transform: 'scale(1.06)', offset: 0.4 }, { transform: 'none' }],
+        { duration: 420, delay: land, easing: 'ease-out' });
     }
   }
 
