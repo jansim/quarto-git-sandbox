@@ -2095,6 +2095,16 @@
     host.classList.add('gs');
     host.innerHTML =
       '<div class="gs-head">' +
+        // The workspace tabs live in the title bar and open onto the dark
+        // pane below it: the terminal and the file editor share that pane,
+        // one at a time, like tabs in a code editor.
+        '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
+          '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
+            '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
+          '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+            '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+            '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+        '</div>' +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state" role="status"></span>' +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
@@ -2102,15 +2112,6 @@
       '</div>' +
       '<div class="gs-body">' +
         '<div class="gs-term-wrap">' +
-          // Window-style title bar: the terminal and the file editor share
-          // the dark pane, one at a time, like tabs in a code editor.
-          '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
-            '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
-              '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
-            '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
-              '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
-              '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
-          '</div>' +
           '<div class="gs-view" role="tabpanel" data-view="terminal">' +
             '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
             '<form class="gs-input-row" autocomplete="off">' +

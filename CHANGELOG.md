@@ -9,8 +9,9 @@
   to the previous one. Leaving the project is refused with a message saying
   why.
 - `ls` accepts a folder to list, e.g. `ls src`.
-- The terminal pane gets a window-style title bar with two tabs, **Terminal**
-  and **Editor**. The Editor tab is a file browser plus a text editor over
+- The exercise title bar now carries two tabs, **Terminal** and **Editor**,
+  that open onto the dark pane below; the title moves aside to make room
+  (and onto its own row above the tabs on narrow screens). The Editor tab is a file browser plus a text editor over
   the same working directory the terminal sees, so learners can edit a file
   properly instead of only through `echo "…" > file`.
 - The file browser lists every working-directory file with its git status

@@ -231,7 +231,7 @@ semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
 rejected with `(fetch first)`.
 
-**Editor:** the title bar above the terminal switches between the
+**Editor:** tabs in the exercise's title bar switch between the
 **Terminal** and an **Editor** tab. The editor lists the working directory
 (with `U`/`M`/`A` git status letters), opens any file, creates new ones with
 `+ New`, and saves with the Save button or Ctrl/Cmd+S. Edits stay unsaved

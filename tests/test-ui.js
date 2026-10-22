@@ -298,6 +298,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('title bar has Terminal and Editor tabs',
     host.querySelectorAll('.gs-titlebar .gs-wtab').length === 2 &&
     host.querySelector('.gs-titlebar').getAttribute('role') === 'tablist');
+  check('the tabs live in the exercise title bar, before the title',
+    host.querySelector('.gs-head > .gs-titlebar') !== null &&
+    host.querySelector('.gs-titlebar').nextElementSibling.classList.contains('gs-eyebrow'));
   check('terminal view shows by default', view() === 'terminal' &&
     pane('terminal').hidden === false && pane('editor').hidden === true);
   click(host.querySelector('.gs-wtab[data-view="editor"]'));
