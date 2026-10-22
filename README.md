@@ -251,7 +251,7 @@ tasks:
 | `c.graph.commits` | `[{ oid, short, message, parents, refs, lane, timestamp, author }]`, children first |
 | `c.graph.branches` | `[{ name, oid, isHead }]` |
 | `c.graph.head` | Current branch name |
-| `c.status` | `{ staged, modified, untracked, deleted, stagedDeleted }` |
+| `c.status` | `{ staged, modified, untracked, deleted, stagedDeleted, ignored }` |
 | `c.files` | Filenames in the working directory |
 | `c.history` | Every command typed, in order |
 | `c.remote` | `null`, or `{ url, branch, tracked, ahead, behind, graph }` once a remote exists |
@@ -262,7 +262,8 @@ Policy. `when:` does not, which is another reason to prefer it.
 
 ## What the sandbox supports
 
-**Git:** `init`, `status`, `add`, `rm`, `commit [-m]`, `log [--oneline]`,
+**Git:** `init`, `status [--ignored]`, `add [-f]`, `rm [--cached] [-r]`,
+`check-ignore`, `commit [-m]`, `log [--oneline]`,
 `diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
 `switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
@@ -271,6 +272,15 @@ Policy. `when:` does not, which is another reason to prefer it.
 **Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
 `touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
 `undo`, and the authoring-only `rewind <n>`
+
+**`.gitignore`:** works as in real git, in the top folder and in
+subfolders. Ignored files drop out of `git status` and `git add .`, naming
+one in `git add` is refused with git's own hint to use `-f`, and `git status
+--ignored` lists them. Files that were tracked before the rule was written
+stay tracked until `git rm --cached <file>`, which takes them out of git but
+leaves them on disk. In the panels an ignored file shows as a grey
+"ignored" chip, and with a dim `I` in the editor's file browser. There is no
+global `.gitignore`: the sandbox has no home folder to keep one in.
 
 **Globs:** an unquoted `*`, `?` or `[…]` expands to the matching file
 names before the command runs, as in bash, so `git add *.txt` stages the

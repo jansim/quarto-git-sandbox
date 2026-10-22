@@ -915,6 +915,73 @@ async function scenario(name, fn) {
       st.staged.map(x => x.file).join() === 'notes/m.txt', JSON.stringify(st.staged));
   });
 
+  /* ---------------- .gitignore ---------------- */
+  await scenario('gitignore', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo notes > notes.txt');
+    await run('echo pdf > cheatsheet.pdf');
+    await run('mkdir build');
+    await run('echo bin > build/out.pdf');
+    await run('echo "*.pdf" > .gitignore');
+    let r = await run('git status');
+    check('ignored files are not untracked', !/cheatsheet\.pdf|build/.test(r.out) && /\.gitignore/.test(r.out), r.out);
+    let st = await sb.statusModel();
+    check('statusModel lists ignored files', st.ignored.join() === 'build/out.pdf,cheatsheet.pdf', JSON.stringify(st.ignored));
+    r = await run('git status --ignored');
+    check('status --ignored shows them, folders collapsed', /Ignored files:\n\s+build\/\n\s+cheatsheet\.pdf/.test(r.out), r.out);
+    r = await run('git add .');
+    st = await sb.statusModel();
+    check('git add . skips ignored files', r.ok && st.staged.map(x => x.file).join() === '.gitignore,notes.txt', JSON.stringify(st.staged));
+    r = await run('git add cheatsheet.pdf');
+    check('naming an ignored file is refused', !r.ok && /ignored by one of your \.gitignore files:\ncheatsheet\.pdf/.test(r.out) && /-f/.test(r.out), r.out);
+    r = await run('git add *');
+    check('git add * stages the rest, then refuses the ignored file', !r.ok && /cheatsheet\.pdf/.test(r.out), r.out);
+    r = await run('git add "*.pdf"');
+    check('a glob that only reaches ignored files matches nothing', !r.ok && /did not match any files/.test(r.out), r.out);
+    r = await run('git check-ignore cheatsheet.pdf notes.txt');
+    check('check-ignore prints the ignored paths', r.ok && r.out === 'cheatsheet.pdf', r.out);
+    r = await run('git check-ignore notes.txt');
+    check('check-ignore fails when nothing is ignored', !r.ok && r.out === '', r.out);
+    r = await run('git add -f cheatsheet.pdf');
+    st = await sb.statusModel();
+    check('-f adds an ignored file', r.ok && st.staged.some(x => x.file === 'cheatsheet.pdf') &&
+      st.ignored.indexOf('cheatsheet.pdf') === -1, JSON.stringify(st));
+    await run('git commit -m "Track it all"');
+    await run('echo changed > cheatsheet.pdf');
+    st = await sb.statusModel();
+    check('a tracked file stays tracked though it matches .gitignore', st.modified.indexOf('cheatsheet.pdf') !== -1, JSON.stringify(st));
+    await run('git add cheatsheet.pdf');
+    await run('git commit -m "Change it"');
+
+    // "once it's in, it's too late": take it out of git, keep the file
+    r = await run('git rm --cached cheatsheet.pdf');
+    check('rm --cached says what it removed', r.ok && r.out === "rm 'cheatsheet.pdf'", r.out);
+    check('rm --cached keeps the file on disk', (await sb.readFile('cheatsheet.pdf')) === 'changed\n');
+    st = await sb.statusModel();
+    check('rm --cached stages the deletion; the file is now ignored', st.stagedDeleted.join() === 'cheatsheet.pdf' &&
+      st.ignored.indexOf('cheatsheet.pdf') !== -1 && st.untracked.indexOf('cheatsheet.pdf') === -1, JSON.stringify(st));
+    r = await run('git rm --cached nope.txt');
+    check('rm of an unknown path fails', !r.ok && /pathspec 'nope\.txt' did not match any files/.test(r.out), r.out);
+  });
+
+  /* ---------------- git rm ---------------- */
+  await scenario('git rm', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('mkdir docs');
+    await run('echo a > docs/a.md');
+    await run('echo b > docs/b.md');
+    await run('echo c > c.txt');
+    await run('git add .');
+    await run('git commit -m "Files"');
+    let r = await run('git rm docs');
+    check('a folder needs -r', !r.ok && /not removing 'docs' recursively without -r/.test(r.out), r.out);
+    r = await run('git rm -r docs c.txt');
+    check('rm -r removes every file, in order', r.ok && r.out === "rm 'c.txt'\nrm 'docs/a.md'\nrm 'docs/b.md'", r.out);
+    check('the emptied folder is gone too', (await sb.listTree()).every(e => e.path.indexOf('docs') !== 0), JSON.stringify(await sb.listTree()));
+    const st = await sb.statusModel();
+    check('the deletions are staged', st.stagedDeleted.join() === 'c.txt,docs/a.md,docs/b.md', JSON.stringify(st));
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));

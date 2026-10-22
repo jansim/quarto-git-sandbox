@@ -220,6 +220,29 @@ async function scenario(name, steps) {
     'git status'
   ]);
 
+  await scenario('gitignore', [
+    { cmd: 'git init', setup: true },
+    { cmd: 'echo n > notes.txt && echo p > cheatsheet.pdf && mkdir build && echo b > build/out.pdf', setup: true },
+    { cmd: 'echo "*.pdf" > .gitignore', setup: true },
+    'git status',
+    'git status --ignored',
+    'git add cheatsheet.pdf',
+    'git add notes.txt cheatsheet.pdf',
+    'git add "*.pdf"',
+    { cmd: 'git check-ignore cheatsheet.pdf notes.txt', exact: true },
+    { cmd: 'git check-ignore notes.txt', exact: true },
+    'git add -f cheatsheet.pdf',
+    'git add .',
+    { cmd: 'git commit -q -m "All of it"', setup: true },
+    { cmd: 'git rm --cached cheatsheet.pdf', exact: true },
+    'git status',
+    { cmd: 'git rm --cached nope.txt', exact: true },
+    { cmd: 'mkdir docs && echo a > docs/a.md && git add docs && git commit -q -m docs', setup: true },
+    { cmd: 'git rm docs', exact: true },
+    { cmd: 'git rm -r docs', exact: true },
+    'git status'
+  ]);
+
   console.log('\n===== real git comparison =====');
   console.log('passed: ' + pass + '   failed: ' + fail);
   if (fail) {

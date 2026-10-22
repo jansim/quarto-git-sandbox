@@ -413,11 +413,14 @@
     var clean = isRepo ? [] : (files || [])
       .filter(function (f) { return !accounted[f]; })
       .map(function (f) { return { f: f, k: 'not in git yet' }; });
+    // Files .gitignore matches are there on disk but invisible to git, so
+    // they show as quiet chips: proof that the ignore rule works.
+    var ignored = isRepo ? (status.ignored || []).map(function (f) { return { f: f, k: 'ignored', quiet: true }; }) : [];
 
     function col(title, note, items, kind) {
       var chips = items.length
         ? items.map(function (it) {
-            var quiet = it.k === 'not in git yet';
+            var quiet = it.k === 'not in git yet' || it.quiet;
             var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
               (it.conflict ? ' gs-chip-conflict' : '');
             return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
@@ -436,7 +439,7 @@
       : [];
 
     node.innerHTML =
-      col('Working directory', 'what you edit', needAdd.concat(clean), 'work') +
+      col('Working directory', 'what you edit', needAdd.concat(clean, ignored), 'work') +
       '<div class="gs-arrow"><span>git add</span><i class="gs-arrow-g">→</i></div>' +
       col('Staging area', 'what goes in next commit', staged, 'stage') +
       '<div class="gs-arrow"><span>git commit</span><i class="gs-arrow-g">→</i></div>' +
@@ -1173,6 +1176,7 @@
       if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
       if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
       if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
+      if ((status.ignored || []).indexOf(f) !== -1) return { k: 'I', label: 'ignored', cls: 'ignored', quiet: true };
       return null;
     }
 
@@ -1211,7 +1215,10 @@
     }
 
     function changedUnder(node) {
-      if (node.type === 'file') return !!fileMark(node.key, lastStatus);
+      if (node.type === 'file') {
+        var m = fileMark(node.key, lastStatus);
+        return !!m && !m.quiet;
+      }
       return Object.keys(node.children).some(function (k) { return changedUnder(node.children[k]); });
     }
 
@@ -1538,7 +1545,7 @@
       var graph = await sb.graphModel();
       var isRepo = await sb.isRepo();
       var status = isRepo ? await sb.statusModel()
-        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
+        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false, ignored: [] };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
       var chipsBefore = chipRects(stagesNode);
@@ -1927,7 +1934,7 @@
       return [
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
-        '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
+        '{y}git{/}    init, status, add [-f], rm [--cached], commit [-m], log [--oneline], diff,',
         '       branch [-d], checkout [-b] <branch|commit>, switch [-c|--detach],',
         '       merge [--abort], config,',
         '       remote add origin, push [-u], pull, fetch',

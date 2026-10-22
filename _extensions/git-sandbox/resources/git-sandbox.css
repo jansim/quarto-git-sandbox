@@ -507,6 +507,7 @@
 .gs-fb-mark-new { color: var(--gs-t-green); }
 .gs-fb-mark-mod { color: var(--gs-t-yellow); }
 .gs-fb-mark-conflict { color: var(--gs-t-red); }
+.gs-fb-mark-ignored { color: var(--gs-t-dim); font-weight: 400; }
 .gs-fb-changed { font-size: 8px; color: var(--gs-t-yellow); }
 
 /* "Show hidden files": a small switch pinned to the sidebar's foot */

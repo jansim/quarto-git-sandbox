@@ -935,7 +935,7 @@
 
     /* --------------------------- git status ------------------------ */
 
-    // returns { staged:[], modified:[], untracked:[], deleted:[], stagedDeleted:[] }
+    // returns { staged:[], modified:[], untracked:[], deleted:[], stagedDeleted:[], ignored:[] }
     // isomorphic-git statusMatrix rows are [filepath, HEAD, WORKDIR, STAGE] where
     //   HEAD:    0 = absent,               1 = present
     //   WORKDIR: 0 = absent,               1 = same as HEAD, 2 = different from HEAD
@@ -949,10 +949,18 @@
       var merge = await mergeState();
       var res = {
         staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [],
-        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge
+        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge,
+        ignored: []
       };
+      // statusMatrix lists every working file except those .gitignore
+      // matches (and does not track), so whatever it leaves out is ignored
+      var listed = {};
+      matrix.forEach(function (row) { listed[row[0]] = true; });
+      (await listFiles()).forEach(function (f) { if (!listed[f]) res.ignored.push(f); });
       var skip = {};
       res.conflicted.forEach(function (c) { skip[c.file] = true; });
+      // a file taken out of git (`git rm --cached`) but still on disk
+      var leftOnDisk = [];
       matrix.forEach(function (row) {
         var file = row[0], head = row[1], workdir = row[2], stage = row[3];
         if (skip[file]) return;
@@ -967,7 +975,7 @@
         }
 
         // file was in the last commit
-        if (stage === 0) { res.stagedDeleted.push(file); if (workdir !== 0) res.untracked.push(file); return; }
+        if (stage === 0) { res.stagedDeleted.push(file); if (workdir !== 0) leftOnDisk.push(file); return; }
         if (workdir === 0) { res.deleted.push(file); return; }
         if (stage === 1) { if (workdir === 2) res.modified.push(file); return; }
         // stage 2 or 3 => something is staged
@@ -976,15 +984,24 @@
           if (stage === 3) res.modified.push(file);        // staged one version, edited again
         }
       });
+      // statusMatrix still lists it because HEAD has it, so ask .gitignore
+      for (var i = 0; i < leftOnDisk.length; i++) {
+        if (await gitlib.isIgnored(opts({ filepath: leftOnDisk[i] }))) res.ignored.push(leftOnDisk[i]);
+        else res.untracked.push(leftOnDisk[i]);
+      }
+      res.ignored.sort();
       return res;
     }
 
-    // Untracked files as `git status` lists them: a folder holding nothing
-    // git knows about shows once, as `notes/`, instead of file by file.
-    async function untrackedShown(untracked) {
+    // Untracked (or ignored) files as `git status` lists them: a folder
+    // holding nothing else git knows about shows once, as `notes/`, instead
+    // of file by file. `others` are paths that keep a folder from
+    // collapsing on top of the tracked ones.
+    async function untrackedShown(untracked, others) {
       var known = (await gitlib.statusMatrix(opts()))
         .filter(function (row) { return row[1] !== 0 || row[3] !== 0; })
-        .map(function (row) { return row[0]; });
+        .map(function (row) { return row[0]; })
+        .concat(others || []);
       var shown = [];
       untracked.forEach(function (f) {
         var parts = f.split('/');
@@ -996,6 +1013,16 @@
         if (shown.indexOf(name) === -1) shown.push(name);
       });
       return shown.sort();
+    }
+
+    // `git rm` deletes a folder once its last file has gone, as git does
+    async function removeFileAndEmptyParents(p) {
+      try { await fs.promises.unlink(p); } catch (e) { return; }
+      var d = fs._dirname(p);
+      while (d !== dir && insideProject(d)) {
+        try { await fs.promises.rmdir(d); } catch (e) { return; }
+        d = fs._dirname(d);
+      }
     }
 
     /* ---------------------------- commits --------------------------- */
@@ -1141,6 +1168,10 @@
             lines.push('', 'Untracked files:');
             (await untrackedShown(st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
+          if (rest.indexOf('--ignored') !== -1 && st.ignored.length) {
+            lines.push('', 'Ignored files:');
+            (await untrackedShown(st.ignored, st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
+          }
           var anyStaged = st.staged.length || st.stagedDeleted.length;
           if (!anyStaged && !st.conflicted.length) {
             if (st.modified.length || st.deleted.length) {
@@ -1159,8 +1190,12 @@
         case 'add': {
           if (!rest.length) return { out: "Nothing specified, nothing added.\nhint: try 'git add .' or 'git add <file>'", ok: false };
           var added = [];
+          // statusMatrix leaves out files .gitignore matches; -f takes them too
+          var force = rest.indexOf('-f') !== -1 || rest.indexOf('--force') !== -1;
           var m = await gitlib.statusMatrix(opts());
-          var conflictedNow = (await statusModel()).conflicted.map(function (c) { return c.file; });
+          var st0 = await statusModel();
+          var conflictedNow = st0.conflicted.map(function (c) { return c.file; });
+          var ignoredNamed = [];
           for (var i = 0; i < rest.length; i++) {
             var spec = rest[i];
             if (spec === '--' || (spec.charAt(0) === '-' && spec !== '-A' && spec !== '--all')) continue;
@@ -1170,9 +1205,21 @@
             var hit = m.filter(function (row) { return match(row[0]); }).map(function (row) { return row[0]; });
             // a conflicted file the learner deleted: staging the deletion resolves it
             conflictedNow.forEach(function (c) { if (match(c) && hit.indexOf(c) === -1) hit.push(c); });
+            if (force) {
+              st0.ignored.forEach(function (f) {
+                if (match(f) && hit.indexOf(f) === -1) hit.push(f);
+              });
+            }
             if (!hit.length) {
               var exists = true;
               try { await fs.promises.stat(abs(spec)); } catch (e) { exists = false; }
+              // Naming an ignored file outright is refused (but the other
+              // paths still go in); a folder or glob that only reaches
+              // ignored files just matches nothing, as in real git.
+              if (exists && !hasGlob(spec) && await gitlib.isIgnored(opts({ filepath: rel(spec) }))) {
+                ignoredNamed.push(spec);
+                continue;
+              }
               if (exists) continue;    // an empty folder: nothing to add, no complaint
               return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
             }
@@ -1180,21 +1227,64 @@
               var gone = true;
               try { gone = !(await fs.promises.stat(dir + '/' + hit[j])).isFile(); } catch (e) {}
               if (gone) await gitlib.remove(opts({ filepath: hit[j] }));
-              else await gitlib.add(opts({ filepath: hit[j] }));
+              else await gitlib.add(opts({ filepath: hit[j], force: force }));
               added.push(hit[j]);
             }
           }
           await markResolved(added);
+          if (ignoredNamed.length) {
+            return {
+              out: 'The following paths are ignored by one of your .gitignore files:\n' +
+                ignoredNamed.join('\n') + '\n' +
+                '{y}hint: Use -f if you really want to add them.{/}',
+              ok: false
+            };
+          }
           return { out: '', ok: true, silentNote: added.length + ' path(s) staged' };
         }
 
         case 'rm': {
-          var target = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
-          if (!target) return { out: 'usage: git rm <file>', ok: false };
-          await gitlib.remove(opts({ filepath: rel(target) }));
-          try { await fs.promises.unlink(abs(target)); } catch (e) {}
-          await markResolved([rel(target)]);
-          return { out: "rm '" + rel(target) + "'", ok: true };
+          var cached = rest.indexOf('--cached') !== -1;
+          var recursive = rest.some(function (a) { return /^-[a-zA-Z]*r/.test(a) && a.charAt(1) !== '-'; });
+          var dashes = rest.indexOf('--');
+          var rmSpecs = rest.filter(function (a, n) { return (dashes !== -1 && n > dashes) || (a.charAt(0) !== '-'); });
+          if (!rmSpecs.length) return { out: 'usage: git rm [--cached] [-r] [--] <file>...', ok: false };
+          // only what git tracks can be removed: the index, plus files
+          // still in conflict
+          var inIndex = await gitlib.listFiles(opts());
+          (await mergeState() || { unresolved: [] }).unresolved.forEach(function (c) {
+            if (inIndex.indexOf(c.file) === -1) inIndex.push(c.file);
+          });
+          var doomed = [];
+          // check every path first: git removes nothing if one is wrong
+          for (var ri = 0; ri < rmSpecs.length; ri++) {
+            var rmMatch = pathspec(rmSpecs[ri]);
+            var rmHit = rmMatch ? inIndex.filter(rmMatch) : [];
+            if (!rmHit.length) return { out: "fatal: pathspec '" + rmSpecs[ri] + "' did not match any files", ok: false };
+            if (!recursive && !hasGlob(rmSpecs[ri]) && rmHit.some(function (f) { return f !== rel(rmSpecs[ri]); })) {
+              return { out: "fatal: not removing '" + rmSpecs[ri] + "' recursively without -r", ok: false };
+            }
+            rmHit.forEach(function (f) { if (doomed.indexOf(f) === -1) doomed.push(f); });
+          }
+          doomed.sort();
+          for (var rd = 0; rd < doomed.length; rd++) {
+            await gitlib.remove(opts({ filepath: doomed[rd] }));
+            // --cached takes the file out of git only; it stays on disk
+            if (!cached) await removeFileAndEmptyParents(dir + '/' + doomed[rd]);
+          }
+          await markResolved(doomed);
+          return { out: doomed.map(function (f) { return "rm '" + f + "'"; }).join('\n'), ok: true };
+        }
+
+        case 'check-ignore': {
+          var ciPaths = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (!ciPaths.length) return { out: 'fatal: no path specified', ok: false };
+          var ignoredOnes = [];
+          for (var ci = 0; ci < ciPaths.length; ci++) {
+            if (await gitlib.isIgnored(opts({ filepath: rel(ciPaths[ci]) }))) ignoredOnes.push(ciPaths[ci]);
+          }
+          // like git: prints the ignored ones, and fails if there were none
+          return { out: ignoredOnes.join('\n'), ok: ignoredOnes.length > 0 };
         }
 
         case 'commit': {
@@ -1669,6 +1759,7 @@
         'Supported git commands in this sandbox:',
         '  git init                      git status',
         '  git add <file> | .            git commit -m "message"',
+        '  git rm [--cached] <file>      git check-ignore <file>',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
         '  git checkout <commit>         git switch --detach <commit>',
@@ -3308,11 +3399,14 @@
     var clean = isRepo ? [] : (files || [])
       .filter(function (f) { return !accounted[f]; })
       .map(function (f) { return { f: f, k: 'not in git yet' }; });
+    // Files .gitignore matches are there on disk but invisible to git, so
+    // they show as quiet chips: proof that the ignore rule works.
+    var ignored = isRepo ? (status.ignored || []).map(function (f) { return { f: f, k: 'ignored', quiet: true }; }) : [];
 
     function col(title, note, items, kind) {
       var chips = items.length
         ? items.map(function (it) {
-            var quiet = it.k === 'not in git yet';
+            var quiet = it.k === 'not in git yet' || it.quiet;
             var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
               (it.conflict ? ' gs-chip-conflict' : '');
             return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
@@ -3331,7 +3425,7 @@
       : [];
 
     node.innerHTML =
-      col('Working directory', 'what you edit', needAdd.concat(clean), 'work') +
+      col('Working directory', 'what you edit', needAdd.concat(clean, ignored), 'work') +
       '<div class="gs-arrow"><span>git add</span><i class="gs-arrow-g">→</i></div>' +
       col('Staging area', 'what goes in next commit', staged, 'stage') +
       '<div class="gs-arrow"><span>git commit</span><i class="gs-arrow-g">→</i></div>' +
@@ -4068,6 +4162,7 @@
       if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
       if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
       if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
+      if ((status.ignored || []).indexOf(f) !== -1) return { k: 'I', label: 'ignored', cls: 'ignored', quiet: true };
       return null;
     }
 
@@ -4106,7 +4201,10 @@
     }
 
     function changedUnder(node) {
-      if (node.type === 'file') return !!fileMark(node.key, lastStatus);
+      if (node.type === 'file') {
+        var m = fileMark(node.key, lastStatus);
+        return !!m && !m.quiet;
+      }
       return Object.keys(node.children).some(function (k) { return changedUnder(node.children[k]); });
     }
 
@@ -4433,7 +4531,7 @@
       var graph = await sb.graphModel();
       var isRepo = await sb.isRepo();
       var status = isRepo ? await sb.statusModel()
-        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
+        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false, ignored: [] };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
       var chipsBefore = chipRects(stagesNode);
@@ -4822,7 +4920,7 @@
       return [
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
-        '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
+        '{y}git{/}    init, status, add [-f], rm [--cached], commit [-m], log [--oneline], diff,',
         '       branch [-d], checkout [-b] <branch|commit>, switch [-c|--detach],',
         '       merge [--abort], config,',
         '       remote add origin, push [-u], pull, fetch',
