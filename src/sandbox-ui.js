@@ -403,20 +403,21 @@
     var staged = status.staged.map(function (s) { return { f: s.file, k: s.kind }; })
       .concat(status.stagedDeleted.map(function (f) { return { f: f, k: 'deleted' }; }));
 
-    // Files with no git status still need to be visible: committed-and-clean
-    // files after init, and every file before it. Before `git init` they are
-    // just files — calling them "untracked" would use a git-status word while
-    // no git status exists yet — so they render as quiet grey chips either way.
+    // The working directory lists only what has changed since the last
+    // commit; committed-and-clean files would crowd the changes out. Before
+    // `git init` there is no git status at all, so every file shows, as a
+    // quiet grey chip: calling them "untracked" would use a git-status word
+    // while no git status exists yet.
     var accounted = {};
     needAdd.concat(staged).forEach(function (it) { accounted[it.f] = true; });
-    var clean = (files || [])
+    var clean = isRepo ? [] : (files || [])
       .filter(function (f) { return !accounted[f]; })
-      .map(function (f) { return { f: f, k: isRepo ? 'unchanged' : 'not in git yet' }; });
+      .map(function (f) { return { f: f, k: 'not in git yet' }; });
 
     function col(title, note, items, kind) {
       var chips = items.length
         ? items.map(function (it) {
-            var quiet = it.k === 'unchanged' || it.k === 'not in git yet';
+            var quiet = it.k === 'not in git yet';
             var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
               (it.conflict ? ' gs-chip-conflict' : '');
             return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
@@ -446,15 +447,22 @@
   // file can be in two columns at once (staged, then edited again).
   function chipRects(node) {
     var out = {};
-    var base = node.getBoundingClientRect();
     node.querySelectorAll('.gs-chip[data-file]').forEach(function (c) {
-      var r = c.getBoundingClientRect();
-      if (!r.width) return;
-      out[c.getAttribute('data-col') + ':' + c.getAttribute('data-file')] = {
-        el: c, x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height
-      };
+      var r = chipBox(node, c);
+      if (!r.w) return;
+      r.el = c;
+      out[c.getAttribute('data-col') + ':' + c.getAttribute('data-file')] = r;
     });
     return out;
+  }
+
+  // How much the page is scaled between `node`'s CSS pixels and the screen.
+  // reveal.js scales each slide to fit the window, so on a slide the
+  // on-screen rectangles are larger or smaller than the lengths the
+  // animations set; without this the chips fly off past their targets.
+  function layoutScale(node) {
+    var r = node.getBoundingClientRect();
+    return node.offsetWidth && r.width ? r.width / node.offsetWidth : 1;
   }
 
   // Show files travelling between the columns after a re-render, so
@@ -591,9 +599,11 @@
     return LANE_COLORS[(head ? head.lane : 0) % LANE_COLORS.length];
   }
 
+  // `el`'s box relative to `node`, in node's own (unscaled) CSS pixels.
   function chipBox(node, el) {
     var base = node.getBoundingClientRect(), r = el.getBoundingClientRect();
-    return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
+    var k = layoutScale(node);
+    return { x: (r.left - base.left) / k, y: (r.top - base.top) / k, w: r.width / k, h: r.height / k };
   }
 
   /* ------------------------------- mount ----------------------------- */
@@ -795,6 +805,10 @@
             '<div class="gs-tree-scroll"><svg class="gs-tree-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>' +
           '</div></div>'
         : '');
+
+    // a long title is cut short to fit the bar; the full one is on hover
+    var titleNode = host.querySelector('.gs-head > .gs-eyebrow');
+    titleNode.title = titleNode.textContent;
 
     var out = host.querySelector('.gs-out');
     var form = host.querySelector('.gs-input-row');
