@@ -30,7 +30,13 @@ This page is written for **authors**. Each section shows a working box,
 explains what the reader sees, and includes the exact block that produced
 it, ready to copy into your own lesson. For the full option and condition
 reference, see the
-[README](https://github.com/ryjohnson09/quarto-git-sandbox).
+[README](https://github.com/jansim/quarto-git-sandbox#readme). There is
+also a [reveal.js deck](example-revealjs.html) with boxes on its slides.
+
+::: {.callout-note appearance="simple"}
+The extension's source code, issue tracker and releases live at
+[github.com/jansim/quarto-git-sandbox](https://github.com/jansim/quarto-git-sandbox).
+:::
 
 ## Reading a git box
 
@@ -41,9 +47,9 @@ Before writing exercises, know what your learners are looking at.
 A git box
 is a stack. At the top, a **terminal**: the prompt shows the folder
 and, once a repository exists, the current branch. Learners type commands
-and press Enter; the **Try:** buttons under the input fill in a command so
-nobody is stuck guessing syntax; the up arrow recalls history, and `help`
-lists everything the sandbox supports.
+and press Enter; where the author gives `hints`, **Try:** buttons under the
+input fill in a command so nobody is stuck guessing syntax; the up arrow
+recalls history, and `help` lists everything the sandbox supports.
 
 Directly under the terminal sits **Tasks**, the task checklist you
 author. Tasks tick themselves when their condition becomes true (a
@@ -140,8 +146,8 @@ tasks:
 ## The smallest useful block
 
 You need very little. `title` labels the box, `intro` prints in the
-terminal, `hints` gives learners clickable commands, and `tasks` is the
-checklist. With no `seed`, the box starts as an empty, untracked folder:
+terminal, and `tasks` is the checklist. With no `seed`, the box starts as
+an empty, untracked folder:
 
 ````markdown
 ```git-sandbox
@@ -151,7 +157,6 @@ prompt: "~/scratch $"
 intro: |
   This box was authored in a few lines of YAML. It starts as an
   empty folder; nothing is tracked yet.
-hints: [git init, 'echo "hello" > notes.txt', git add notes.txt, 'git commit -m "First note"']
 tasks:
   - text: Turn the folder into a repository
     when: repo
@@ -167,7 +172,6 @@ prompt: "~/scratch $"
 intro: |
   This box was authored in a few lines of YAML. It starts as an
   empty folder; nothing is tracked yet.
-hints: [git init, 'echo "hello" > notes.txt', git add notes.txt, 'git commit -m "First note"']
 tasks:
   - text: Turn the folder into a repository
     when: repo
@@ -180,8 +184,11 @@ Three authoring notes that save time:
 - **`intro` is terminal output, not Markdown.** Use `{y}…{/}` for yellow,
   `{g}` green, `{r}` red, `{b}` blue, `{w}` bold. Backticks appear
   literally.
-- **Quoting in `hints`.** In a flow sequence, wrap any entry containing a
-  double quote in single quotes: `'git commit -m "First note"'`.
+- **`hints` are optional.** The tour at the top of this page uses them:
+  clickable buttons under the input that fill in a command. They help
+  beginners, and they give the game away, so the other boxes here leave
+  them out. In the flow sequence, wrap any entry containing a double quote
+  in single quotes: `'git commit -m "First note"'`.
 - **`prompt` is cosmetic but load-bearing.** The folder name it shows is
   also used in `git init` output and `pwd`, so pick something that fits
   your lesson's story. The current branch is appended automatically.
@@ -203,7 +210,6 @@ prompt: "~/demo-project $"
 intro: |
   Each task below shows the {y}when:{/} condition that checks it.
   Complete them in any order.
-hints: [git checkout -b docs, 'echo "## Setup" > SETUP.md', git add ., 'git commit -m "Describe the setup"', git checkout main, git merge docs]
 done-note: Every condition here is plain YAML. See the README for the full list.
 seed: |
   git init
@@ -300,7 +306,6 @@ prompt: "~/sales-analysis $"
 intro: |
   A colleague worked on the {y}forecast{/} branch while main moved on.
   Run {y}git log --oneline{/} on each branch, then merge and watch the graph.
-hints: [git branch, git log --oneline, 'echo "fixed" > hotfix.md', git add ., 'git commit -m "Fix the date parsing"', git merge forecast, git branch -d forecast]
 done-note: Two lanes, one merge commit. Seeds let every learner start from exactly this moment.
 seed: |
   git init
@@ -365,7 +370,6 @@ prompt: "~/sales-analysis $"
 intro: |
   You and a colleague both retitled {y}README.md{/}. Merge their
   {y}title{/} branch and see what git does with two edits to one line.
-hints: [git merge title, git status, cat README.md, 'echo "# Quarterly sales analysis 2026" > README.md', git add README.md, 'git commit -m "Merge the new title"']
 done-note: A conflict is git asking you to decide. Take the markers out, `git add`, commit.
 seed: |
   git init
@@ -413,7 +417,6 @@ intro: |
   While you were away, a colleague pushed a commit to the shared repository.
   Compare the {y}History{/} tab with the {y}Remote{/} tab: the remote is ahead.
   (Try {y}git push{/} first if you want to see what a rejected push looks like.)
-hints: [git fetch, git pull, git log --oneline, 'echo "sales <- read_csv(\"sales.csv\")" > load.R', git add ., 'git commit -m "Load the sales data"', git push]
 done-note: Pull, work, push, and the two graphs agree again. The rewind trick in the seed is what made the remote start out ahead.
 seed: |
   git init
@@ -481,7 +484,6 @@ tree-view: true
 intro: |
   Watch the {y}Commit tree{/} on the right as you go.
   Each command moves something there: commits, branch labels, or HEAD's {y}*{/}.
-hints: [git checkout -b report, 'echo "# Q3" > report.md', git add ., 'git commit -m "Start the report"', git checkout main, git merge report]
 done-note: That is the shape of every feature branch, drawn one commit at a time.
 seed: |
   git init
@@ -522,7 +524,6 @@ title: The same repository, later on
 intro: |
   This box shares its repository with "Branch, commit, merge" above.
   Anything you did there is already here.
-hints: [git log --oneline, git branch -d report]
 panel-tabs: [history]
 tasks:
   - text: Delete the merged `report` branch
@@ -561,13 +562,16 @@ panel-tabs: [history]
 
 ## Where to go from here
 
-- The [README](https://github.com/ryjohnson09/quarto-git-sandbox) has the
+- The [README](https://github.com/jansim/quarto-git-sandbox#readme) has the
   complete option table, the full `when:` condition reference, the `js:`
   escape hatch for conditions the language cannot express, and notes on
   CSP and page weight for LMS embedding.
 - `example-embed.html` in the repository shows the sandbox running in a
   plain HTML page with no Quarto at all, useful for platforms that accept
   an HTML block or iframe.
-- Install with `quarto add ryjohnson09/quarto-git-sandbox`, add
+- [`example-revealjs.qmd`](example-revealjs.html) puts boxes on the
+  slides of a reveal.js deck, coming back to one repository on a later
+  slide with `share`.
+- Install with `quarto add jansim/quarto-git-sandbox`, add
   `git-sandbox` to your document's `filters`, and start with the minimal
   block above.

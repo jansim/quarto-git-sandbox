@@ -10,6 +10,7 @@
 # 5. test-errors   bad options and bad conditions produce visible messages
 # 6. test-embed    the same widget on a plain HTML page, no Quarto
 # 7. test-rendered the extension's real rendered output, driven end to end
+# 8. test-revealjs  the same inside a reveal.js deck, views shared across slides
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -38,6 +39,12 @@ quarto render example.qmd --quiet || fail=1
 
 step "test-rendered (end to end, real output)"
 node tests/test-rendered.js example.html 2>/dev/null | tail -12 || fail=1
+
+step "rendering example-revealjs.qmd"
+quarto render example-revealjs.qmd --quiet || fail=1
+
+step "test-revealjs (boxes on slides)"
+node tests/test-revealjs.js example-revealjs.html 2>/dev/null | tail -8 || fail=1
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

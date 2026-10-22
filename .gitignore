@@ -4,6 +4,8 @@ _site/
 index.html
 example.html
 example_files/
+example-revealjs.html
+example-revealjs_files/
 tests/graph-preview.svg
 tests/*.html
 

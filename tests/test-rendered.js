@@ -139,7 +139,9 @@ function outText(win, hostId) {
     const type = typer(win, id);
     check('minimal starts with no repo',
       /No commits yet/.test(win.document.querySelector('#' + id + ' .gs-graph').textContent));
-    check('minimal has 4 hint buttons', win.document.querySelectorAll('#' + id + ' .gs-hint').length === 4);
+    check('minimal has no hint buttons', win.document.querySelectorAll('#' + id + ' .gs-hint').length === 0);
+    check('only the tour offers hints',
+      ALL_IDS.filter(b => win.document.querySelectorAll('#' + b + ' .gs-hint').length).join() === ID1);
     check('minimal remote panel hidden', win.document.querySelector('#' + id + ' .gs-remote').hidden === true);
 
     await type('git init');
@@ -344,6 +346,9 @@ function outText(win, hostId) {
 
   /* ---------------- page-level checks ---------------- */
   check('no page script errors', consoleErrors.length === 0, consoleErrors.join('\n     '));
+  check('the guide links to the repository',
+    !!win.document.querySelector('a[href="https://github.com/jansim/quarto-git-sandbox"]'));
+  check('the guide links to the reveal.js deck', !!win.document.querySelector('a[href="example-revealjs.html"]'));
   check('guide title present', /Building interactive Git exercises/.test(win.document.title), win.document.title);
   check('copyable block source is shown on the page',
     /```git-sandbox/.test(win.document.body.textContent));

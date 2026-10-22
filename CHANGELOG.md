@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The demo gains a second page, `example-revealjs.qmd`: a reveal.js deck
+  with a box on one slide and another view of the same repository on a
+  later slide. The demo site publishes it next to the guide.
+- Boxes now work inside reveal.js. The panels below the terminal were
+  `<section>` elements, which reveal.js took for slides of their own (and
+  then threw on); they are `<div>`s now. On a slide, the box also resets
+  the list and font styles reveal.js applies, and fills the rest of its
+  slide at a fixed height: the terminal takes up the slack and the views
+  below get a fixed, scrolling area, so `git add` or `git commit` no longer
+  make the box grow, shrink or jump.
+- The guide (`example.qmd`) links to the repository and the deck, and only
+  its first box keeps `hints`, so the rest no longer give the answers away.
 - New `share: <id>` option: a box can be another view of an earlier
   exercise's repository, with its own title, tasks, terminal and layout but
   the same files and history. Work in either view shows up in both, so a

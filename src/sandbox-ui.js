@@ -695,22 +695,23 @@
                 ' title="Hide these views">' + ICON_CHEVRON + '</button>'
               : '') +
           '</div>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="files">' +
+          // divs, not <section>s: reveal.js takes every section for a slide
+          '<div class="gs-panel" role="tabpanel" data-panel="files">' +
             '<div class="gs-stages"></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="changes" hidden>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="changes" hidden>' +
             '<div class="gs-diff"></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="history" hidden>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="history" hidden>' +
             '<div class="gs-graph-scroll"><svg class="gs-graph" xmlns="http://www.w3.org/2000/svg"></svg>' +
               '<div class="gs-cd-layer"></div></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
             '<div class="gs-remote" hidden>' +
               '<div class="gs-graph-scroll"><svg class="gs-remote-graph" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
               '<div class="gs-remote-sync"></div>' +
             '</div>' +
-          '</section>' +
+          '</div>' +
         '</div>' +
       '</div>' +
       (treeOn
@@ -955,6 +956,33 @@
       }
     }
     if (treeBtn) treeBtn.addEventListener('click', function () { setTreeShown(!treeShown); });
+
+    // On a reveal.js slide the box fills the rest of the slide at a fixed
+    // height (see .gs-fill in the CSS): the terminal takes up the slack and
+    // the views below get a fixed area that scrolls, so neither the box nor
+    // anything around it moves as the repository changes.
+    var slide = host.closest ? host.closest('.reveal .slides section') : null;
+    if (slide) {
+      host.classList.add('gs-fill');
+      var fillSlide = function () {
+        // offsets are only real while the slide is displayed
+        if (!host.offsetParent) return;
+        var deck = root.Reveal && root.Reveal.getConfig ? root.Reveal.getConfig() : null;
+        var slideH = deck && typeof deck.height === 'number' ? deck.height : 700;
+        var top = 0;
+        for (var n = host; n && n !== slide && slide.contains(n); n = n.offsetParent) top += n.offsetTop;
+        var h = Math.max(320, Math.floor(slideH - top - 8));
+        if (host.style.height !== h + 'px') host.style.height = h + 'px';
+      };
+      var hookDeck = function () {
+        if (!root.Reveal || !root.Reveal.on || hookDeck.done) return;
+        hookDeck.done = true;
+        ['ready', 'slidechanged', 'resize'].forEach(function (ev) { root.Reveal.on(ev, fillSlide); });
+      };
+      fillSlide();
+      hookDeck();
+      root.addEventListener('load', function () { hookDeck(); fillSlide(); });
+    }
 
     /* ------------------------ workspace views ------------------------- */
 

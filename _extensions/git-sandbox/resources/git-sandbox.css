@@ -1026,6 +1026,36 @@
   color: var(--gs-gray-body);
 }
 
+/* ------------------------------ reveal.js ----------------------------- */
+
+/* On a slide: reveal.js styles bare lists and sets a large base font size,
+   so put the box's own back, and keep it short enough for a 700px-tall
+   slide. */
+.reveal .gs { margin: 12px 0; font-size: 16px; line-height: 1.5; text-align: left; }
+.reveal .gs ul.gs-task-list, .reveal .gs ul.gs-fb-list { display: block; margin: 0; padding: 0; }
+.reveal .gs .gs-term-wrap { height: 230px; }
+.reveal .gs .gs-graph-scroll, .reveal .gs .gs-diff { max-height: 200px; }
+.reveal .gs .gs-tree-below .gs-tree-scroll { height: 200px; }
+
+/* The box fills the rest of its slide at a height set from JS, and its
+   parts share that height without ever changing it: the terminal stretches,
+   the task list scrolls past a third of the box, and the views below get
+   a fixed area whatever the panel holds, so `git add` and `git commit`
+   never make the box (or the slide) jump. */
+.reveal .gs.gs-fill {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+.reveal .gs-fill > .gs-body { display: flex; flex-direction: column; min-height: 0; }
+.reveal .gs-fill .gs-term-wrap { flex: 1 1 0; height: auto; min-height: 140px; }
+.reveal .gs-fill .gs-tasks { flex: 0 0 auto; max-height: 33%; overflow-y: auto; }
+.reveal .gs-fill .gs-viz { flex: 0 0 auto; padding-top: 10px; padding-bottom: 10px; }
+.reveal .gs-fill .gs-tabs { margin-bottom: 8px; }
+.reveal .gs-fill .gs-panel { height: 150px; overflow-y: auto; }
+.reveal .gs-fill .gs-graph-scroll, .reveal .gs-fill .gs-diff { max-height: none; overflow: visible; }
+
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
   .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
