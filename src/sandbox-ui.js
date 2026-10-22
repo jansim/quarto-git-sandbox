@@ -1083,21 +1083,11 @@
       badge.classList.toggle('gs-tab-badge-ok', text === '✓');
     }
 
-    // Which tab would a learner look at after this command? Mirrors the
-    // glance they'd make anyway; a manual tab click holds until the next
-    // command that has an opinion.
+    // Which tab would a learner look at after this command? Only a shell
+    // edit has an opinion (the file it touched); git commands leave the
+    // learner's chosen view alone.
     function tabFor(line) {
-      var t = line.trim().split(/\s+/);
-      var c = t[0], s = t[1] || '';
-      if (c === 'git') {
-        // a commit stays on File Status, where the staged files can be
-        // seen moving into the repository
-        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
-        if (s === 'diff') return 'changes';
-        if (/^(merge|log|branch|checkout|switch)$/.test(s)) return 'history';
-        if (/^(push|pull|fetch|remote)$/.test(s)) return 'remote';
-        return null;
-      }
+      var c = line.trim().split(/\s+/)[0];
       if (/^(echo|touch|rm|mkdir)$/.test(c)) return 'files';
       return null;
     }
