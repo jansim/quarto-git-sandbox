@@ -537,6 +537,38 @@
       await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
     }
 
+    // The "Your branch is ahead of 'origin/main' by 2 commits" lines of
+    // `git status`. Like real git it compares against the tracking ref,
+    // so a remote that moved on shows only after a fetch. Empty when the
+    // branch has no tracking ref.
+    async function trackingLines(branch) {
+      if (!remoteUrl || !branch) return [];
+      var tracked, local;
+      try {
+        tracked = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + branch }));
+        local = await gitlib.resolveRef(opts({ ref: branch }));
+      } catch (e) { return []; }
+      var name = "'origin/" + branch + "'";
+      var localSet = await reachableFrom(local, opts);
+      var trackedSet = await reachableFrom(tracked, opts);
+      var ahead = 0, behind = 0;
+      Object.keys(localSet).forEach(function (o) { if (!trackedSet[o]) ahead++; });
+      Object.keys(trackedSet).forEach(function (o) { if (!localSet[o]) behind++; });
+      var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
+      if (!ahead && !behind) return ['Your branch is up to date with ' + name + '.'];
+      if (ahead && behind) {
+        return ['Your branch and ' + name + ' have diverged,',
+          'and have ' + ahead + ' and ' + behind + ' different commits each, respectively.',
+          '  (use "git pull" if you want to integrate the remote branch with yours)'];
+      }
+      if (behind) {
+        return ['Your branch is behind ' + name + ' by ' + n(behind) + ', and can be fast-forwarded.',
+          '  (use "git pull" to update your local branch)'];
+      }
+      return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
+        '  (use "git push" to publish your local commits)'];
+    }
+
     /* ------------------------- merge conflicts ---------------------- */
 
     // A merge that stops on conflicts leaves MERGE_HEAD and MERGE_MSG in
@@ -1001,6 +1033,7 @@
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
           if (!anyCommit) lines.push('', 'No commits yet');
+          else lines = lines.concat(await trackingLines(await currentBranch()));
           if (st.conflicted.length) {
             lines.push('You have unmerged paths.',
               '  (fix conflicts and run "git commit")',

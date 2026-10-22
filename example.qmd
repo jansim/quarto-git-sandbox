@@ -75,8 +75,9 @@ command with an opinion.
   removals. It answers "what would I be committing right now?"
 - **History**: the graph. Branches get lanes, `HEAD` and branch
   pills mark the tips, merge commits are hollow circles.
-- **Remote**: appears only once a remote exists, with the origin's own
-  graph and an in-sync/ahead/behind summary.
+- **Remote**: appears only once a remote exists, with the local graph
+  and the origin's side by side; the tab's badge shows how far ahead or
+  behind you are, and `git status` spells it out.
 
 Try it: this box is seeded with two commits so every panel has something
 to show:
@@ -401,7 +402,7 @@ in the middle of it.
 `git remote add origin <url>` in a seed creates a **mock remote**, a
 second repository inside the page, and reveals the *Remote*
 tab: the local history and the remote's side by side, each as a compact
-commit graph, with an in-sync/ahead/behind summary.
+commit graph. `git status` says how the branch compares to `origin`.
 Push, fetch, and pull behave like the real thing, including rejected
 non-fast-forward pushes.
 

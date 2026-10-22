@@ -892,8 +892,6 @@
   .gs-split { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }
 
-.gs-remote-sync { font-size: 12px; color: var(--gs-gray-body); margin-top: 6px; }
-.gs-remote-sync code { font-family: var(--gs-mono); font-size: 11px; }
 .gs-empty-text { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray-body); }
 
 /* ----------------------------- commit tree ---------------------------- */

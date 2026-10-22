@@ -909,7 +909,6 @@
                   '<div class="gs-graph-scroll"><svg class="gs-remote-graph gs-graph-compact" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
                 '</div>' +
               '</div>' +
-              '<div class="gs-remote-sync"></div>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -947,7 +946,6 @@
     var remoteNameNode = host.querySelector('.gs-remote-name');
     // the remote shown on the right; with more than one, a dropdown picks it
     var remoteName = null;
-    var remoteSync = host.querySelector('.gs-remote-sync');
     var tasksNode = host.querySelector('.gs-tasks');
     var resetBtn = host.querySelector('.gs-reset');
     var undoBtn = host.querySelector('.gs-undo');
@@ -1687,11 +1685,9 @@
         lastRemoteGraph = remote.graph;
         lastRemoteGraphW = remoteSvg.clientWidth;
         lastLocalGraphW = localSvg.clientWidth;
-        remoteSync.innerHTML = remoteSyncText(remote);
       } else {
         remoteWrap.hidden = true;
         lastRemoteGraph = null;
-        remoteSync.innerHTML = '';
       }
 
       // Tab badges: enough signal that folded panels lose nothing you would
@@ -2046,19 +2042,6 @@
         }
       }
       if (names.length > 1) remoteNameNode.firstChild.value = r.name;
-    }
-
-    // one-line summary under the remote graph: how the learner's current
-    // branch compares to its counterpart on the remote
-    function remoteSyncText(r) {
-      if (!r.branch || !r.tracked) return '';
-      var b = esc(r.branch);
-      var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
-      if (!r.ahead && !r.behind) return '✓ in sync with your <code>' + b + '</code>';
-      var rb = esc(r.name || 'origin') + '/' + b;
-      if (r.ahead && r.behind) return '<code>' + rb + '</code> and your <code>' + b + '</code> have diverged — <code>git pull</code>, then <code>git push</code>';
-      if (r.behind) return '<code>' + rb + '</code> is ' + n(r.behind) + ' ahead of your <code>' + b + '</code> — <code>git pull</code> to update';
-      return 'your <code>' + b + '</code> is ' + n(r.ahead) + ' ahead — <code>git push</code> to publish';
     }
 
     function helpText() {
