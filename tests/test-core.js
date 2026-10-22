@@ -1227,6 +1227,89 @@ async function scenario(name, fn) {
     check('undo restores where switch - goes', r.ok && (await sb.currentBranch()) === 'feature', r.out);
   });
 
+  /* ---------------- clone ---------------- */
+  await scenario('clone', async ({ sb, run, check }) => {
+    let r = await run('git clone https://github.com/acme/sales.git');
+    check('nothing to clone without a remote', !r.ok && /repository 'https:\/\/github\.com\/acme\/sales\.git' does not exist/.test(r.out), r.out);
+
+    // how an author sets up a clone exercise: build the remote, then drop the local copy
+    for (const l of ['git init', 'git remote add origin https://github.com/acme/sales', 'echo a > a.txt', 'git add .',
+      'git commit -m one', 'git push -u origin main', 'git checkout -b dev', 'echo d > d.txt', 'git add .',
+      'git commit -m dev', 'git push -u origin dev', 'rm -rf .git *']) {
+      r = await run(l);
+      if (!r.ok) check('setup: ' + l, false, r.out);
+    }
+    check('the folder is empty, the remote is still there', !(await sb.isRepo()) && !(await sb.listTree()).length &&
+      !!(await sb.remoteModel()), JSON.stringify(await sb.listTree()));
+    r = await run('git push');
+    check('no repository, no push', !r.ok && /not a git repository/.test(r.out), r.out);
+
+    r = await run('git clone https://github.com/acme/other.git');
+    check('a different URL is refused, naming the right one', !r.ok && /does not exist/.test(r.out) &&
+      /https:\/\/github\.com\/acme\/sales/.test(r.out), r.out);
+    r = await run('git clone git@github.com:acme/sales.git my-folder');
+    check('cloning into another folder is explained', !r.ok && /project folder itself/.test(r.out), r.out);
+    await run('mkdir sub');
+    await run('cd sub');
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('clone runs at the top only', !r.ok && /cd ~/.test(r.out), r.out);
+    await run('cd ~');
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('a non-empty folder is refused', !r.ok && /not an empty directory/.test(r.out), r.out);
+    await run('rm -r sub');
+
+    r = await run('git clone git@github.com:acme/sales.git');
+    check('clone: SSH spelling of the same URL works', r.ok && r.out === "Cloning into '.'...\ndone.", r.out);
+    check('clone checks out the default branch', (await sb.currentBranch()) === 'main' && (await sb.listFiles()).join() === 'a.txt');
+    r = await run('git status');
+    check('clone sets the upstream', /up to date with 'origin\/main'/.test(r.out), r.out);
+    r = await run('git remote -v');
+    check('the remote is called origin, with the URL as typed', /^origin\tgit@github\.com:acme\/sales\.git \(fetch\)/.test(r.out), r.out);
+    const g = await sb.graphModel();
+    check('graph has origin/main and origin/dev but no origin/HEAD pill',
+      g.commits.some(c => c.refs.some(x => x.name === 'origin/dev')) && !g.commits.some(c => c.refs.some(x => x.name === 'origin/HEAD')),
+      JSON.stringify(g.commits.map(c => c.refs)));
+    r = await run('git log --oneline');
+    check('log decorates origin/HEAD', /\(HEAD -> main, origin\/main, origin\/HEAD\)/.test(r.out), r.out);
+    r = await run('git switch dev');
+    check('other branches come from origin', r.ok && /set up to track 'origin\/dev'/.test(r.out), r.out);
+    await run('echo more >> d.txt');
+    await run('git commit -am more');
+    r = await run('git push');
+    check('push to the cloned remote', r.ok && /^To git@github\.com:acme\/sales\.git/.test(r.out), r.out);
+
+    r = await run('git remote remove origin');
+    check('remote remove', r.ok && !(await run('git remote')).out && !(await run('git push')).ok);
+    r = await run('git remote add origin https://github.com/acme/sales');
+    check('remote add links the same remote again', r.ok && (await run('git fetch')).ok);
+    r = await run('git remote add upstream https://x');
+    check('only origin is supported', !r.ok && /must be called origin/.test(r.out), r.out);
+  });
+
+  await scenario('clone an empty remote', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('git remote add origin https://example.com/empty.git');
+    await run('rm -rf .git');
+    const r = await run('git clone https://example.com/empty.git');
+    check('empty remote warns', r.ok && /cloned an empty repository/.test(r.out) && await sb.isRepo(), r.out);
+  });
+
+  await scenario('shell rm', async ({ sb, run, check }) => {
+    await run('mkdir d');
+    await run('echo x > d/x.txt');
+    let r = await run('rm d');
+    check('a folder needs -r', !r.ok && r.out === "rm: cannot remove 'd': Is a directory", r.out);
+    r = await run('rm nope.txt');
+    check('missing file', !r.ok && r.out === "rm: cannot remove 'nope.txt': No such file or directory", r.out);
+    check('-f is quiet about missing files', (await run('rm -f nope.txt')).ok);
+    r = await run('rm -rf .');
+    check('the project folder itself is off limits', !r.ok && /refusing/.test(r.out), r.out);
+    r = await run('rm -rf /origin');
+    check('outside the project is off limits', !r.ok && /refusing/.test(r.out), r.out);
+    r = await run('rm -r d');
+    check('rm -r removes a folder', r.ok && !(await sb.listTree()).length);
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));

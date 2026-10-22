@@ -454,6 +454,10 @@
     // created by `git remote add origin <url>`. Push/pull/fetch move objects
     // and refs between it and the local repo — nothing leaves the page.
     var remoteGitdir = '/origin';
+    // The mock remote's URL once it exists, "on GitHub". Whether the local
+    // repository knows it is a separate matter, kept where git keeps it:
+    // remote.origin.url in .git/config (see originUrl). The two differ
+    // before a clone, or after the learner deletes .git.
     var remoteUrl = null;
     // where HEAD was before the last checkout or switch (a branch name or
     // a commit), for `git switch -`
@@ -765,6 +769,21 @@
       return seen;
     }
 
+    // remote.origin.url, or null when this repository has no origin
+    async function originUrl() {
+      if (!(await isRepo())) return null;
+      try { return (await gitlib.getConfig(opts({ path: 'remote.origin.url' }))) || null; }
+      catch (e) { return null; }
+    }
+
+    // One spelling of a URL for comparing: `git@github.com:a/b.git`,
+    // `https://github.com/a/b` and `https://github.com/a/b.git/` all agree.
+    function urlKey(u) {
+      return String(u).trim().toLowerCase()
+        .replace(/^[a-z+]+:\/\//, '').replace(/^[^@\/]+@/, '').replace(/^([^\/:]+):/, '$1/')
+        .replace(/\/+$/, '').replace(/\.git$/, '');
+    }
+
     // origin/x (or remotes/origin/x, refs/remotes/origin/x) -> x, else null
     function trackingName(spec) {
       var m = /^(?:refs\/)?(?:remotes\/)?origin\/(.+)$/.exec(spec || '');
@@ -776,13 +795,15 @@
       catch (e) { return null; }
     }
 
-    // the branches `git fetch` has recorded from origin, sorted
+    // the branches `git fetch` has recorded from origin, sorted; not
+    // origin/HEAD, which only points at one of them
     async function trackingNames() {
       var out = [];
       async function walk(sub) {
         var names = [];
         try { names = await fs.promises.readdir(dir + '/.git/refs/remotes/origin' + sub); } catch (e) { return; }
         for (var i = 0; i < names.length; i++) {
+          if (!sub && names[i] === 'HEAD') continue;
           var p = dir + '/.git/refs/remotes/origin' + sub + '/' + names[i];
           if ((await fs.promises.stat(p)).isDirectory()) await walk(sub + '/' + names[i]);
           else out.push((sub + '/' + names[i]).slice(1));
@@ -790,6 +811,16 @@
       }
       await walk('');
       return out.sort();
+    }
+
+    // The branch origin/HEAD points at (the remote's default branch, which
+    // clone records), or null
+    async function originHead() {
+      try {
+        var t = await fs.promises.readFile(dir + '/.git/refs/remotes/origin/HEAD', 'utf8');
+        var m = /^ref: refs\/remotes\/origin\/(.+)$/.exec(t.trim());
+        return m ? m[1] : null;
+      } catch (e) { return null; }
     }
 
     // A branch's upstream lives in .git/config, as in git, so it survives
@@ -1093,8 +1124,9 @@
 
       // remote-tracking refs (origin/*) appear as grey pills, like real git log
       if (remoteUrl) {
-        var tracked = [];
-        try { tracked = await fs.promises.readdir(dir + '/.git/refs/remotes/origin'); } catch (e) {}
+        // origin/HEAD (set by clone) is left out: a pill saying where the
+        // remote's default branch is would only crowd the graph
+        var tracked = await trackingNames();
         for (var t = 0; t < tracked.length; t++) {
           try {
             var toid = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + tracked[t] }));
@@ -1451,7 +1483,7 @@
       }
       if (sub === 'help' && rest[0] && HELP[rest[0]]) return { out: HELP[rest[0]].join('\n'), ok: true };
 
-      if (sub !== 'init' && sub !== 'help' && sub !== 'config' && !(await isRepo())) {
+      if (sub !== 'init' && sub !== 'clone' && sub !== 'help' && sub !== 'config' && !(await isRepo())) {
         return { out: 'fatal: not a git repository (or any of the parent directories): .git\nHint: run `git init` first.', ok: false };
       }
 
@@ -1467,6 +1499,8 @@
             else if (rest[ib].indexOf('--initial-branch=') === 0) initial = rest[ib].slice(17);
           }
           await gitlib.init(opts({ defaultBranch: initial }));
+          detachPoint = null;
+          prevHead = null;
           repoReady = true;
           return { out: 'Initialized empty Git repository in ' + displayDir + '/.git/', ok: true };
         }
@@ -1748,6 +1782,9 @@
           g.commits.forEach(function (c) { if (c.refs.length) refsByOid[c.oid] = c.refs; });
           // a detached HEAD points at a commit, not a branch: `(HEAD, main)`
           if (g.detached) refsByOid[g.headOid] = [{ name: 'HEAD' }].concat(refsByOid[g.headOid] || []);
+          var remoteHead = await originHead();
+          var rhOid = remoteHead ? await trackingOid(remoteHead) : null;
+          if (rhOid) refsByOid[rhOid] = (refsByOid[rhOid] || []).concat([{ name: 'origin/HEAD' }]);
           var outLines = [];
           commits.forEach(function (c) {
             var decor = refsByOid[c.oid]
@@ -1831,6 +1868,8 @@
             var listed = listRemote ? [] : all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
             if (!listRemote && !cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
             if (listAll || listRemote) {
+              var oh = await originHead();
+              if (oh) listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/HEAD{/} -> origin/' + oh);
               (await trackingNames()).forEach(function (t) {
                 listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/' + t + '{/}');
               });
@@ -2047,23 +2086,79 @@
         }
 
         case 'remote': {
+          var linked = await originUrl();
           if (rest[0] === 'add') {
-            if (rest[1] !== 'origin' || !rest[2]) return { out: 'usage: git remote add origin <url>', ok: false };
-            if (remoteUrl) return { out: 'error: remote origin already exists.', ok: false };
-            await gitlib.init({ fs: fs, gitdir: remoteGitdir, bare: true, defaultBranch: defaultBranch });
-            remoteUrl = rest[2];
+            if (!rest[1] || !rest[2]) return { out: 'usage: git remote add <name> <url>', ok: false };
+            if (rest[1] !== 'origin') {
+              return { out: 'This sandbox has a single remote, and it must be called origin:\n' +
+                '  git remote add origin ' + rest[2], ok: false };
+            }
+            if (linked) return { out: 'error: remote origin already exists.', ok: false };
+            // the first `remote add` creates the mock remote; after that
+            // (say, in a fresh `git init`) it only links to it again
+            if (!remoteUrl) {
+              await gitlib.init({ fs: fs, gitdir: remoteGitdir, bare: true, defaultBranch: defaultBranch });
+              remoteUrl = rest[2];
+            }
+            await gitlib.addRemote(opts({ remote: 'origin', url: rest[2] }));
             return { out: '', ok: true };
           }
-          if (!rest.length) return { out: remoteUrl ? 'origin' : '', ok: true };
-          if (rest[0] === '-v') {
-            if (!remoteUrl) return { out: '', ok: true };
-            return { out: 'origin\t' + remoteUrl + ' (fetch)\norigin\t' + remoteUrl + ' (push)', ok: true };
+          if (rest[0] === 'remove' || rest[0] === 'rm') {
+            if (rest[1] !== 'origin' || !linked) return { out: "error: No such remote: '" + (rest[1] || '') + "'", ok: false };
+            await gitlib.deleteRemote(opts({ remote: 'origin' }));
+            await fs.promises.rm(dir + '/.git/refs/remotes/origin', { recursive: true, force: true });
+            return { out: '', ok: true };
           }
-          return { out: 'usage: git remote [-v] | git remote add origin <url>', ok: false };
+          if (!rest.length) return { out: linked ? 'origin' : '', ok: true };
+          if (rest[0] === '-v') {
+            if (!linked) return { out: '', ok: true };
+            return { out: 'origin\t' + linked + ' (fetch)\norigin\t' + linked + ' (push)', ok: true };
+          }
+          return { out: 'usage: git remote [-v] | git remote add origin <url> | git remote remove origin', ok: false };
+        }
+
+        case 'clone': {
+          var cargs = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          var curl = cargs[0];
+          if (!curl) return { out: 'fatal: You must specify a repository to clone.\n\n' + HELP.clone.join('\n'), ok: false };
+          if (cargs[1] && cargs[1] !== '.') {
+            return { out: 'This sandbox keeps the repository in the project folder itself,\n' +
+              'so `git clone <url>` clones into it, as `git clone <url> .` would.', ok: false };
+          }
+          if (cwd !== dir) {
+            return { out: 'This sandbox keeps the repository at the top of the project.\nRun `cd ~` first, then `git clone`.', ok: false };
+          }
+          if (!remoteUrl || urlKey(curl) !== urlKey(remoteUrl)) {
+            return { out: "fatal: repository '" + curl + "' does not exist" +
+              (remoteUrl ? "\nhint: this exercise's remote is " + remoteUrl : ''), ok: false };
+          }
+          if ((await isRepo()) || (await fs.promises.readdir(dir)).length) {
+            return { out: "fatal: destination path '.' already exists and is not an empty directory.", ok: false };
+          }
+          var rbranches = await listRemoteBranchNames();
+          var rhead = null;
+          try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+          if (rbranches.indexOf(rhead) === -1) rhead = rbranches[0] || rhead || defaultBranch;
+          await gitlib.init(opts({ defaultBranch: rhead }));
+          await gitlib.addRemote(opts({ remote: 'origin', url: curl }));
+          detachPoint = null;
+          prevHead = null;
+          if (!rbranches.length) {
+            return { out: "Cloning into '.'...\nwarning: You appear to have cloned an empty repository.", ok: true };
+          }
+          await copyObjects(remoteGitdir, dir + '/.git');
+          for (var cb = 0; cb < rbranches.length; cb++) await setTrackingRef(rbranches[cb], await remoteBranchOid(rbranches[cb]));
+          // like git: one local branch, the remote's default, tracking it
+          await gitlib.writeRef(opts({ ref: 'refs/heads/' + rhead, value: await remoteBranchOid(rhead) }));
+          await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/HEAD', value: 'refs/remotes/origin/' + rhead, symbolic: true }));
+          await setUpstream(rhead, rhead);
+          await gitlib.checkout(opts({ ref: rhead }));
+          return { out: "Cloning into '.'...\ndone.", ok: true };
         }
 
         case 'push': {
-          if (!remoteUrl) return { out: 'fatal: No configured push destination.\nAdd a remote first: git remote add origin <url>', ok: false };
+          var pushUrl = await originUrl();
+          if (!pushUrl) return { out: 'fatal: No configured push destination.\nAdd a remote first: git remote add origin <url>', ok: false };
           var setUp = rest.indexOf('-u') !== -1 || rest.indexOf('--set-upstream') !== -1;
           var words = rest.filter(function (a) { return a.charAt(0) !== '-'; });
           if (words[0] && words[0] !== 'origin') return { out: "fatal: '" + words[0] + "' does not appear to be a git repository", ok: false };
@@ -2092,7 +2187,7 @@
             var pushedSet = await reachableFrom(localOid, opts);
             if (!pushedSet[remoteOid]) {
               return {
-                out: 'To ' + remoteUrl + '\n' +
+                out: 'To ' + pushUrl + '\n' +
                      ' {r}! [rejected]{/}        ' + pbr + ' -> ' + pbr + ' (fetch first)\n' +
                      'hint: Updates were rejected because the remote contains work that you do\n' +
                      'hint: not have locally. Pull the remote changes ({y}git pull{/}) before pushing again.',
@@ -2104,7 +2199,7 @@
           await fs.promises.mkdir(remoteGitdir + '/refs/heads', { recursive: true });
           await fs.promises.writeFile(remoteGitdir + '/refs/heads/' + pbr, localOid + '\n');
           await setTrackingRef(pbr, localOid);
-          var pushOut = ['To ' + remoteUrl];
+          var pushOut = ['To ' + pushUrl];
           pushOut.push(remoteOid
             ? '   ' + remoteOid.slice(0, 7) + '..' + localOid.slice(0, 7) + '  ' + pbr + ' -> ' + pbr
             : ' * [new branch]      ' + pbr + ' -> ' + pbr);
@@ -2113,7 +2208,8 @@
         }
 
         case 'fetch': {
-          if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var fetchUrl = await originUrl();
+          if (!fetchUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
           var rnames = await listRemoteBranchNames();
           await copyObjects(remoteGitdir, dir + '/.git');
           var updated = [];
@@ -2128,11 +2224,12 @@
               : ' * [new branch]      ' + rnames[fi] + '       -> origin/' + rnames[fi]);
           }
           if (!updated.length) return { out: '', ok: true };
-          return { out: ['From ' + remoteUrl].concat(updated).join('\n'), ok: true };
+          return { out: ['From ' + fetchUrl].concat(updated).join('\n'), ok: true };
         }
 
         case 'pull': {
-          if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var pullUrl = await originUrl();
+          if (!pullUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
           if (rest.indexOf('--rebase') !== -1 || rest.indexOf('-r') !== -1) {
             return { out: 'This sandbox has no rebase, so `git pull` always merges.\nRun `git pull` without --rebase.', ok: false };
           }
@@ -2177,7 +2274,7 @@
           var pres;
           try {
             pres = await mergeInto(lbr, 'refs/remotes/origin/' + fromBranch, 'origin/' + fromBranch,
-              "Merge branch '" + fromBranch + "' of " + remoteUrl);
+              "Merge branch '" + fromBranch + "' of " + pullUrl);
           } catch (e) {
             return { out: prefix2 + 'fatal: ' + e.message, ok: false };
           }
@@ -2454,6 +2551,7 @@
         '  git switch [-c] <branch>      git merge <branch> | --abort',
         '  git remote add origin <url>   git push [-u origin <branch>]',
         '  git fetch                     git pull',
+        '  git clone <url>',
         '  git config user.name "..."'
       ].join('\n');
     }
@@ -2520,13 +2618,23 @@
           return { out: '', ok: true, silentNote: 'touched ' + args.join(' ') };
         }
         case 'rm': {
+          var rmFlags = args.filter(function (a) { return /^-[a-zA-Z]+$/.test(a); }).join('');
+          var rmRecursive = /[rR]/.test(rmFlags), rmForce = /f/.test(rmFlags);
           var files = args.filter(function (a) { return a.charAt(0) !== '-'; });
-          if (!files.length) return { out: 'usage: rm <file>', ok: false };
+          if (!files.length) return rmForce ? { out: '', ok: true } : { out: 'usage: rm [-rf] <file>...', ok: false };
+          var rmErrs = [];
           for (var r = 0; r < files.length; r++) {
-            try { await fs.promises.unlink(abs(files[r])); }
-            catch (e) { return { out: 'rm: ' + files[r] + ': No such file or directory', ok: false }; }
+            var rp = abs(files[r]);
+            // the project folder itself, or anything outside it (where the
+            // mock remote lives), is off limits
+            if (rp === dir || !insideProject(rp)) { rmErrs.push("rm: refusing to remove '" + files[r] + "'"); continue; }
+            var rst = null;
+            try { rst = await fs.promises.stat(rp); } catch (e) {}
+            if (!rst) { if (!rmForce) rmErrs.push("rm: cannot remove '" + files[r] + "': No such file or directory"); continue; }
+            if (rst.isDirectory() && !rmRecursive) { rmErrs.push("rm: cannot remove '" + files[r] + "': Is a directory"); continue; }
+            await fs.promises.rm(rp, { recursive: true });
           }
-          return { out: '', ok: true };
+          return { out: rmErrs.join('\n'), ok: !rmErrs.length };
         }
         case 'mkdir': {
           if (!args.length) return { out: 'usage: mkdir <dir>', ok: false };
@@ -4670,7 +4778,7 @@
       if (c === 'git') {
         // a commit stays on File Status, where the staged files can be
         // seen moving into the repository
-        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
+        if (/^(init|clone|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
         if (s === 'diff') return 'changes';
         // unstaging is about files; moving the branch back is about history
         if (s === 'reset') return /\s--(soft|hard)\b|\sHEAD[~^]/.test(line) ? 'history' : 'files';
@@ -5637,8 +5745,8 @@
         '       branch [-d] [-a], checkout [-b] <branch|commit>, checkout --track,',
         '       switch [-c|--detach] <branch>, switch -,',
         '       merge [--abort], config [--global],',
-        '       remote add origin, push [-u], pull [origin <branch>], fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '       remote add origin, clone, push [-u], pull [origin <branch>], fetch',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm [-r],',
         '       mkdir, cd, pwd',
         '       any command > file (or >> file) writes its output to a file',
         '{y}other{/}  help, clear, reset, undo',

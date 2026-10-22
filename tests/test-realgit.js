@@ -380,6 +380,31 @@ async function scenario(name, steps) {
     { cmd: 'git pull upstream main', exact: true }
   ]);
 
+  await scenario('clone', [
+    {
+      cmd: 'cd .. && git clone -q $REMOTE seed 2>/dev/null; cd seed && echo a > a.txt && git add . && git commit -q -m one && ' +
+        'git checkout -q -b feature && echo f > f.txt && git add . && git commit -q -m feat && git push -q -u origin main feature',
+      // the sandbox's remote starts from a local repository, which then goes
+      sandbox: 'git init && git remote add origin $REMOTE && echo a > a.txt && git add . && git commit -q -m one && ' +
+        'git push -q -u origin main && git checkout -q -b feature && echo f > f.txt && git add . && git commit -q -m feat && ' +
+        'git push -q -u origin feature && rm -rf .git a.txt f.txt',
+      setup: true
+    },
+    { cmd: 'git status', ignore: [SANDBOX_HINT] },
+    { cmd: 'git clone $REMOTE .', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git branch -a', exact: true },
+    { cmd: 'git log --oneline', exact: true },
+    { cmd: 'git remote -v', exact: true },
+    { cmd: 'git switch feature', exact: true },
+    { cmd: 'git clone $REMOTE .', exact: true },
+    { cmd: 'rm nope.txt', exact: true },
+    { cmd: 'mkdir d && echo x > d/x.txt', setup: true },
+    { cmd: 'rm d', exact: true },
+    { cmd: 'rm -r d', exact: true },
+    { cmd: 'rm -f nope.txt', exact: true }
+  ]);
+
   console.log('\n===== real git comparison =====');
   console.log('passed: ' + pass + '   failed: ' + fail);
   if (fail) {

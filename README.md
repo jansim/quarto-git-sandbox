@@ -155,6 +155,37 @@ seed: |
 Pushing when the remote is ahead is rejected with git's real `(fetch first)`
 message, so the push → rejected → pull → push loop can be taught honestly.
 
+### Seeding a clone exercise
+
+To have learners start with `git clone`, build the remote in the seed as
+above, then delete the local copy with `rm -rf .git *`. The remote stays
+(it is "on GitHub"), the project folder is empty, and the learner's
+`git clone <url>` brings it back with `origin`, the remote-tracking
+branches and an upstream for the default branch, as real git does. Any
+spelling of the remote's URL works (`git@github.com:acme/sales.git` for
+`https://github.com/acme/sales`); a different URL is refused with a hint
+naming the right one.
+
+```yaml
+seed: |
+  git init
+  git remote add origin https://github.com/acme/sales-analysis
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  git push -u origin main
+  rm -rf .git *
+tasks:
+  - text: Clone the project with `git clone https://github.com/acme/sales-analysis`
+    when: repo
+```
+
+Since the repository always lives in the project folder, `git clone <url>`
+clones into it, as `git clone <url> .` would, and prints `Cloning into
+'.'...`. The `remote` condition is true from the start in such an exercise,
+because the remote exists before the clone; use `repo` to check for the
+clone itself.
+
 ### The commit tree
 
 The commit tree is a pane down the right of the box that draws the history
@@ -270,11 +301,12 @@ Policy. `when:` does not, which is another reason to prefer it.
 [<start>]`, `checkout --track origin/<branch>`, `checkout <commit>`,
 `switch [-c] <branch>`, `switch --detach <commit>`, `switch -`,
 `merge <branch | origin/branch | commit>`, `remote [-v] | remote add origin
-<url>`, `push [-u origin <branch>]`, `fetch`, `pull [origin <branch>]`, `config [--global] <key> [<value>]` (also `--list` and
+<url> | remove origin`, `clone <url>`, `push [-u origin <branch>]`, `fetch`,
+`pull [origin <branch>]`, `config [--global] <key> [<value>]` (also `--list` and
 `--unset`), and `-h` on any of them, as in `git commit -h`
 
 **Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
-`touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
+`touch`, `rm [-rf]`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
 `undo`, and the authoring-only `rewind <n>`
 
 **`.gitignore`:** works as in real git, in the top folder and in
@@ -349,8 +381,8 @@ exercise to its seeded state and clears the undo history.
 
 ## What it does not do, on purpose
 
-- **No network remotes.** The remote is a mock that lives in the page: there
-  is no `clone`, and nothing talks to a real server. isomorphic-git can talk
+- **No network remotes.** The remote is a mock that lives in the page:
+  `git clone` copies that mock, and nothing talks to a real server. isomorphic-git can talk
   to GitHub through a CORS proxy, which is a real but separate piece of work.
 - **No three-way merge tool.** A conflicting `merge` or `pull` behaves as in
   real git: it writes `<<<<<<<` / `=======` / `>>>>>>>` markers into the

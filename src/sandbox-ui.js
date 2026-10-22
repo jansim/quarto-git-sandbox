@@ -974,7 +974,7 @@
       if (c === 'git') {
         // a commit stays on File Status, where the staged files can be
         // seen moving into the repository
-        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
+        if (/^(init|clone|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
         if (s === 'diff') return 'changes';
         // unstaging is about files; moving the branch back is about history
         if (s === 'reset') return /\s--(soft|hard)\b|\sHEAD[~^]/.test(line) ? 'history' : 'files';
@@ -1941,8 +1941,8 @@
         '       branch [-d] [-a], checkout [-b] <branch|commit>, checkout --track,',
         '       switch [-c|--detach] <branch>, switch -,',
         '       merge [--abort], config [--global],',
-        '       remote add origin, push [-u], pull [origin <branch>], fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '       remote add origin, clone, push [-u], pull [origin <branch>], fetch',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm [-r],',
         '       mkdir, cd, pwd',
         '       any command > file (or >> file) writes its output to a file',
         '{y}other{/}  help, clear, reset, undo',
