@@ -1152,9 +1152,12 @@
 
     // What the mock remote looks like "on GitHub": its own commit graph plus
     // how the learner's current branch compares to it. Null until
-    // `git remote add origin <url>` has run.
-    async function remoteModel() {
+    // `git remote add origin <url>` has run. `remotes` lists every remote's
+    // name; there is only ever `origin` for now, so `name` picks it.
+    async function remoteModel(name) {
       if (!remoteUrl) return null;
+      var remotes = ['origin'];
+      name = remotes.indexOf(name) !== -1 ? name : remotes[0];
       var names = await listRemoteBranchNames();
       var refEntries = [];
       for (var i = 0; i < names.length; i++) {
@@ -1177,6 +1180,7 @@
         }
       }
       return {
+        name: name, remotes: remotes,
         url: remoteUrl,
         graph: { commits: commits, branches: names, head: null, detached: false },
         branch: branch, tracked: tracked, ahead: ahead, behind: behind

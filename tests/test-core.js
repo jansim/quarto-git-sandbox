@@ -475,12 +475,16 @@ async function scenario(name, fn) {
     check('remoteModel exists and is empty', (await sb.remoteModel()).graph.commits.length === 0);
 
     await run('echo "# Sales" > README.md'); await run('git add .'); await run('git commit -m "Add README"');
+    r = await run('git status');
+    check('status says nothing about a branch never pushed', !/Your branch/.test(r.out), r.out);
     r = await run('git push');
     check('push without upstream fails helpfully', !r.ok && /git push -u origin main/.test(r.out), r.out);
 
     r = await run('git push -u origin main');
     check('first push says new branch', r.ok && /\* \[new branch\]\s+main -> main/.test(r.out), r.out);
     check('first push sets upstream', /set up to track 'origin\/main'/.test(r.out), r.out);
+    r = await run('git status');
+    check('status: up to date after push', /Your branch is up to date with 'origin\/main'\./.test(r.out), r.out);
     let m = await sb.remoteModel();
     check('remote has the commit', m.graph.commits.length === 1 && m.ahead === 0 && m.behind === 0, JSON.stringify(m.graph.commits));
 
@@ -492,6 +496,9 @@ async function scenario(name, fn) {
     await run('git push');
     r = await run('rewind 1');
     check('rewind ok', r.ok, r.out);
+    r = await run('git status');
+    check('status does not know about the remote commit before a fetch',
+      /Your branch is up to date with 'origin\/main'\./.test(r.out), r.out);
     m = await sb.remoteModel();
     check('remote is ahead after rewind', m.behind === 1 && m.ahead === 0, JSON.stringify({ ahead: m.ahead, behind: m.behind }));
     let g = await sb.graphModel();
@@ -506,6 +513,9 @@ async function scenario(name, fn) {
     check('origin/main pill appears after fetch',
       g.commits.length === 2 && g.commits.some(c => c.refs.some(rf => rf.name === 'origin/main' && rf.remote)),
       JSON.stringify(g.commits.map(c => c.refs)));
+    r = await run('git status');
+    check('status: behind after fetch',
+      /Your branch is behind 'origin\/main' by 1 commit, and can be fast-forwarded\./.test(r.out) && /git pull/.test(r.out), r.out);
 
     r = await run('git pull');
     check('pull fast-forwards', r.ok && /Fast-forward/.test(r.out), r.out);
@@ -517,12 +527,18 @@ async function scenario(name, fn) {
     await run('git push');
     await run('rewind 1');
     await run('echo "y" > y.md'); await run('git add .'); await run('git commit -m "Local-only"');
+    await run('git fetch');
+    r = await run('git status');
+    check('status: diverged', /have diverged,\nand have 1 and 1 different commits each/.test(r.out), r.out);
     r = await run('git pull');
     check('diverged pull makes a merge commit', r.ok && /Merge made by/.test(r.out), r.out);
     r = await run('git log --oneline');
     const shas = r.out.trim().split('\n').map(l => l.slice(0, 7));
     check('log has no duplicates after merge', new Set(shas).size === shas.length, r.out);
 
+    r = await run('git status');
+    check('status: ahead after the merge',
+      /Your branch is ahead of 'origin\/main' by 2 commits\./.test(r.out) && /git push/.test(r.out), r.out);
     r = await run('git push');
     check('push after merge succeeds', r.ok && /main -> main/.test(r.out), r.out);
     m = await sb.remoteModel();
