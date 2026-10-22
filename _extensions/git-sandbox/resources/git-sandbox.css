@@ -45,13 +45,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: 8px 16px;
+  min-height: 56px;
+  padding: 0 16px;
+  box-sizing: border-box;
   background: var(--gs-off-white);
   border-bottom: 1px solid var(--gs-blue-50);
 }
 
 .gs-eyebrow {
+  min-width: 0;
   font-family: var(--gs-mono);
   font-weight: 400;
   font-size: 13px;
@@ -107,6 +110,84 @@
   flex-direction: column;
   height: 340px;
 }
+
+/* Workspace tabs are part of the title bar's chrome: full bar height,
+   flush with its left edge, set in the same uppercase mono as the title and
+   the Undo/Reset buttons. The active tab takes the dark pane's colour and
+   covers the bar's bottom border, so it opens onto the terminal or editor
+   below; the exercise title moves over to make room. */
+.gs-titlebar {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  margin: 0 0 -1px -16px;
+}
+.gs-wtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gs-blue-500);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--gs-blue-50);
+  border-radius: 0;
+  padding: 0 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.gs-wtab:hover { background: var(--gs-blue-50); }
+.gs-wtab:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: -3px; }
+.gs-wtab.is-active {
+  color: #FFFFFF;
+  background: var(--gs-blue-600);
+  border-right-color: var(--gs-blue-600);
+  box-shadow: inset 0 3px 0 0 var(--gs-orange);
+}
+.gs-wtab.is-active:focus-visible { outline-color: rgba(238, 99, 49, 0.6); }
+.gs-wtab-icon { font-size: 11px; color: var(--gs-blue); letter-spacing: 0; text-transform: none; }
+.gs-wtab.is-active .gs-wtab-icon { color: var(--gs-t-yellow); }
+/* #8A5F00 on off-white is AA; on the dark active tab use the terminal yellow */
+.gs-wtab-dirty { color: #8A5F00; font-size: 10px; }
+.gs-wtab.is-active .gs-wtab-dirty { color: var(--gs-t-yellow); }
+.gs-wtab-dirty[hidden] { display: none; }
+
+/* Narrow screens: title, status and buttons take the top row and the tabs
+   become a full-width strip of their own, still on the pane's edge. */
+@media (max-width: 560px) {
+  .gs-head { flex-wrap: wrap; padding-top: 10px; }
+  .gs-titlebar {
+    order: 10;
+    flex: 1 0 calc(100% + 32px);
+    height: 40px;
+    margin: 0 -16px -1px;
+    border-top: 1px solid var(--gs-blue-50);
+  }
+  .gs-wtab { flex: 1 1 0; justify-content: center; }
+  .gs-wtab:last-child { border-right: 0; }
+}
+
+/* visually hidden, still read by screen readers */
+.gs-sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.gs-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gs-view[hidden] { display: none; }
 
 .gs-out {
   flex: 1 1 auto;
@@ -194,6 +275,270 @@
 }
 .gs-hint:hover { background: var(--gs-blue-vibrant); border-color: var(--gs-blue-vibrant); }
 .gs-hint:focus-visible { outline: 3px solid rgba(238, 99, 49, 0.6); outline-offset: 2px; }
+
+/* ------------------------------- editor ------------------------------ */
+
+.gs-view-editor {
+  flex-direction: row;
+  color: var(--gs-t-fg);
+}
+
+.gs-fb {
+  flex: 0 0 210px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #172532;
+  border-right: 1px solid rgba(161, 183, 203, 0.18);
+}
+.gs-fb-head, .gs-ed-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px 6px 14px;
+  border-bottom: 1px solid rgba(161, 183, 203, 0.18);
+}
+.gs-fb-head { gap: 4px; padding-left: 6px; padding-right: 6px; }
+/* the working directory's name, not its path (the path is in the tooltip) */
+.gs-fb-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gs-t-fg);
+  padding-left: 2px;
+}
+.gs-fb-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--gs-t-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.gs-fb-btn[hidden] { display: none; }
+.gs-fb-btn:hover:not(:disabled) { color: #FFFFFF; background: rgba(161, 183, 203, 0.16); }
+.gs-fb-btn:disabled { opacity: 0.35; cursor: default; }
+.gs-icon { display: block; width: 14px; height: 14px; }
+
+.gs-ed-btn {
+  font-family: var(--gs-mono);
+  font-size: 11px;
+  color: #FFFFFF;
+  background: rgba(161, 183, 203, 0.16);
+  border: 1px solid rgba(161, 183, 203, 0.34);
+  border-radius: 4px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.gs-ed-btn:hover:not(:disabled) { background: var(--gs-blue-vibrant); border-color: var(--gs-blue-vibrant); }
+.gs-fb-btn:focus-visible, .gs-ed-btn:focus-visible { outline: 3px solid rgba(238, 99, 49, 0.6); outline-offset: 1px; }
+.gs-ed-btn:disabled { opacity: 0.45; cursor: default; }
+.gs-ed-save:not(:disabled) { background: var(--gs-blue-vibrant); border-color: var(--gs-blue-vibrant); }
+
+.gs-fb-create { padding: 8px 10px 4px; }
+.gs-fb-create[hidden] { display: none; }
+.gs-fb-name {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  color: #FFFFFF;
+  caret-color: var(--gs-orange);
+  background: var(--gs-blue-600);
+  border: 1px solid rgba(161, 183, 203, 0.34);
+  border-radius: 4px;
+  padding: 4px 6px;
+  outline: 0;
+}
+.gs-fb-name:focus-visible { border-color: var(--gs-orange); }
+.gs-fb-name::placeholder { color: var(--gs-t-dim); opacity: 0.75; font-style: italic; }
+.gs-fb-err:not(:empty) {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--gs-t-red);
+  margin-top: 4px;
+}
+
+.gs-fb-list, .gs-fb-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gs-fb-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.gs-fb-none {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--gs-t-dim);
+}
+/* Rows are indented per depth from JS (padding-left); files get an extra
+   chevron's width so names line up with their folder's name. */
+.gs-fb-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--gs-t-fg);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: 3px 10px 3px 10px;
+  cursor: pointer;
+}
+.gs-fb-row:hover { background: rgba(161, 183, 203, 0.10); }
+.gs-fb-row:focus-visible { outline: 2px solid rgba(238, 99, 49, 0.6); outline-offset: -2px; }
+.gs-fb-file.is-open {
+  color: #FFFFFF;
+  background: rgba(68, 112, 153, 0.45);
+  border-left-color: var(--gs-orange);
+}
+.gs-fb-chev {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--gs-t-dim);
+  transition: transform 0.12s ease;
+}
+.gs-fb-chev .gs-icon { width: 12px; height: 12px; }
+.gs-fb-folder[aria-expanded="true"] .gs-fb-chev { transform: rotate(90deg); }
+.gs-fb-folder .gs-fb-fname { color: var(--gs-t-blue); }
+.gs-fb-fname { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+.gs-fb-wd {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gs-blue-600);
+  background: var(--gs-t-dim);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.gs-fb-dirty { color: var(--gs-t-yellow); font-size: 10px; }
+/* git status letter, as in most editors; the letter itself carries the
+   meaning, colour only reinforces it */
+.gs-fb-mark { font-size: 11px; font-weight: 700; }
+.gs-fb-mark-new { color: var(--gs-t-green); }
+.gs-fb-mark-mod { color: var(--gs-t-yellow); }
+.gs-fb-changed { font-size: 8px; color: var(--gs-t-yellow); }
+
+/* "Show hidden files": a small switch pinned to the sidebar's foot */
+.gs-fb-foot {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(161, 183, 203, 0.18);
+  font-size: 11px;
+  color: var(--gs-t-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.gs-fb-hidden {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+.gs-switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(161, 183, 203, 0.28);
+  transition: background 0.15s ease;
+}
+.gs-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--gs-t-fg);
+  transition: transform 0.15s ease;
+}
+.gs-fb-hidden:checked + .gs-switch { background: var(--gs-blue-vibrant); }
+.gs-fb-hidden:checked + .gs-switch::after { transform: translateX(12px); background: #FFFFFF; }
+.gs-fb-hidden:focus-visible + .gs-switch { outline: 3px solid rgba(238, 99, 49, 0.6); outline-offset: 2px; }
+.gs-fb-foot:hover { color: var(--gs-t-fg); }
+
+.gs-ed {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gs-ed-name {
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  color: #FFFFFF;
+  word-break: break-all;
+}
+.gs-ed-status {
+  flex: 1 1 auto;
+  font-family: var(--gs-mono);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--gs-t-dim);
+}
+.gs-ed-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 12px 16px;
+  font-family: var(--gs-mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--gs-t-fg);
+  caret-color: var(--gs-orange);
+  background: var(--gs-blue-600);
+  tab-size: 2;
+}
+.gs-ed-text:focus-visible { box-shadow: inset 0 0 0 2px rgba(238, 99, 49, 0.45); }
+.gs-ed-text[hidden], .gs-ed-empty[hidden] { display: none; }
+.gs-ed-empty {
+  padding: 14px 16px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--gs-t-dim);
+}
+
+@media (max-width: 560px) {
+  .gs-term-wrap.is-editor { height: 480px; }
+  .gs-view-editor { flex-direction: column; }
+  .gs-fb { flex: 0 0 auto; max-height: 230px; border-right: 0; border-bottom: 1px solid rgba(161, 183, 203, 0.18); }
+}
 
 /* ---------------------------- visualisation --------------------------- */
 
@@ -501,7 +846,10 @@
 
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
-  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tabs { display: none; }
+  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tabs,
+  .gs-titlebar, .gs-view-editor { display: none; }
+  /* the terminal transcript prints even if the editor was showing */
+  .gs-view[data-view="terminal"][hidden] { display: flex; }
   /* On paper there are no tabs to click, so print every panel. */
   .gs-panel[hidden] { display: block; }
   .gs-diff, .gs-graph-scroll { max-height: none; overflow: visible; }

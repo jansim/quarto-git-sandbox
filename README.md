@@ -214,15 +214,32 @@ Policy. `when:` does not, which is another reason to prefer it.
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
 `fetch`, `pull`, `config user.name|user.email`
 
-**Shell:** `ls [-a]`, `cat`, `echo "…" > file`, `echo "…" >> file`, `touch`,
-`rm`, `mkdir`, `pwd`, `whoami`, plus `help`, `clear`, `reset`, `undo`, and
-the authoring-only `rewind <n>`
+**Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
+`touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
+`undo`, and the authoring-only `rewind <n>`
+
+`cd` moves around inside the project folder, and the prompt shows where you
+are. Relative paths in shell and git commands resolve from there, and
+`git add .` stages only the current folder and below, as in real git. `cd`,
+`cd ~` and `cd ~/path` are measured from the project's top folder, `cd -`
+goes back to the previous folder, and nothing outside the project can be
+reached. The repository always lives at the top, so `git init` must run there.
 
 The remote is a bare repository elsewhere in the same in-memory filesystem.
 Push and fetch move objects and refs between the two repositories with real
 semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
 rejected with `(fetch first)`.
+
+**Editor:** tabs in the exercise's title bar switch between the
+**Terminal** and an **Editor** tab. The editor's file browser is a
+collapsible tree of the working directory that follows `cd` (with
+`U`/`M`/`A` git status letters), can step up to the folders above it with
+the working directory labelled `WD`, and has a switch to show
+hidden files, `.git` included (read-only). It opens any file, creates new
+ones with `+`, and saves with the Save button or Ctrl/Cmd+S. Edits stay unsaved
+drafts until then, so they reach `git status` only once saved; each save can
+be undone like a command.
 
 Up arrow recalls previous commands. **Undo** (the button, or typing `undo`)
 takes back the last state-changing command as if it was never typed: repo,

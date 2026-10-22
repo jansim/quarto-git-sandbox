@@ -65,6 +65,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('no state pill before init', host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
   check('tasks render', host.querySelectorAll('.gs-task').length === 3);
+  check('task heading reads Tasks', /^Tasks/.test(host.querySelector('.gs-tasks-h').textContent),
+    host.querySelector('.gs-tasks-h').textContent);
+  check('first tab reads File Status',
+    /^File Status/.test(host.querySelector('.gs-tab[data-tab="files"]').textContent),
+    host.querySelector('.gs-tab[data-tab="files"]').textContent);
   check('0 of 3 to start', /0 of 3/.test(host.querySelector('.gs-tasks').textContent),
     host.querySelector('.gs-tasks').textContent);
 
@@ -88,6 +93,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('task 1 ticks', host.querySelectorAll('.gs-task.is-done').length === 1,
     host.querySelector('.gs-tasks').textContent);
   check('prompt shows branch', /\(main\)/.test(host.querySelector('.gs-prompt').textContent),
+    host.querySelector('.gs-prompt').textContent);
+  await run('mkdir docs');
+  await run('cd docs');
+  check('prompt follows cd', host.querySelector('.gs-prompt').textContent === '~/project/docs (main) $',
+    host.querySelector('.gs-prompt').textContent);
+  await run('cd ..');
+  check('prompt back at the root', host.querySelector('.gs-prompt').textContent === '~/project (main) $',
     host.querySelector('.gs-prompt').textContent);
   check('no state pill after init without a remote', host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
@@ -274,6 +286,200 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('state shows origin pill once a remote exists',
     /origin/.test(host.querySelector('.gs-state').textContent),
     host.querySelector('.gs-state').innerHTML);
+
+  // workspace title bar: Terminal and Editor tabs over the dark pane
+  const view = () => host.querySelector('.gs-wtab.is-active').getAttribute('data-view');
+  const pane = (n) => host.querySelector('.gs-view[data-view="' + n + '"]');
+  const click = (n) => n.dispatchEvent(new win.Event('click', { bubbles: true }));
+  const fileBtn = (f) => host.querySelector('.gs-fb-file[data-file="' + f + '"]');
+  const edText = host.querySelector('.gs-ed-text');
+  const type = (text) => { edText.value = text; edText.dispatchEvent(new win.Event('input')); };
+  check('title bar has Terminal and Editor tabs',
+    host.querySelectorAll('.gs-titlebar .gs-wtab').length === 2 &&
+    host.querySelector('.gs-titlebar').getAttribute('role') === 'tablist');
+  check('the tabs live in the exercise title bar, before the title',
+    host.querySelector('.gs-head > .gs-titlebar') !== null &&
+    host.querySelector('.gs-titlebar').nextElementSibling.classList.contains('gs-eyebrow'));
+  check('terminal view shows by default', view() === 'terminal' &&
+    pane('terminal').hidden === false && pane('editor').hidden === true);
+  click(host.querySelector('.gs-wtab[data-view="editor"]'));
+  check('clicking Editor swaps the views', view() === 'editor' &&
+    pane('terminal').hidden === true && pane('editor').hidden === false &&
+    host.querySelector('.gs-wtab[data-view="editor"]').getAttribute('aria-selected') === 'true');
+  check('file browser lists the working directory',
+    ['a.txt', 'b.txt', 'c.txt', 'd.txt'].every((f) => !!fileBtn(f)),
+    host.querySelector('.gs-fb-list').innerHTML);
+  check('editor prompts to pick a file', edText.hidden === true &&
+    /Pick a file/.test(host.querySelector('.gs-ed-empty').textContent));
+
+  click(fileBtn('a.txt')); await sleep(30);
+  check('clicking a file opens it', edText.hidden === false && edText.value === 'a\n' &&
+    host.querySelector('.gs-ed-name').textContent === 'a.txt' &&
+    fileBtn('a.txt').classList.contains('is-open'), JSON.stringify(edText.value));
+  check('save is disabled while nothing changed', host.querySelector('.gs-ed-save').disabled === true);
+
+  type('a\nmore\n');
+  check('typing marks the file unsaved',
+    host.querySelector('.gs-ed-save').disabled === false &&
+    !!fileBtn('a.txt').querySelector('.gs-fb-dirty') &&
+    host.querySelector('.gs-wtab-dirty').hidden === false);
+  check('an unsaved edit does not reach the working directory',
+    badge('files').textContent === '✓', badge('files').outerHTML);
+
+  click(fileBtn('b.txt')); await sleep(30);
+  check('switching files keeps the draft', edText.value === 'b\n' && !!fileBtn('a.txt').querySelector('.gs-fb-dirty'));
+  click(fileBtn('a.txt')); await sleep(30);
+  check('the draft comes back', edText.value === 'a\nmore\n', JSON.stringify(edText.value));
+
+  click(host.querySelector('.gs-ed-save')); await sleep(60);
+  check('save writes the working directory',
+    (await inst.sandbox.readFile('a.txt')) === 'a\nmore\n');
+  check('saved file shows as modified in git terms',
+    badge('files').textContent === '1' &&
+    /M/.test(fileBtn('a.txt').querySelector('.gs-fb-mark').textContent),
+    fileBtn('a.txt').outerHTML);
+  check('saving clears the unsaved markers',
+    !fileBtn('a.txt').querySelector('.gs-fb-dirty') &&
+    host.querySelector('.gs-wtab-dirty').hidden === true &&
+    /saved/.test(host.querySelector('.gs-ed-status').textContent));
+  check('a save is undoable', host.querySelector('.gs-undo').disabled === false);
+
+  click(host.querySelector('.gs-undo')); await sleep(60);
+  check('undo reverts the save, and the open editor follows',
+    edText.value === 'a\n' && badge('files').textContent === '✓', JSON.stringify(edText.value));
+  check('undo names the save', /Undid: save a\.txt/.test(host.querySelector('.gs-out').textContent));
+
+  type('changed\n');
+  click(host.querySelector('.gs-ed-revert'));
+  check('revert drops the draft', edText.value === 'a\n' &&
+    host.querySelector('.gs-wtab-dirty').hidden === true);
+
+  // a terminal command that rewrites the open file updates the editor
+  await run('echo fresh > a.txt');
+  check('editor reloads a file changed from the terminal', edText.value === 'fresh\n',
+    JSON.stringify(edText.value));
+  await run('echo a > a.txt');
+
+  // new files, including in a folder that does not exist yet
+  click(host.querySelector('.gs-fb-new'));
+  const nameIn = host.querySelector('.gs-fb-name');
+  check('+ New reveals a name field', host.querySelector('.gs-fb-create').hidden === false);
+  nameIn.value = '../escape.txt';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(30);
+  check('a name outside the project is refused in place',
+    /inside the project/.test(host.querySelector('.gs-fb-err').textContent),
+    host.querySelector('.gs-fb-err').textContent);
+  nameIn.value = 'notes/todo.md';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(60);
+  check('a new file is created and opened', !!fileBtn('notes/todo.md') &&
+    host.querySelector('.gs-ed-name').textContent === 'notes/todo.md' &&
+    /U/.test(fileBtn('notes/todo.md').querySelector('.gs-fb-mark').textContent),
+    host.querySelector('.gs-fb-list').innerHTML);
+  type('- write tests\n');
+  edText.dispatchEvent(new win.KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true }));
+  await sleep(60);
+  check('Ctrl+S saves', (await inst.sandbox.readFile('notes/todo.md')) === '- write tests\n');
+  await run('git add .');
+  check('the saved file stages from the terminal',
+    /A/.test(fileBtn('notes/todo.md').querySelector('.gs-fb-mark').textContent),
+    fileBtn('notes/todo.md').outerHTML);
+  await run('git rm notes/todo.md');
+  check('a deleted open file closes the editor', edText.hidden === true && !fileBtn('notes/todo.md'));
+
+  // the browser is a tree rooted at the working directory
+  const fbTitle = () => host.querySelector('.gs-fb-title').textContent;
+  const folder = (k) => host.querySelector('.gs-fb-folder[data-dir="' + k + '"]');
+  check('browser header shows the working directory name only', fbTitle() === 'project', fbTitle());
+  await run('mkdir data/raw');
+  await run('echo x > data/raw/q3.csv');
+  await run('mkdir empty');
+  click(folder('notes')); // close the folder the new file opened
+  check('folders list before files, each with a chevron, collapsed',
+    !!folder('data') && folder('data').getAttribute('aria-expanded') === 'false' &&
+    !!folder('data').querySelector('.gs-fb-chev svg') && !fileBtn('data/raw/q3.csv') &&
+    host.querySelector('.gs-fb-row').classList.contains('gs-fb-folder'),
+    host.querySelector('.gs-fb-list').innerHTML.slice(0, 400));
+  check('a folder with changes inside says so', !!folder('data').querySelector('.gs-fb-changed'));
+  click(folder('data'));
+  check('a chevron click shows the children', folder('data').getAttribute('aria-expanded') === 'true' &&
+    !!folder('data/raw') && !fileBtn('data/raw/q3.csv'));
+  click(folder('data/raw'));
+  check('nested folders expand too', !!fileBtn('data/raw/q3.csv'));
+  check('nested rows are indented deeper',
+    parseInt(fileBtn('data/raw/q3.csv').style.paddingLeft, 10) > parseInt(folder('data/raw').style.paddingLeft, 10) &&
+    parseInt(folder('data/raw').style.paddingLeft, 10) > parseInt(folder('data').style.paddingLeft, 10));
+  click(folder('empty'));
+  check('an empty folder says so', /empty/.test(folder('empty').parentNode.textContent));
+  click(folder('data'));
+  check('collapsing hides the subtree', !folder('data/raw'));
+
+  // hidden files
+  check('hidden files are off by default', !folder('.git'));
+  const hiddenToggle = host.querySelector('.gs-fb-foot .gs-fb-hidden');
+  check('the hidden-files toggle sits at the foot of the sidebar',
+    !!hiddenToggle && host.querySelector('.gs-fb').lastElementChild.classList.contains('gs-fb-foot'));
+  hiddenToggle.checked = true; hiddenToggle.dispatchEvent(new win.Event('change'));
+  check('the toggle reveals .git', !!folder('.git'));
+  click(folder('.git'));
+  click(fileBtn('.git/HEAD')); await sleep(30);
+  check('.git files open read-only', edText.readOnly === true && /ref: refs\/heads\/main/.test(edText.value) &&
+    /read-only/.test(host.querySelector('.gs-ed-status').textContent),
+    host.querySelector('.gs-ed-status').textContent);
+  hiddenToggle.checked = false; hiddenToggle.dispatchEvent(new win.Event('change'));
+  check('turning it off hides them again', !folder('.git'));
+
+  // moving up from the working directory
+  check('home button hidden at the working directory', host.querySelector('.gs-fb-home').hidden === true);
+  click(host.querySelector('.gs-fb-up'));
+  check('up shows the parent folder by name', fbTitle() === '~', fbTitle());
+  check('the working directory shows inside it, open and labelled WD',
+    folder('../1') && folder('../1').getAttribute('aria-expanded') === 'true' &&
+    !!folder('../1').querySelector('.gs-fb-wd') &&
+    folder('../1').querySelector('.gs-fb-wd').textContent === 'WD' && !!fileBtn('a.txt'));
+  check('cannot go above the top of the prompt path', host.querySelector('.gs-fb-up').disabled === true);
+  click(host.querySelector('.gs-fb-home'));
+  check('home returns to the working directory', fbTitle() === 'project' && !folder('../1'));
+
+  // the browser follows `cd`; paths stay project-relative underneath
+  click(fileBtn('a.txt')); await sleep(30);
+  await run('cd data');
+  check('cd re-roots the browser at the new working directory', fbTitle() === 'data' &&
+    !!folder('data/raw') && !fileBtn('a.txt') && host.querySelector('.gs-fb-home').hidden === true,
+    fbTitle() + ' ' + host.querySelector('.gs-fb-list').innerHTML.slice(0, 200));
+  type('a\nfrom data\n');
+  click(host.querySelector('.gs-ed-save')); await sleep(60);
+  check('saving after cd writes the file it opened, not one relative to cwd',
+    (await inst.sandbox.readFile('a.txt')) === 'a\nfrom data\n' &&
+    !(await inst.sandbox.listTree()).some((e) => e.path === 'data/a.txt'));
+  click(host.querySelector('.gs-fb-up'));
+  check('up from a subfolder shows the real parent, with WD on the subfolder',
+    fbTitle() === 'project' && !!fileBtn('a.txt') &&
+    !!folder('data').querySelector('.gs-fb-wd') && folder('data').getAttribute('aria-expanded') === 'true');
+  click(host.querySelector('.gs-fb-up'));
+  check('then on above the project', fbTitle() === '~' && !!folder('../1') && !!folder('data').querySelector('.gs-fb-wd'));
+  click(host.querySelector('.gs-fb-home'));
+  check('home returns to the subfolder', fbTitle() === 'data');
+  click(host.querySelector('.gs-fb-new'));
+  nameIn.value = 'q4.csv';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(60);
+  check('new files are named from the working directory, like touch',
+    host.querySelector('.gs-ed-name').textContent === 'data/q4.csv' && !!fileBtn('data/q4.csv'),
+    host.querySelector('.gs-ed-name').textContent);
+  click(host.querySelector('.gs-fb-new'));
+  nameIn.value = '../../out.txt';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(30);
+  check('..-paths that leave the project are refused',
+    /inside the project/.test(host.querySelector('.gs-fb-err').textContent));
+  host.querySelector('.gs-fb-name').dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape' }));
+  await run('cd ..');
+  check('cd .. follows back to the top', fbTitle() === 'project' && !!folder('data').querySelector('.gs-fb-wd') === false);
+
+  click(host.querySelector('.gs-wtab[data-view="terminal"]'));
+  check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);
 
   const svg = host.querySelector('.gs-graph');
   const style = `<style>

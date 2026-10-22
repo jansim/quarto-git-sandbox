@@ -489,6 +489,93 @@ async function scenario(name, fn) {
     check('restore forgets the merge record', (await sb.graphModel()).merges.length === 0);
   });
 
+  /* ---------------- cd ---------------- */
+  await scenario('cd', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo top > top.txt');
+    let r = await run('mkdir src');
+    r = await run('cd src');
+    check('cd into a folder', r.ok && r.out === '', r.out);
+    r = await run('pwd');
+    check('pwd follows cd', r.out === '~/project/src', r.out);
+    check('api pwd follows cd', sb.pwd() === '~/project/src', sb.pwd());
+    check('api cwdPath is project-relative', sb.cwdPath() === 'src', sb.cwdPath());
+    // the file API is anchored at the project, so the editor and `file x`
+    // conditions mean the same file wherever the shell is
+    await sb.writeFile('top.txt', 'top, via the api\n');
+    check('api writeFile ignores cd', (await sb.listTree()).some((e) => e.path === 'top.txt') &&
+      !(await sb.listTree()).some((e) => e.path === 'src/top.txt'));
+    check('api readFile ignores cd', (await sb.readFile('top.txt')) === 'top, via the api\n');
+
+    await run('echo "x" > app.js');
+    check('relative write lands in cwd', (await sb.listFiles()).indexOf('src/app.js') !== -1,
+      JSON.stringify(await sb.listFiles()));
+    r = await run('cat app.js');
+    check('cat resolves against cwd', r.ok && r.out === 'x', r.out);
+    r = await run('ls');
+    check('ls lists cwd', r.out === 'app.js', r.out);
+    r = await run('ls ..');
+    check('ls takes a path', /top\.txt/.test(r.out) && /src\//.test(r.out), r.out);
+
+    r = await run('git add .');
+    let st = await sb.statusModel();
+    check('git add . stages only the current folder',
+      st.staged.some(s => s.file === 'src/app.js') && st.untracked.indexOf('top.txt') !== -1,
+      JSON.stringify(st));
+    r = await run('git add ../top.txt');
+    st = await sb.statusModel();
+    check('git add with a relative parent path', st.staged.some(s => s.file === 'top.txt'), JSON.stringify(st));
+    r = await run('git commit -m "from a subfolder"');
+    check('commit works from a subfolder', r.ok, r.out);
+
+    r = await run('cd ..');
+    check('cd .. back to the root', r.ok && sb.pwd() === '~/project', sb.pwd());
+    r = await run('cd -');
+    check('cd - returns to the previous folder', r.ok && r.out === '~/project/src', r.out);
+    r = await run('cd');
+    check('bare cd goes to the project root', sb.pwd() === '~/project', sb.pwd());
+    await run('cd src');
+    r = await run('cd ~');
+    check('cd ~ goes to the project root', sb.pwd() === '~/project', sb.pwd());
+    r = await run('cd ~/src');
+    check('cd ~/path is rooted at the project', sb.pwd() === '~/project/src', sb.pwd());
+
+    r = await run('cd nope');
+    check('cd to a missing folder fails', !r.ok && /No such file or directory/.test(r.out), r.out);
+    r = await run('cd app.js');
+    check('cd to a file fails', !r.ok && /Not a directory/.test(r.out), r.out);
+    await run('cd ~');
+    r = await run('cd ..');
+    check('cannot leave the project', !r.ok && /only has the project folder/.test(r.out) && sb.pwd() === '~/project', r.out);
+    r = await run('cd /');
+    check('cannot cd to /', !r.ok && sb.pwd() === '~/project', r.out);
+
+    // if the folder we are in disappears, the next command runs from the root
+    await run('mkdir gone');
+    await run('cd gone');
+    await sb.fs.promises.rmdir(sb.dir + '/gone');
+    r = await run('pwd');
+    check('a vanished cwd falls back to the root', r.out === '~/project', r.out);
+
+    // undo snapshots carry the folder
+    await run('cd src');
+    const snap = sb.snapshot();
+    check('cd alone is not a state change', sb.changedSince(snap) === false);
+    await run('cd ..');
+    sb.restore(snap);
+    check('restore brings back the folder', sb.pwd() === '~/project/src', sb.pwd());
+
+    await sb.reset();
+    check('reset returns to the root', sb.pwd() === '~/project', sb.pwd());
+  });
+
+  await scenario('cd before init', async ({ run, check }) => {
+    await run('mkdir sub');
+    await run('cd sub');
+    const r = await run('git init');
+    check('git init in a subfolder explains', !r.ok && /cd ~/.test(r.out), r.out);
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));
