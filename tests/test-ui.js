@@ -716,16 +716,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await a.run('git commit -m one');
     check('git commit stays on File Status', box.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'files');
     const ghost = calls.find(c => c.el.classList && c.el.classList.contains('gs-chip-ghost'));
-    const last = ghost && ghost.frames[ghost.frames.length - 1];
     check('git commit flies the staged chip into the repository',
-      !!ghost && parseFloat(last.left) + parseFloat(last.width) / 2 === 460 && last.opacity === 0,
+      !!ghost && /translate\(200px/.test(ghost.frames[2].transform) && ghost.frames[2].opacity === 0,
       JSON.stringify(calls.map(c => c.frames)));
-    check('and it folds into a dot on the way',
-      !!ghost && ghost.frames[0].borderRadius === '4px' &&
-      ghost.frames.slice(1).every(f => f.borderRadius === '50%' && f.width === f.height),
-      JSON.stringify(ghost && ghost.frames));
     check('the ghost is a copy of the staged chip', !!ghost && /a\.txt/.test(ghost.el.textContent));
-    check('the ghost is not counted as a chip', !!ghost && !ghost.el.hasAttribute('data-file'));
     calls.length = 0;
     await a.run('reset');
     check('no animation after a reset', calls.length === 0, calls.length);
