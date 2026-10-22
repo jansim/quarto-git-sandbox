@@ -908,6 +908,8 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   min-height: 56px;
   padding: 0 16px;
   box-sizing: border-box;

@@ -781,10 +781,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
   check('the header button opens the tree', host.querySelector('.gs-tree').hidden === false &&
     host.classList.contains('gs-has-tree') && host.querySelector('.gs-tree-btn').getAttribute('aria-pressed') === 'true');
+  check('an open tree beside the box takes the button into its own header, top right',
+    host.classList.contains('gs-tree-below') || host.querySelector('.gs-tree-head > .gs-tree-btn:last-child'));
   check('an opened tree already shows the history', host.querySelectorAll('.gs-tree-node').length >= 1,
     host.querySelectorAll('.gs-tree-node').length);
   host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
   check('and closes it again', host.querySelector('.gs-tree').hidden === true && !host.classList.contains('gs-has-tree'));
+  check('closing it puts the button back at the end of the box header',
+    !!host.querySelector('.gs-head > .gs-tree-btn:last-child'));
 
   /* ---------------- configurability ---------------- */
   {
