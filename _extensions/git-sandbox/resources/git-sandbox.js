@@ -2850,7 +2850,7 @@
             var quiet = it.k === 'unchanged' || it.k === 'not in git yet';
             var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
               (it.conflict ? ' gs-chip-conflict' : '');
-            return '<span class="' + cls + '">' + esc(it.f) +
+            return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
                    '<span class="gs-chip-k">' + esc(it.k) + '</span></span>';
           }).join('')
         : '<span class="gs-chip gs-chip-empty">empty</span>';
@@ -2871,6 +2871,89 @@
       col('Staging area', 'what goes in next commit', staged, 'stage') +
       '<div class="gs-arrow"><span>git commit</span><i class="gs-arrow-g">→</i></div>' +
       col('Repository', 'permanent history', repoItems, 'repo');
+  }
+
+  // Where each file chip sits, keyed by column and file ("stage:a.txt"): a
+  // file can be in two columns at once (staged, then edited again).
+  function chipRects(node) {
+    var out = {};
+    var base = node.getBoundingClientRect();
+    node.querySelectorAll('.gs-chip[data-file]').forEach(function (c) {
+      var r = c.getBoundingClientRect();
+      if (!r.width) return;
+      out[c.getAttribute('data-col') + ':' + c.getAttribute('data-file')] = {
+        el: c, x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height
+      };
+    });
+    return out;
+  }
+
+  // Show files travelling between the columns after a re-render, so
+  // `git add` visibly carries a file from the working directory to the
+  // staging area and `git commit` carries the staged files into the
+  // repository. `before` is chipRects() from just before the render. Chips
+  // that moved glide from where they were (FLIP), committed ones fly into
+  // the repository as ghosts, and new ones fade in. A no-op where the Web
+  // Animations API is missing, the panel is hidden, or the reader asked for
+  // reduced motion.
+  function animateStages(node, before, committed) {
+    if (!before || typeof node.animate !== 'function') return;
+    if (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!node.getBoundingClientRect().width || !Object.keys(before).length) return;
+    var now = chipRects(node);
+    var repo = node.querySelector('.gs-chip-repo');
+    var repoBox = repo ? chipBox(node, repo) : null;
+    var ease = { duration: 480, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' };
+    var claimed = {};
+
+    function glide(el, from, to) {
+      var dx = from.x - to.x, dy = from.y - to.y;
+      if (!dx && !dy) return;
+      el.animate([{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'none' }], ease);
+    }
+
+    Object.keys(before).forEach(function (key) {
+      var old = before[key];
+      var colName = key.slice(0, key.indexOf(':'));
+      var file = key.slice(key.indexOf(':') + 1);
+      if (now[key]) { glide(now[key].el, old, now[key]); claimed[key] = true; return; }
+      if (colName === 'stage' && committed && repoBox) {
+        // into the repository: a copy of the old chip flies there and fades
+        var ghost = old.el.cloneNode(true);
+        ghost.classList.add('gs-chip-ghost');
+        ghost.style.left = old.x + 'px';
+        ghost.style.top = old.y + 'px';
+        ghost.style.width = old.w + 'px';
+        node.appendChild(ghost);
+        var dx = repoBox.x + repoBox.w / 2 - (old.x + old.w / 2);
+        var dy = repoBox.y + repoBox.h / 2 - (old.y + old.h / 2);
+        // stays solid for most of the trip, so the eye can follow it
+        ghost.animate([
+          { transform: 'none', opacity: 1 },
+          { transform: 'translate(' + dx * 0.85 + 'px, ' + dy * 0.85 + 'px) scale(0.85)', opacity: 0.9, offset: 0.7 },
+          { transform: 'translate(' + dx + 'px, ' + dy + 'px) scale(0.5)', opacity: 0 }
+        ], { duration: 650, easing: ease.easing }).onfinish = function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); };
+        return;
+      }
+      // across to the other column: `git add` (work -> stage) or back
+      var other = (colName === 'work' ? 'stage' : 'work') + ':' + file;
+      if (now[other] && !before[other]) { glide(now[other].el, old, now[other]); claimed[other] = true; }
+    });
+
+    Object.keys(now).forEach(function (key) {
+      // the repository chip is relabelled ("3 commits"), not new
+      if (claimed[key] || before[key] || key.indexOf('repo:') === 0) return;
+      now[key].el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, delay: committed ? 200 : 0, fill: 'backwards' });
+    });
+    if (committed && repo) {
+      repo.animate([{ transform: 'none' }, { transform: 'scale(1.06)' }, { transform: 'none' }],
+        { duration: 360, delay: 520 });
+    }
+  }
+
+  function chipBox(node, el) {
+    var base = node.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
   }
 
   /* ------------------------------- mount ----------------------------- */
@@ -3118,9 +3201,11 @@
       var t = line.trim().split(/\s+/);
       var c = t[0], s = t[1] || '';
       if (c === 'git') {
-        if (/^(init|add|rm|status|restore|mv)$/.test(s)) return 'files';
+        // a commit stays on File Status, where the staged files can be
+        // seen moving into the repository
+        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
         if (s === 'diff') return 'changes';
-        if (/^(commit|merge|log|branch|checkout|switch)$/.test(s)) return 'history';
+        if (/^(merge|log|branch|checkout|switch)$/.test(s)) return 'history';
         if (/^(push|pull|fetch|remote)$/.test(s)) return 'remote';
         return null;
       }
@@ -3133,6 +3218,8 @@
     // last model whenever the width actually changes.
     var lastGraph = null;
     var lastGraphW = 0;
+    var lastCommitCount = 0;
+    var stagesInstant = true;
     var lastRemoteGraph = null;
     var lastRemoteGraphW = 0;
     function redrawGraph() {
@@ -3631,7 +3718,12 @@
         : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
+      var chipsBefore = chipRects(stagesNode);
       renderStages(stagesNode, status, graph, files, isRepo);
+      // a reset (or the first drawing) appears at once, like the tree
+      if (!stagesInstant) animateStages(stagesNode, chipsBefore, graph.commits.length > lastCommitCount);
+      stagesInstant = false;
+      lastCommitCount = graph.commits.length;
       renderDiff(diffNode, diff);
       renderGraph(svg, graph);
       lastTree = await sb.listTree();
@@ -3941,11 +4033,12 @@
         undoStack.push(snap);
         if (undoStack.length > UNDO_DEPTH) undoStack.shift();
       }
+      // Switch before the refresh too, so the panel is on screen while its
+      // chips move; and after, for a tab the refresh has just revealed.
+      var want = r.ok ? tabFor(line) : null;
+      if (want) selectTab(want);
       await refresh();
-      if (r.ok) {
-        var want = tabFor(line);
-        if (want) selectTab(want);
-      }
+      if (want) selectTab(want);
       input.disabled = false;
       busy = false;
       input.focus();
@@ -4017,6 +4110,7 @@
       upLevels = 0;
       expanded = {};
       if (tree) { tree.reset(); treeInstant = true; }
+      stagesInstant = true;
       try {
         await sb.reset(seed);
       } catch (e) {

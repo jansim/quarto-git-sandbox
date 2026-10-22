@@ -138,7 +138,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('task 2 ticks', host.querySelectorAll('.gs-task.is-done').length === 2);
   check('a just-ticked task flashes', host.querySelectorAll('.gs-task.is-just-done').length === 1,
     host.querySelector('.gs-tasks').innerHTML);
-  check('git commit auto-switches to the history tab', activeTab() === 'history');
+  check('git commit stays on the files tab', activeTab() === 'files');
   check('history badge counts commits', badge('history').textContent === '1',
     badge('history').outerHTML);
 
@@ -567,6 +567,53 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await b.ready;
     check('a seed that opens vim fails loudly', /opened an editor/.test(bad.querySelector('.gs-out').textContent),
       bad.querySelector('.gs-out').textContent);
+  }
+
+  /* ---------------- File Status animations ---------------- */
+  {
+    // jsdom has no layout and no Web Animations API, so stand in for both:
+    // a chip's x comes from its column, its y from its place in the column.
+    const proto = win.Element.prototype;
+    const realRect = proto.getBoundingClientRect;
+    const calls = [];
+    const colX = { work: 0, stage: 200, repo: 400 };
+    proto.getBoundingClientRect = function () {
+      if (this.classList.contains('gs-stages')) return { left: 0, top: 0, width: 600, height: 200 };
+      const col = this.getAttribute('data-col');
+      if (col) {
+        const i = Array.prototype.indexOf.call(this.parentNode.children, this);
+        return { left: colX[col], top: 30 * i, width: 120, height: 24 };
+      }
+      return realRect.call(this);
+    };
+    proto.animate = function (frames, opts) {
+      calls.push({ el: this, frames, opts });
+      return { onfinish: null };
+    };
+    const box = win.document.createElement('div');
+    box.id = 'animbox';
+    win.document.body.appendChild(box);
+    const a = win.GitSandboxUI.mount('#animbox', { seed: 'git init\necho a > a.txt' });
+    await a.ready;
+    check('no animation for the first drawing', calls.length === 0, calls.length);
+    await a.run('git add a.txt');
+    const moved = calls.find(c => c.el.getAttribute && c.el.getAttribute('data-col') === 'stage' &&
+      c.el.getAttribute('data-file') === 'a.txt');
+    check('git add glides the chip from the working directory to staging',
+      !!moved && /translate\(-200px/.test(moved.frames[0].transform), JSON.stringify(calls.map(c => c.frames)));
+    calls.length = 0;
+    await a.run('git commit -m one');
+    check('git commit stays on File Status', box.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'files');
+    const ghost = calls.find(c => c.el.classList && c.el.classList.contains('gs-chip-ghost'));
+    check('git commit flies the staged chip into the repository',
+      !!ghost && /translate\(200px/.test(ghost.frames[2].transform) && ghost.frames[2].opacity === 0,
+      JSON.stringify(calls.map(c => c.frames)));
+    check('the ghost is a copy of the staged chip', !!ghost && /a\.txt/.test(ghost.el.textContent));
+    calls.length = 0;
+    await a.run('reset');
+    check('no animation after a reset', calls.length === 0, calls.length);
+    delete proto.animate;
+    proto.getBoundingClientRect = realRect;
   }
 
   /* ---------------- merge conflicts ---------------- */

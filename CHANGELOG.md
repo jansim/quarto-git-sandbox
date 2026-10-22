@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `git commit` no longer switches the panels below the terminal to
+  **History**; it stays on **File Status**, where the commit can now be
+  seen happening. The File Status view animates: `git add` glides a file's
+  chip from the working directory into the staging area, `git commit`
+  flies the staged chips into the repository, and other chips slide or
+  fade into their new places. The motion is skipped for readers who ask
+  for reduced motion.
 - Merge conflicts now behave as in real git instead of failing with an
   error. A conflicting `git merge` or `git pull` writes conflict markers into
   the files, stages what merged cleanly, and stops with `CONFLICT (content):
