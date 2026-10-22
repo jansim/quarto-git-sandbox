@@ -283,9 +283,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await run('git merge analysis');
 
   await run('git remote add origin https://example.com/demo.git');
-  check('state shows origin pill once a remote exists',
-    /origin/.test(host.querySelector('.gs-state').textContent),
+  check('no origin pill in the title bar once a remote exists',
+    host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
+  check('remote panel splits into local and remote halves',
+    host.querySelectorAll('.gs-remote .gs-side').length === 2 &&
+    /Local/.test(host.querySelector('.gs-side-local').textContent) &&
+    /Remote/.test(host.querySelector('.gs-side-remote').textContent));
+  check('local half draws the local history compactly',
+    host.querySelectorAll('.gs-local-graph circle').length === 5,
+    String(host.querySelectorAll('.gs-local-graph circle').length));
+  check('remote half names the single remote without a dropdown',
+    host.querySelector('.gs-remote-name').textContent === 'origin' && !host.querySelector('.gs-remote-select'),
+    host.querySelector('.gs-remote-name').innerHTML);
+  check('the remote half is empty until a push', /No commits yet/.test(host.querySelector('.gs-remote-graph').textContent),
+    host.querySelector('.gs-remote-graph').textContent);
+  await run('git push -u origin main');
+  check('a push fills the remote half', host.querySelectorAll('.gs-remote-graph circle').length === 5,
+    String(host.querySelectorAll('.gs-remote-graph circle').length));
+  check('compact rows show the HEAD ref', /HEAD → main/.test(host.querySelector('.gs-local-graph').textContent),
+    host.querySelector('.gs-local-graph').textContent);
 
   // workspace title bar: Terminal and Editor tabs over the dark pane
   const view = () => host.querySelector('.gs-wtab.is-active').getAttribute('data-view');

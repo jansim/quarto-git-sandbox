@@ -256,13 +256,12 @@ function outText(win, hostId) {
     const remoteEl = () => win.document.querySelector('#' + id + ' .gs-remote');
     const remoteCircles = () => win.document.querySelectorAll('#' + id + ' .gs-remote-graph circle').length;
     const localCircles = () => win.document.querySelectorAll('#' + id + ' .gs-graph circle').length;
-    const syncText = () => win.document.querySelector('#' + id + ' .gs-remote-sync').textContent;
 
     check('remote-flow panel is visible', !remoteEl().hidden);
     check('remote-flow seeded ahead: 2 remote vs 1 local',
       remoteCircles() === 2 && localCircles() === 1,
       'remote=' + remoteCircles() + ' local=' + localCircles());
-    check('remote-flow sync line says pull', /git pull/.test(syncText()), syncText());
+    check('remote-flow has no sync line in the view', !win.document.querySelector('#' + id + ' .gs-remote-sync'));
 
     await type('git push');
     check('remote-flow stale push rejected', /\[rejected\]/.test(outText(win, id)) && /fetch first/.test(outText(win, id)),
@@ -283,14 +282,18 @@ function outText(win, hostId) {
     await type('git add .');
     await type('git commit -m "Load the sales data"');
     check('remote-flow task 3 ticks', tasksState(win, id).done >= 3, tasksState(win, id).text);
-    check('remote-flow sync line says push', /git push/.test(syncText()), syncText());
+    await type('git status');
+    check('remote-flow status says ahead', /ahead of 'origin\/main' by 1 commit/.test(outText(win, id)),
+      outText(win, id).slice(-250));
 
     await type('git push');
     const st = tasksState(win, id);
     check('remote-flow all 4 tasks complete', st.done === 4, st.text);
     check('remote-flow graphs agree', remoteCircles() === 3 && localCircles() === 3,
       'remote=' + remoteCircles() + ' local=' + localCircles());
-    check('remote-flow sync line says in sync', /in sync/.test(syncText()), syncText());
+    await type('git status');
+    check('remote-flow status says up to date', /up to date with 'origin\/main'/.test(outText(win, id)),
+      outText(win, id).slice(-250));
   }
 
   /* ---------------- box 6: the commit tree (tree-view) ---------------- */
