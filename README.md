@@ -203,6 +203,7 @@ you can check for states the learner passes through.
 | `commits on report >= 2` | Two commits are reachable from the `report` branch |
 | `branch report` | A branch called `report` exists |
 | `on main` | `HEAD` is on `main` |
+| `detached` | `HEAD` points at a commit rather than a branch, after `git checkout <commit>` |
 | `merged report into main` | A `git merge` (or `git pull`) has actually brought `report` into `main`, and its result is still in `main`'s history. Both fast-forward and merge-commit merges count; creating `report` from `main`'s tip does not, and neither does a merge that reports "Already up to date" |
 | `merge commit` | Some commit has two parents |
 | `merging` | A merge stopped on conflicts and has not been committed or aborted yet |
@@ -262,7 +263,8 @@ Policy. `when:` does not, which is another reason to prefer it.
 ## What the sandbox supports
 
 **Git:** `init`, `status`, `add`, `rm`, `commit [-m]`, `log [--oneline]`,
-`diff`, `branch [-d]`, `checkout [-b]`, `switch [-c]`, `merge`,
+`diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
+`switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
 `fetch`, `pull`, `config user.name|user.email`
 

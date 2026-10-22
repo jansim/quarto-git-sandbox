@@ -8,6 +8,7 @@
      when: commits >= 2
      when: commits on report >= 3
      when: branch report and on main
+     when: detached
      when: merged report into main
      when: merge commit
      when: merging and not conflicts
@@ -268,6 +269,10 @@
           return function (ctx) { return ctx.graph.head === onName; };
         }
 
+        // HEAD points at a commit rather than a branch (`git checkout <commit>`)
+        case 'detached':
+          return function (ctx) { return !!ctx.graph.detached; };
+
         case 'merged': {
           var from = expectWord('a branch name after "merged"');
           var into = peek();
@@ -341,7 +346,7 @@
 
         default:
           throw new Error('unknown condition "' + word + '". Available: repo, clean, staged, ' +
-            'commits, commits on <branch>, branch <name>, on <branch>, merged <a> into <b>, ' +
+            'commits, commits on <branch>, branch <name>, on <branch>, detached, merged <a> into <b>, ' +
             'merge commit, merging, conflicts, file <name> [contains "text"], ran /regex/, remote, pushed');
       }
     }

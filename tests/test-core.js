@@ -248,6 +248,71 @@ async function scenario(name, fn) {
     check('can re-init after reset', r2.ok, r2.out);
   });
 
+  /* ---------------- 8b. checking out a commit (detached HEAD) ---------------- */
+  await scenario('detached HEAD', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo "one" > notes.txt');
+    await run('git add .');
+    const first = (await run('git commit -m "First"')).out.match(/ ([0-9a-f]{7})\]/)[1];
+    await run('echo "one two" > notes.txt');
+    await run('git add .');
+    await run('git commit -m "Second"');
+
+    let r = await run('git checkout ' + first);
+    check('checkout by short hash', r.ok && /detached HEAD/.test(r.out), r.out);
+    check('advice names the way back', /git switch main/.test(r.out), r.out);
+    check('says where HEAD is', new RegExp('HEAD is now at ' + first + ' First').test(r.out), r.out);
+    check('no current branch', (await sb.currentBranch()) === null);
+    check('workdir is the old commit', (await run('cat notes.txt')).out === 'one');
+    check('graph model is detached', (await sb.graphModel()).detached === true);
+
+    r = await run('git status');
+    check('status says detached at', new RegExp('^HEAD detached at ' + first).test(r.out), r.out);
+    r = await run('git branch');
+    check('branch lists the detached HEAD', new RegExp('\\* \\(HEAD detached at ' + first + '\\)').test(r.out), r.out);
+    r = await run('git log --oneline');
+    check('log decorates HEAD alone', /\(HEAD\) First/.test(r.out), r.out);
+
+    await run('echo "experiment" > idea.txt');
+    await run('git add .');
+    r = await run('git commit -m "Try something"');
+    check('commit on a detached HEAD', r.ok && /^\[detached HEAD [0-9a-f]{7}\] Try something/.test(r.out), r.out);
+    r = await run('git status');
+    check('status says detached from', new RegExp('^HEAD detached from ' + first).test(r.out), r.out);
+    r = await run('git merge main');
+    check('merge refused while detached', !r.ok && /detached/.test(r.out), r.out);
+
+    r = await run('git checkout main');
+    check('leaving warns about the orphaned commit',
+      r.ok && /leaving 1 commit behind/.test(r.out) && /Try something/.test(r.out) &&
+      /Switched to branch 'main'/.test(r.out), r.out);
+    check('back on main', (await sb.currentBranch()) === 'main');
+
+    r = await run('git switch HEAD~1');
+    check('switch to a commit needs --detach', !r.ok && /a branch is expected/.test(r.out) && /--detach/.test(r.out), r.out);
+    r = await run('git switch --detach HEAD~1');
+    check('switch --detach HEAD~1', r.ok && new RegExp('HEAD is now at ' + first).test(r.out), r.out);
+    r = await run('git checkout main');
+    check('leaving without orphans names the old position',
+      r.ok && new RegExp('Previous HEAD position was ' + first).test(r.out), r.out);
+
+    r = await run('git checkout main^');
+    check('branch^ resolves', r.ok && new RegExp('HEAD is now at ' + first).test(r.out), r.out);
+    r = await run('git switch -c rescue');
+    check('a branch can be made from a detached HEAD', r.ok && (await sb.currentBranch()) === 'rescue', r.out);
+    await run('git checkout main');
+
+    await run('echo "unsaved edits here" > notes.txt');
+    r = await run('git checkout ' + first);
+    check('refuses to overwrite local changes',
+      !r.ok && /would be overwritten by checkout/.test(r.out) && /notes\.txt/.test(r.out), r.out);
+    check('local changes kept', (await run('cat notes.txt')).out === 'unsaved edits here');
+    check('still on main', (await sb.currentBranch()) === 'main');
+
+    r = await run('git checkout 0000000');
+    check('unknown hash', !r.ok && /did not match/.test(r.out), r.out);
+  });
+
   /* ---------------- 9. misc error handling ---------------- */
   await scenario('errors', async ({ run, check }) => {
     await run('git init');
@@ -772,6 +837,10 @@ async function scenario(name, fn) {
     r = await run('git switch x');
     check('switch to x works', r.ok, r.out);
     check('unstaged edit survives', (await run('cat a.txt')).out === 'yyyyyyy');
+    r = await run('git switch --detach main');
+    check('detaching at the same commit works', r.ok && /HEAD is now at/.test(r.out), r.out);
+    check('and keeps the edit', (await run('cat a.txt')).out === 'yyyyyyy');
+    check('and the staged change', (await sb.statusModel()).staged.some(f => f.file === 'a.txt'));
   });
 
   await scenario('pull conflict', async ({ sb, run, check }) => {

@@ -17,9 +17,9 @@ filters:
 ## A repository on a slide
 
 A ` ```git-sandbox ` block works on a slide like anywhere else. On a slide
-there is less room, so the next one leaves out the editor and the commit
-tree and offers only two of the views below the terminal; the chevron at
-the end of their tabs folds them away.
+there is less room, so the next one keeps the commit tree behind a button
+in its title bar and offers only two of the views below the terminal; the
+chevron at the end of their tabs folds them away.
 
 Source code and issues:
 [github.com/jansim/quarto-git-sandbox](https://github.com/jansim/quarto-git-sandbox).
@@ -31,8 +31,7 @@ The [author's guide](example.html) explains every option.
 id: deck-repo
 title: Start a project
 prompt: "~/slides-demo $"
-editor: false
-tree-view: false
+tree-view: toggle
 panel-tabs: [files, history]
 intro: |
   An empty folder. Make it a repository and commit a file.

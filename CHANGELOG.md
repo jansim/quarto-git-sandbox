@@ -2,11 +2,35 @@
 
 ## Unreleased
 
+- `git checkout <commit>` (and `git switch --detach <commit>`) moves HEAD
+  to a commit instead of a branch. A commit can be named by its hash, full
+  or abbreviated, or as `HEAD~2`, `main^` and the like. The learner sees
+  git's own "detached HEAD" note; `git status`, `git branch` and `git log`
+  show the detached HEAD; commits made there print `[detached HEAD …]`;
+  and switching back to a branch warns about any commits that would be
+  left behind, naming them. `git switch <commit>` without `--detach` is
+  refused with git's hint. A new `when: detached` condition checks for it.
+- `git checkout` and `git switch` refuse to move HEAD when uncommitted
+  changes would be overwritten, as git does, instead of silently
+  discarding them.
+- The File Status animations land where they should on reveal.js slides.
+  They measured the scaled slide on screen but moved the chips in the
+  slide's own pixels, so files overshot their column and the commit node
+  formed away from the staged files.
+- The working directory lists only changed files. Committed files with no
+  changes no longer fill it; before `git init` every file still shows.
+- The views below the terminal scroll within a fixed maximum height instead
+  of growing with the repository, on a plain page as on a slide.
+- On a slide, the terminal and editor get more of the box; the tasks and
+  the views below take a smaller strip.
+- A title too long for the title bar is cut short with an ellipsis (the
+  full title shows on hover) instead of wrapping.
+- The first box in the reveal.js demo offers the editor and a button for
+  the commit tree.
 - `git checkout` and `git switch` between two branches on the same commit
   keep staged and modified files, as real git does. They used to reset the
   working tree and the staging area to the commit, so `git switch -c x`
   followed by `git checkout main` silently threw away work in progress.
-
 - The File Status animations are paced to be followed. `git add` eases files
   across instead of snapping them over, and the files left behind close the
   gap afterwards. On `git commit` the staged files morph together into one
