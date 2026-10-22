@@ -306,9 +306,11 @@ async function scenario(name, steps) {
 
   await scenario('help, config and redirection', [
     // git exits 129 after -h; the sandbox treats it as success
-    ...['init', 'status', 'add', 'commit', 'rm', 'restore', 'reset', 'log', 'branch', 'checkout',
-      'switch', 'merge', 'remote', 'push', 'pull', 'fetch', 'clone', 'config', 'stash', 'check-ignore']
+    ...['init', 'status', 'add', 'rm', 'restore', 'reset', 'log', 'branch', 'checkout',
+      'switch', 'merge', 'remote', 'push', 'pull', 'fetch', 'clone', 'stash', 'check-ignore']
       .map((c) => ({ cmd: 'git ' + c + ' -h', firstLine: true, ok: true })),
+    // the sandbox has git 2.55's wording; older gits word these two differently
+    ...['commit', 'config'].map((c) => ({ cmd: 'git ' + c + ' -h', firstLine: true, ok: true, minGit: '2.55' })),
     { cmd: 'git config pull.rebase false', exact: true },
     { cmd: 'git config --global user.name "Ada Lovelace"', exact: true },
     { cmd: 'git config user.name', exact: true },
@@ -322,6 +324,10 @@ async function scenario(name, steps) {
     { cmd: 'git status', exact: true },
     { cmd: 'git config pull.rebase false', exact: true },
     { cmd: 'git config pull.rebase', exact: true },
+    { cmd: 'git config set core.autocrlf false', exact: true, minGit: '2.46' },
+    { cmd: 'git config get core.autocrlf', exact: true, minGit: '2.46' },
+    { cmd: 'git config unset core.autocrlf', exact: true, minGit: '2.46' },
+    { cmd: 'git config get core.autocrlf', exact: true, minGit: '2.46' },
     { cmd: 'git config no.such.key', exact: true },
     { cmd: 'echo a > a.txt && git add . && git commit -q -m one', setup: true },
     { cmd: 'git log --oneline > log.txt', exact: true },
