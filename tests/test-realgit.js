@@ -15,6 +15,9 @@
    A step with `sandbox` runs that instead in the sandbox, for setups the
    two reach differently (a colleague's push is a second clone for git,
    and a push followed by `rewind` in the sandbox).
+   A step with `minGit` is only compared when the installed git is at
+   least that version, for output that changed between git releases; CI
+   runs a current git, so there every step counts.
 
    Needs `git` on PATH. Run: node tests/test-realgit.js */
 const { spawnSync } = require('child_process');
@@ -63,6 +66,17 @@ function realGit(line, cwd, env) {
   return { out: r.stdout, ok: r.status === 0 };
 }
 
+function versionOf(text) {
+  const m = /(\d+)\.(\d+)/.exec(text || '');
+  return m ? [Number(m[1]), Number(m[2])] : [0, 0];
+}
+const GIT_VERSION = versionOf(spawnSync('git', ['--version'], { encoding: 'utf8' }).stdout);
+function gitAtLeast(v) {
+  const [maj, min] = versionOf(v);
+  return GIT_VERSION[0] > maj || (GIT_VERSION[0] === maj && GIT_VERSION[1] >= min);
+}
+let skipped = 0;
+
 async function scenario(name, steps) {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gs-real-')));
   const work = path.join(tmp, 'project');
@@ -100,6 +114,7 @@ async function scenario(name, steps) {
         if (!real.ok) throw new Error('setup failed in git: ' + s.cmd + '\n' + real.out);
         continue;
       }
+      if (s.minGit && !gitAtLeast(s.minGit)) { skipped++; continue; }
       const label = name + ' :: ' + s.cmd;
       const a = normalise(mine.out, reps).filter((l) => !(s.ignore || []).some((re) => re.test(l)));
       const b = normalise(real.out, reps);
@@ -297,9 +312,11 @@ async function scenario(name, steps) {
 
   await scenario('help, config and redirection', [
     // git exits 129 after -h; the sandbox treats it as success
-    ...['init', 'status', 'add', 'commit', 'rm', 'restore', 'reset', 'log', 'branch', 'checkout',
-      'switch', 'merge', 'remote', 'push', 'pull', 'fetch', 'clone', 'config', 'stash', 'check-ignore']
+    ...['init', 'status', 'add', 'rm', 'restore', 'reset', 'log', 'branch', 'checkout',
+      'switch', 'merge', 'remote', 'push', 'pull', 'fetch', 'clone', 'stash', 'check-ignore']
       .map((c) => ({ cmd: 'git ' + c + ' -h', firstLine: true, ok: true })),
+    // the sandbox has git 2.55's wording; older gits word these two differently
+    ...['commit', 'config'].map((c) => ({ cmd: 'git ' + c + ' -h', firstLine: true, ok: true, minGit: '2.55' })),
     { cmd: 'git config pull.rebase false', exact: true },
     { cmd: 'git config --global user.name "Ada Lovelace"', exact: true },
     { cmd: 'git config user.name', exact: true },
@@ -313,6 +330,10 @@ async function scenario(name, steps) {
     { cmd: 'git status', exact: true },
     { cmd: 'git config pull.rebase false', exact: true },
     { cmd: 'git config pull.rebase', exact: true },
+    { cmd: 'git config set core.autocrlf false', exact: true, minGit: '2.46' },
+    { cmd: 'git config get core.autocrlf', exact: true, minGit: '2.46' },
+    { cmd: 'git config unset core.autocrlf', exact: true, minGit: '2.46' },
+    { cmd: 'git config get core.autocrlf', exact: true, minGit: '2.46' },
     { cmd: 'git config no.such.key', exact: true },
     { cmd: 'echo a > a.txt && git add . && git commit -q -m one', setup: true },
     { cmd: 'git log --oneline > log.txt', exact: true },
@@ -343,10 +364,14 @@ async function scenario(name, steps) {
     { cmd: 'git status', exact: true },
     { cmd: 'echo b > b.txt && git add . && git commit -q -m two', setup: true },
     { cmd: 'git status', exact: true },
+    { cmd: 'git log -n 1 --oneline', exact: true },
+    { cmd: 'git log --oneline -5', exact: true },
     { cmd: 'git push -q', setup: true },
     colleague('main', 'c.txt'),
     { cmd: 'git status', exact: true },
     'git fetch',
+    { cmd: 'git log --oneline origin/main', exact: true, minGit: '2.48' },
+    { cmd: 'git log --oneline nope', exact: true },
     { cmd: 'git status', exact: true },
     { cmd: 'git checkout main', exact: true },
     'git pull origin main',
@@ -356,10 +381,11 @@ async function scenario(name, steps) {
     { cmd: 'git fetch -q', setup: true },
     { cmd: 'git status', exact: true },
     { cmd: 'git merge origin/main', ignore: [/\|/, /changed/, /create mode/] },
-    { cmd: 'git log --oneline -1', sandbox: 'git log --oneline', firstLine: true },
+    { cmd: 'git log --oneline -1', exact: true },
     { cmd: 'git push -q', setup: true },
-    { cmd: 'git branch -r', exact: true },
-    { cmd: 'git branch -a', exact: true },
+    // git 2.48+ records origin/HEAD on fetch, and so does the sandbox
+    { cmd: 'git branch -r', exact: true, minGit: '2.48' },
+    { cmd: 'git branch -a', exact: true, minGit: '2.48' },
     colleague('feature', 'f.txt'),
     'git fetch',
     { cmd: 'git switch feature', exact: true },
@@ -406,7 +432,8 @@ async function scenario(name, steps) {
   ]);
 
   console.log('\n===== real git comparison =====');
-  console.log('passed: ' + pass + '   failed: ' + fail);
+  console.log('passed: ' + pass + '   failed: ' + fail +
+    (skipped ? '   (' + skipped + ' steps skipped: they need a newer git than ' + GIT_VERSION.join('.') + ')' : ''));
   if (fail) {
     console.log('\nFAILURES:');
     failures.forEach((f) => console.log('  ✗ ' + f));
