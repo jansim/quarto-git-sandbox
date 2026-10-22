@@ -14,9 +14,19 @@
   (and onto its own row above the tabs on narrow screens). The Editor tab is a file browser plus a text editor over
   the same working directory the terminal sees, so learners can edit a file
   properly instead of only through `echo "…" > file`.
-- The file browser lists every working-directory file with its git status
-  letter (`U` untracked, `M` modified, `A` staged) and a `+ New` button that
-  also creates files in new folders (`data/notes.md`).
+- The tabs are part of the title bar's chrome: full bar height, flush left,
+  in the same uppercase mono as the title and the Undo/Reset buttons.
+- The file browser is a tree headed by the working directory's name. Folders
+  (empty ones too) collapse and expand with a chevron; a dot marks folders
+  with changes inside, and files carry their git status letter (`U`
+  untracked, `M` modified, `A` staged).
+- An up arrow walks to the folders above the working directory (taken from
+  the prompt path, e.g. `~/demo-project` to `~`), where the working
+  directory shows marked `cwd`; a home button comes back.
+- A "Show hidden files" switch at the foot of the sidebar reveals dotfiles
+  and `.git`. Files inside `.git` open read-only, and binary ones (git's
+  compressed objects) say so instead of showing noise.
+- The `+` button creates files, also in new folders (`data/notes.md`).
 - Edits are drafts until saved (Save button or Ctrl/Cmd+S), so nothing shows
   up in `git status` before the learner means it to. Drafts survive switching
   files, and an unsaved dot on the file and on the Editor tab says so.

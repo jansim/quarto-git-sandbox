@@ -359,6 +359,20 @@
       return out.sort();
     }
 
+    // Every file and folder under the workdir, .git included, as
+    // [{ path, type: 'file' | 'dir' }] relative to it. The editor's file
+    // browser needs folders (empty ones too) and hidden files, which
+    // listFiles leaves out on purpose.
+    async function listTree() {
+      var out = [];
+      var prefix = dir + '/';
+      fs._store.forEach(function (v, k) {
+        if (k.indexOf(prefix) !== 0) return;
+        out.push({ path: k.slice(prefix.length), type: v.type === 'dir' ? 'dir' : 'file' });
+      });
+      return out.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
+    }
+
     /* ------------------------------ remote -------------------------- */
 
     // options builder for commands that read the remote's bare repo
@@ -1307,7 +1321,9 @@
       isRepo: isRepo,
       currentBranch: currentBranch,
       listFiles: listFiles,
+      listTree: listTree,
       readFile: function (p) { return fs.promises.readFile(abs(p), 'utf8'); },
+      readBytes: function (p) { return fs.promises.readFile(abs(p)); },
       // Creates missing parent folders, so the editor can make `data/notes.md`
       // without a separate mkdir.
       writeFile: function (p, c) {

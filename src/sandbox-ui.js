@@ -5,6 +5,16 @@
 (function (root) {
   'use strict';
 
+  // Small stroke icons for the file browser; currentColor keeps them on theme.
+  function icon(d) {
+    return '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+      '<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  var ICON_CHEVRON = icon('M6 4l4 4-4 4');
+  var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
+  var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
+  var ICON_PLUS = icon('M8 3v10M3 8h10');
+
   var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
 
   function esc(s) {
@@ -385,15 +395,21 @@
           '<div class="gs-view gs-view-editor" role="tabpanel" data-view="editor" hidden>' +
             '<div class="gs-fb">' +
               '<div class="gs-fb-head">' +
-                '<span class="gs-fb-title">Files</span>' +
-                '<button type="button" class="gs-fb-new" aria-label="New file" title="New file">+ New</button>' +
+                '<button type="button" class="gs-fb-btn gs-fb-up" aria-label="Up one folder" title="Up one folder">' + ICON_UP + '</button>' +
+                '<span class="gs-fb-title"></span>' +
+                '<button type="button" class="gs-fb-btn gs-fb-home" aria-label="Back to the working directory" title="Back to the working directory" hidden>' + ICON_HOME + '</button>' +
+                '<button type="button" class="gs-fb-btn gs-fb-new" aria-label="New file" title="New file">' + ICON_PLUS + '</button>' +
               '</div>' +
               '<form class="gs-fb-create" autocomplete="off" hidden>' +
                 '<input class="gs-fb-name" type="text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
                 ' aria-label="New file name" placeholder="name, e.g. notes.md">' +
                 '<div class="gs-fb-err" role="alert"></div>' +
               '</form>' +
-              '<ul class="gs-fb-list" aria-label="Files in the working directory"></ul>' +
+              '<ul class="gs-fb-list" aria-label="Files"></ul>' +
+              '<label class="gs-fb-foot">' +
+                '<input type="checkbox" class="gs-fb-hidden" role="switch">' +
+                '<span class="gs-switch" aria-hidden="true"></span>Show hidden files' +
+              '</label>' +
             '</div>' +
             '<div class="gs-ed">' +
               '<div class="gs-ed-head">' +
@@ -579,6 +595,8 @@
         viewButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
         viewPanes[k].hidden = !on;
       });
+      // lets narrow screens give the stacked file tree + editor more room
+      host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
       if (!focus) return;
       if (name === 'terminal') input.focus();
       else if (openFile) edText.focus();
@@ -591,6 +609,10 @@
     /* ------------------------- file editor ---------------------------- */
 
     var fbList = host.querySelector('.gs-fb-list');
+    var fbTitle = host.querySelector('.gs-fb-title');
+    var fbUp = host.querySelector('.gs-fb-up');
+    var fbHome = host.querySelector('.gs-fb-home');
+    var fbHidden = host.querySelector('.gs-fb-hidden');
     var fbNewBtn = host.querySelector('.gs-fb-new');
     var fbCreate = host.querySelector('.gs-fb-create');
     var fbName = host.querySelector('.gs-fb-name');
@@ -604,13 +626,30 @@
     var dirtyDot = host.querySelector('.gs-wtab-dirty');
 
     var openFile = null;   // path of the file shown in the editor
+    var openKind = 'text'; // 'text', 'readonly' (inside .git) or 'binary'
     var savedText = '';    // that file's contents on disk
     // Unsaved edits per file, so hopping between files never loses work and
     // nothing reaches the working directory (or git status) until Save.
     var drafts = {};
-    var lastFiles = [];
+    var lastTree = [];     // [{ path, type }] under the working directory
+    var fileSet = {};      // path -> true for every file in lastTree
     var lastStatus = null;
     var edNote = '';
+
+    // The sandbox has no `cd`, so the working directory is always the
+    // project. "Up" walks the folders of the prompt's path (~/demo-project
+    // -> ~); they hold nothing but the way back down, which is the truth as
+    // far as this page's filesystem goes.
+    var pathSegs = (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/');
+    if (pathSegs[0] === '') pathSegs[0] = '/';
+    pathSegs = pathSegs.filter(function (x) { return x !== ''; });
+    var upLevels = 0;
+    var expanded = {};     // folder key -> true; real folders use their path
+    var showHidden = false;
+
+    function isHidden(path) {
+      return path.split('/').some(function (seg) { return seg.charAt(0) === '.'; });
+    }
 
     function fileMark(f, status) {
       if (!status) return null;
@@ -620,45 +659,130 @@
       return null;
     }
 
-    function renderFileBrowser() {
-      if (!lastFiles.length) {
-        fbList.innerHTML = '<li class="gs-fb-none">No files yet.</li>';
-        return;
+    function buildTree() {
+      var top = { children: {} };
+      lastTree.forEach(function (e) {
+        if (!showHidden && isHidden(e.path)) return;
+        var parts = e.path.split('/'), node = top;
+        parts.forEach(function (part, i) {
+          if (!node.children[part]) {
+            node.children[part] = {
+              name: part, key: parts.slice(0, i + 1).join('/'),
+              type: i === parts.length - 1 ? e.type : 'dir', children: {}
+            };
+          }
+          node = node.children[part];
+        });
+      });
+      // Above the working directory, wrap it in the prompt path's folders.
+      for (var i = 0; i < upLevels; i++) {
+        var seg = pathSegs.length - 1 - i;
+        var wrap = { children: {} };
+        wrap.children[pathSegs[seg]] = {
+          name: pathSegs[seg], key: '../' + seg, type: 'dir', virtual: true,
+          cwd: i === 0, children: top.children
+        };
+        top = wrap;
       }
-      fbList.innerHTML = lastFiles.map(function (f) {
-        var cut = f.lastIndexOf('/');
-        var name = cut === -1 ? esc(f)
-          : '<span class="gs-fb-dir">' + esc(f.slice(0, cut + 1)) + '</span>' + esc(f.slice(cut + 1));
-        var mark = fileMark(f, lastStatus);
-        var on = f === openFile;
-        return '<li><button type="button" class="gs-fb-file' + (on ? ' is-open' : '') + '"' +
-          (on ? ' aria-current="true"' : '') + ' data-file="' + esc(f) + '">' +
-          '<span class="gs-fb-fname">' + name + '</span>' +
-          (f in drafts ? '<span class="gs-fb-dirty" title="Unsaved changes">●<span class="gs-sr"> (unsaved)</span></span>' : '') +
+      return top;
+    }
+
+    function changedUnder(node) {
+      if (node.type === 'file') return !!fileMark(node.key, lastStatus);
+      return Object.keys(node.children).some(function (k) { return changedUnder(node.children[k]); });
+    }
+
+    function treeRows(node, depth) {
+      var kids = Object.keys(node.children).map(function (k) { return node.children[k]; });
+      kids.sort(function (x, y) {
+        if (x.type !== y.type) return x.type === 'dir' ? -1 : 1;
+        return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
+      });
+      return kids.map(function (n) {
+        if (n.type === 'dir') {
+          var open = !!expanded[n.key];
+          var inner = Object.keys(n.children).length
+            ? treeRows(n, depth + 1)
+            : '<li class="gs-fb-none" data-depth="' + (depth + 1) + '">empty</li>';
+          return '<li><button type="button" class="gs-fb-row gs-fb-folder' + (n.cwd ? ' is-cwd' : '') + '"' +
+            ' aria-expanded="' + open + '" data-dir="' + esc(n.key) + '" data-depth="' + depth + '">' +
+            '<span class="gs-fb-chev">' + ICON_CHEVRON + '</span>' +
+            '<span class="gs-fb-fname">' + esc(n.name) + '/</span>' +
+            (n.cwd ? '<span class="gs-fb-cwd" title="working directory">cwd</span>' : '') +
+            (changedUnder(n) ? '<span class="gs-fb-changed" title="contains changes">●<span class="gs-sr"> (contains changes)</span></span>' : '') +
+            '</button>' + (open ? '<ul role="group">' + inner + '</ul>' : '') + '</li>';
+        }
+        var mark = fileMark(n.key, lastStatus);
+        var on = n.key === openFile;
+        return '<li><button type="button" class="gs-fb-row gs-fb-file' + (on ? ' is-open' : '') + '"' +
+          (on ? ' aria-current="true"' : '') + ' data-file="' + esc(n.key) + '" data-depth="' + depth + '">' +
+          '<span class="gs-fb-fname">' + esc(n.name) + '</span>' +
+          (n.key in drafts ? '<span class="gs-fb-dirty" title="Unsaved changes">●<span class="gs-sr"> (unsaved)</span></span>' : '') +
           (mark ? '<span class="gs-fb-mark gs-fb-mark-' + mark.cls + '" title="' + mark.label + '">' + mark.k +
             '<span class="gs-sr"> (' + mark.label + ')</span></span>' : '') +
           '</button></li>';
       }).join('');
     }
 
+    function renderFileBrowser() {
+      var here = pathSegs[pathSegs.length - 1 - upLevels] || '';
+      fbTitle.textContent = here;
+      fbTitle.title = pathSegs.slice(0, pathSegs.length - upLevels).join('/').replace(/^\/\//, '/');
+      fbUp.disabled = upLevels >= pathSegs.length - 1;
+      fbHome.hidden = upLevels === 0;
+      var html = treeRows(buildTree(), 0);
+      fbList.innerHTML = html || '<li class="gs-fb-none" data-depth="0">No files yet.</li>';
+      // Indent through the CSSOM rather than style="" attributes, which a
+      // strict Content Security Policy would block.
+      fbList.querySelectorAll('[data-depth]').forEach(function (n) {
+        n.style.paddingLeft = (10 + Number(n.getAttribute('data-depth')) * 14 +
+          (n.classList.contains('gs-fb-folder') ? 0 : 16)) + 'px';
+      });
+    }
+
+    function revealInTree(f) {
+      var parts = f.split('/');
+      for (var i = 1; i < parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
+    }
+
     function renderEditor() {
-      var dirty = !!openFile && edText.value !== savedText;
-      edText.hidden = !openFile;
-      edEmpty.hidden = !!openFile;
-      edEmpty.textContent = lastFiles.length
-        ? 'Pick a file on the left to open it here.'
-        : 'No files yet. Use + New to create one.';
+      var dirty = !!openFile && openKind === 'text' && edText.value !== savedText;
+      var showText = !!openFile && openKind !== 'binary';
+      edText.hidden = !showText;
+      edText.readOnly = openKind !== 'text';
+      edEmpty.hidden = showText;
+      edEmpty.textContent = openFile
+        ? 'This file is binary (git stores objects compressed), so there is nothing readable to show.'
+        : (Object.keys(fileSet).length ? 'Pick a file on the left to open it here.'
+          : 'No files yet. Use + to create one.');
       edName.textContent = openFile || '';
       edSave.disabled = !dirty;
       edRevert.disabled = !dirty;
-      edStatus.textContent = dirty ? 'unsaved' : edNote;
+      edStatus.textContent = dirty ? 'unsaved'
+        : openFile && openKind !== 'text' ? 'read-only' + (openKind === 'readonly' ? ', managed by git' : '')
+        : edNote;
       dirtyDot.hidden = !Object.keys(drafts).length;
+    }
+
+    // Read the open file and decide how it can be shown. Anything under
+    // .git is git's own bookkeeping: viewable, but editing it by hand is how
+    // repositories get broken, so it is read-only.
+    async function loadOpenFile() {
+      var bytes;
+      try { bytes = await sb.readBytes(openFile); } catch (e) { bytes = new Uint8Array(0); }
+      var text = null;
+      if (bytes.indexOf(0) === -1) {
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { text = null; }
+      }
+      openKind = text === null ? 'binary' : (/^\.git(\/|$)/.test(openFile) ? 'readonly' : 'text');
+      savedText = text || '';
     }
 
     async function openInEditor(f) {
       openFile = f;
       edNote = '';
-      try { savedText = await sb.readFile(f); } catch (e) { savedText = ''; }
+      revealInTree(f);
+      await loadOpenFile();
       edText.value = f in drafts ? drafts[f] : savedText;
       renderFileBrowser();
       renderEditor();
@@ -667,13 +791,14 @@
     // After any command, undo or reset, pick up what changed on disk. A file
     // with an unsaved draft keeps the draft: the learner's typing wins.
     async function syncEditor() {
-      if (openFile && lastFiles.indexOf(openFile) === -1 && !(openFile in drafts)) {
+      if (openFile && !fileSet[openFile] && !(openFile in drafts)) {
         openFile = null;
+        openKind = 'text';
         edText.value = '';
         savedText = '';
       }
       if (openFile) {
-        try { savedText = await sb.readFile(openFile); } catch (e) { savedText = ''; }
+        await loadOpenFile();
         if (!(openFile in drafts) && edText.value !== savedText) edText.value = savedText;
       }
       renderFileBrowser();
@@ -746,7 +871,7 @@
       fbErr.textContent = '';
       fbCreate.hidden = true;
       fbName.value = '';
-      if (lastFiles.indexOf(name) === -1) {
+      if (!fileSet[name]) {
         if (!(await editorWrite(name, '', 'create ' + name))) return;
       }
       await openInEditor(name);
@@ -754,8 +879,33 @@
     }
 
     fbList.addEventListener('click', function (e) {
-      var b = e.target.closest ? e.target.closest('.gs-fb-file') : null;
-      if (b) openInEditor(b.getAttribute('data-file')).then(function () { edText.focus(); });
+      var b = e.target.closest ? e.target.closest('.gs-fb-row') : null;
+      if (!b) return;
+      if (b.hasAttribute('data-dir')) {
+        var k = b.getAttribute('data-dir');
+        expanded[k] = !expanded[k];
+        renderFileBrowser();
+        var again = fbList.querySelector('[data-dir="' + k.replace(/["\\]/g, '\\$&') + '"]');
+        if (again) again.focus();
+        return;
+      }
+      openInEditor(b.getAttribute('data-file')).then(function () { if (!edText.hidden) edText.focus(); });
+    });
+    fbUp.addEventListener('click', function () {
+      if (upLevels >= pathSegs.length - 1) return;
+      upLevels++;
+      // open the way back down so the working directory stays in view
+      for (var i = 0; i < upLevels; i++) expanded['../' + (pathSegs.length - 1 - i)] = true;
+      renderFileBrowser();
+    });
+    fbHome.addEventListener('click', function () {
+      upLevels = 0;
+      renderFileBrowser();
+      fbUp.focus();
+    });
+    fbHidden.addEventListener('change', function () {
+      showHidden = fbHidden.checked;
+      renderFileBrowser();
     });
     edText.addEventListener('input', function () {
       if (!openFile) return;
@@ -848,7 +998,9 @@
       renderStages(stagesNode, status, graph, files, isRepo);
       renderDiff(diffNode, diff);
       renderGraph(svg, graph);
-      lastFiles = files;
+      lastTree = await sb.listTree();
+      fileSet = {};
+      lastTree.forEach(function (e) { if (e.type === 'file') fileSet[e.path] = true; });
       lastStatus = isRepo ? status : null;
       await syncEditor();
       lastGraph = graph;
@@ -1009,10 +1161,13 @@
       // unsaved drafts belong to the run being thrown away
       drafts = {};
       openFile = null;
+      openKind = 'text';
       edText.value = '';
       savedText = '';
       edNote = '';
       fbCreate.hidden = true;
+      upLevels = 0;
+      expanded = {};
       try {
         await sb.reset(seed);
       } catch (e) {

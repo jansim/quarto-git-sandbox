@@ -389,6 +389,59 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await run('git rm notes/todo.md');
   check('a deleted open file closes the editor', edText.hidden === true && !fileBtn('notes/todo.md'));
 
+  // the browser is a tree rooted at the working directory
+  const fbTitle = () => host.querySelector('.gs-fb-title').textContent;
+  const folder = (k) => host.querySelector('.gs-fb-folder[data-dir="' + k + '"]');
+  check('browser header shows the working directory name only', fbTitle() === 'project', fbTitle());
+  await run('mkdir data/raw');
+  await run('echo x > data/raw/q3.csv');
+  await run('mkdir empty');
+  click(folder('notes')); // close the folder the new file opened
+  check('folders list before files, each with a chevron, collapsed',
+    !!folder('data') && folder('data').getAttribute('aria-expanded') === 'false' &&
+    !!folder('data').querySelector('.gs-fb-chev svg') && !fileBtn('data/raw/q3.csv') &&
+    host.querySelector('.gs-fb-row').classList.contains('gs-fb-folder'),
+    host.querySelector('.gs-fb-list').innerHTML.slice(0, 400));
+  check('a folder with changes inside says so', !!folder('data').querySelector('.gs-fb-changed'));
+  click(folder('data'));
+  check('a chevron click shows the children', folder('data').getAttribute('aria-expanded') === 'true' &&
+    !!folder('data/raw') && !fileBtn('data/raw/q3.csv'));
+  click(folder('data/raw'));
+  check('nested folders expand too', !!fileBtn('data/raw/q3.csv'));
+  check('nested rows are indented deeper',
+    parseInt(fileBtn('data/raw/q3.csv').style.paddingLeft, 10) > parseInt(folder('data/raw').style.paddingLeft, 10) &&
+    parseInt(folder('data/raw').style.paddingLeft, 10) > parseInt(folder('data').style.paddingLeft, 10));
+  click(folder('empty'));
+  check('an empty folder says so', /empty/.test(folder('empty').parentNode.textContent));
+  click(folder('data'));
+  check('collapsing hides the subtree', !folder('data/raw'));
+
+  // hidden files
+  check('hidden files are off by default', !folder('.git'));
+  const hiddenToggle = host.querySelector('.gs-fb-foot .gs-fb-hidden');
+  check('the hidden-files toggle sits at the foot of the sidebar',
+    !!hiddenToggle && host.querySelector('.gs-fb').lastElementChild.classList.contains('gs-fb-foot'));
+  hiddenToggle.checked = true; hiddenToggle.dispatchEvent(new win.Event('change'));
+  check('the toggle reveals .git', !!folder('.git'));
+  click(folder('.git'));
+  click(fileBtn('.git/HEAD')); await sleep(30);
+  check('.git files open read-only', edText.readOnly === true && /ref: refs\/heads\/main/.test(edText.value) &&
+    /read-only/.test(host.querySelector('.gs-ed-status').textContent),
+    host.querySelector('.gs-ed-status').textContent);
+  hiddenToggle.checked = false; hiddenToggle.dispatchEvent(new win.Event('change'));
+  check('turning it off hides them again', !folder('.git'));
+
+  // moving up from the working directory
+  check('home button hidden at the working directory', host.querySelector('.gs-fb-home').hidden === true);
+  click(host.querySelector('.gs-fb-up'));
+  check('up shows the parent folder by name', fbTitle() === '~', fbTitle());
+  check('the working directory shows inside it, open and marked',
+    folder('../1') && folder('../1').getAttribute('aria-expanded') === 'true' &&
+    !!folder('../1').querySelector('.gs-fb-cwd') && !!fileBtn('a.txt'));
+  check('cannot go above the top of the prompt path', host.querySelector('.gs-fb-up').disabled === true);
+  click(host.querySelector('.gs-fb-home'));
+  check('home returns to the working directory', fbTitle() === 'project' && !folder('../1'));
+
   click(host.querySelector('.gs-wtab[data-view="terminal"]'));
   check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);
 
