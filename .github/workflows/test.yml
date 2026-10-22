@@ -2,8 +2,17 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
+
+# A push to a branch with an open PR triggers both a push and a pull_request
+# run for the same commit. Both land in the same group (keyed by source repo
+# and branch), so the later one cancels the other. This also cancels stale
+# runs when new commits are pushed. The repo is part of the key so a fork's
+# PR from a same-named branch doesn't cancel runs here.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   test:
