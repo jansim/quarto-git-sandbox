@@ -400,7 +400,8 @@ in the middle of it.
 
 `git remote add origin <url>` in a seed creates a **mock remote**, a
 second repository inside the page, and reveals the *Remote*
-tab, drawn as its own commit graph with an in-sync/ahead/behind summary.
+tab: the local history and the remote's side by side, each as a compact
+commit graph, with an in-sync/ahead/behind summary.
 Push, fetch, and pull behave like the real thing, including rejected
 non-fast-forward pushes.
 
