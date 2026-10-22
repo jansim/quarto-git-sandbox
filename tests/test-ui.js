@@ -192,13 +192,21 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('editing a file auto-switches to files', activeTab() === 'files');
   check('files badge counts the modified file', badge('files').textContent === '1',
     badge('files').outerHTML);
-  await run('git checkout fix.txt');
+  // git commands never move the learner off the view they chose
+  host.querySelector('.gs-tab[data-tab="history"]').dispatchEvent(new win.Event('click'));
+  for (const cmd of ['git status', 'git diff', 'git add fix.txt', 'git restore --staged fix.txt',
+    'git log', 'git branch', 'git checkout fix.txt']) {
+    await run(cmd);
+    check(cmd + ' leaves the chosen tab alone', activeTab() === 'history', activeTab());
+  }
 
   // the remote tab appears once origin exists
   await run('git remote add origin https://example.com/demo.git');
   check('remote tab appears with a remote',
     host.querySelector('.gs-tab[data-tab="remote"]').hidden === false);
-  check('git remote auto-switches to the remote tab', activeTab() === 'remote');
+  check('git remote leaves the chosen tab alone', activeTab() === 'history');
+  host.querySelector('.gs-tab[data-tab="remote"]').dispatchEvent(new win.Event('click'));
+  check('the new remote tab can be selected', activeTab() === 'remote');
 
   // undo: full time travel over the last state-changing command
   check('undo button enabled once something is undoable',
