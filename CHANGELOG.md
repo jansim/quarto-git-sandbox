@@ -9,6 +9,19 @@
   to the previous one. Leaving the project is refused with a message saying
   why.
 - `ls` accepts a folder to list, e.g. `ls src`.
+- The terminal pane gets a window-style title bar with two tabs, **Terminal**
+  and **Editor**. The Editor tab is a file browser plus a text editor over
+  the same working directory the terminal sees, so learners can edit a file
+  properly instead of only through `echo "…" > file`.
+- The file browser lists every working-directory file with its git status
+  letter (`U` untracked, `M` modified, `A` staged) and a `+ New` button that
+  also creates files in new folders (`data/notes.md`).
+- Edits are drafts until saved (Save button or Ctrl/Cmd+S), so nothing shows
+  up in `git status` before the learner means it to. Drafts survive switching
+  files, and an unsaved dot on the file and on the Editor tab says so.
+- A save is a state change like any command: it re-runs the task checks and
+  can be taken back with Undo. Changes made from the terminal (an `echo`, a
+  `git checkout`) reload in the editor unless it holds an unsaved draft.
 
 ## 1.1.0
 

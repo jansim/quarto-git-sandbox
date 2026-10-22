@@ -1318,7 +1318,14 @@
       currentBranch: currentBranch,
       listFiles: listFiles,
       readFile: function (p) { return fs.promises.readFile(abs(p), 'utf8'); },
-      writeFile: function (p, c) { return ensureWorkdir().then(function () { return fs.promises.writeFile(abs(p), c); }); },
+      // Creates missing parent folders, so the editor can make `data/notes.md`
+      // without a separate mkdir.
+      writeFile: function (p, c) {
+        var target = abs(p);
+        return ensureWorkdir()
+          .then(function () { return fs.promises.mkdir(fs._dirname(target), { recursive: true }); })
+          .then(function () { return fs.promises.writeFile(target, c); });
+      },
       get fs() { return fs; },
       get dir() { return dir; },
       git: gitlib
@@ -1732,7 +1739,7 @@
 
 
 /* ------------------------------------------------------------------
-   git sandbox UI: terminal + staging diagram + commit graph.
+   git sandbox UI: terminal + file editor + staging diagram + commit graph.
    Depends on window.GitSandboxCore and window.git (isomorphic-git UMD).
    ------------------------------------------------------------------ */
 (function (root) {
@@ -2095,14 +2102,50 @@
       '</div>' +
       '<div class="gs-body">' +
         '<div class="gs-term-wrap">' +
-          '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
-          '<form class="gs-input-row" autocomplete="off">' +
-            '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
-            '<input class="gs-input" id="' + (host.id || 'gs') + '-in" type="text" spellcheck="false"' +
-            ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
-            ' placeholder="type a command and press Enter">' +
-          '</form>' +
-          '<div class="gs-hints"></div>' +
+          // Window-style title bar: the terminal and the file editor share
+          // the dark pane, one at a time, like tabs in a code editor.
+          '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
+            '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
+              '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
+            '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+              '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+              '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+          '</div>' +
+          '<div class="gs-view" role="tabpanel" data-view="terminal">' +
+            '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
+            '<form class="gs-input-row" autocomplete="off">' +
+              '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
+              '<input class="gs-input" id="' + (host.id || 'gs') + '-in" type="text" spellcheck="false"' +
+              ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
+              ' placeholder="type a command and press Enter">' +
+            '</form>' +
+            '<div class="gs-hints"></div>' +
+          '</div>' +
+          '<div class="gs-view gs-view-editor" role="tabpanel" data-view="editor" hidden>' +
+            '<div class="gs-fb">' +
+              '<div class="gs-fb-head">' +
+                '<span class="gs-fb-title">Files</span>' +
+                '<button type="button" class="gs-fb-new" aria-label="New file" title="New file">+ New</button>' +
+              '</div>' +
+              '<form class="gs-fb-create" autocomplete="off" hidden>' +
+                '<input class="gs-fb-name" type="text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
+                ' aria-label="New file name" placeholder="name, e.g. notes.md">' +
+                '<div class="gs-fb-err" role="alert"></div>' +
+              '</form>' +
+              '<ul class="gs-fb-list" aria-label="Files in the working directory"></ul>' +
+            '</div>' +
+            '<div class="gs-ed">' +
+              '<div class="gs-ed-head">' +
+                '<span class="gs-ed-name"></span>' +
+                '<span class="gs-ed-status" role="status"></span>' +
+                '<button type="button" class="gs-ed-btn gs-ed-revert" disabled>Revert</button>' +
+                '<button type="button" class="gs-ed-btn gs-ed-save" disabled>Save</button>' +
+              '</div>' +
+              '<textarea class="gs-ed-text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
+              ' aria-label="File contents" hidden></textarea>' +
+              '<div class="gs-ed-empty"></div>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
         '<div class="gs-tasks"></div>' +
         '<div class="gs-viz">' +
@@ -2258,6 +2301,231 @@
       root.addEventListener('resize', redrawGraph);
     }
 
+    /* ------------------------ workspace views ------------------------- */
+
+    var viewButtons = {};
+    var viewPanes = {};
+    host.querySelectorAll('.gs-wtab').forEach(function (b) { viewButtons[b.getAttribute('data-view')] = b; });
+    host.querySelectorAll('.gs-view').forEach(function (p) { viewPanes[p.getAttribute('data-view')] = p; });
+    var activeView = 'terminal';
+
+    function selectView(name, focus) {
+      if (!viewButtons[name]) return;
+      activeView = name;
+      Object.keys(viewButtons).forEach(function (k) {
+        var on = k === name;
+        viewButtons[k].classList.toggle('is-active', on);
+        viewButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
+        viewPanes[k].hidden = !on;
+      });
+      if (!focus) return;
+      if (name === 'terminal') input.focus();
+      else if (openFile) edText.focus();
+    }
+
+    Object.keys(viewButtons).forEach(function (k) {
+      viewButtons[k].addEventListener('click', function () { selectView(k, true); });
+    });
+
+    /* ------------------------- file editor ---------------------------- */
+
+    var fbList = host.querySelector('.gs-fb-list');
+    var fbNewBtn = host.querySelector('.gs-fb-new');
+    var fbCreate = host.querySelector('.gs-fb-create');
+    var fbName = host.querySelector('.gs-fb-name');
+    var fbErr = host.querySelector('.gs-fb-err');
+    var edName = host.querySelector('.gs-ed-name');
+    var edStatus = host.querySelector('.gs-ed-status');
+    var edText = host.querySelector('.gs-ed-text');
+    var edEmpty = host.querySelector('.gs-ed-empty');
+    var edSave = host.querySelector('.gs-ed-save');
+    var edRevert = host.querySelector('.gs-ed-revert');
+    var dirtyDot = host.querySelector('.gs-wtab-dirty');
+
+    var openFile = null;   // path of the file shown in the editor
+    var savedText = '';    // that file's contents on disk
+    // Unsaved edits per file, so hopping between files never loses work and
+    // nothing reaches the working directory (or git status) until Save.
+    var drafts = {};
+    var lastFiles = [];
+    var lastStatus = null;
+    var edNote = '';
+
+    function fileMark(f, status) {
+      if (!status) return null;
+      if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
+      if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
+      if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
+      return null;
+    }
+
+    function renderFileBrowser() {
+      if (!lastFiles.length) {
+        fbList.innerHTML = '<li class="gs-fb-none">No files yet.</li>';
+        return;
+      }
+      fbList.innerHTML = lastFiles.map(function (f) {
+        var cut = f.lastIndexOf('/');
+        var name = cut === -1 ? esc(f)
+          : '<span class="gs-fb-dir">' + esc(f.slice(0, cut + 1)) + '</span>' + esc(f.slice(cut + 1));
+        var mark = fileMark(f, lastStatus);
+        var on = f === openFile;
+        return '<li><button type="button" class="gs-fb-file' + (on ? ' is-open' : '') + '"' +
+          (on ? ' aria-current="true"' : '') + ' data-file="' + esc(f) + '">' +
+          '<span class="gs-fb-fname">' + name + '</span>' +
+          (f in drafts ? '<span class="gs-fb-dirty" title="Unsaved changes">●<span class="gs-sr"> (unsaved)</span></span>' : '') +
+          (mark ? '<span class="gs-fb-mark gs-fb-mark-' + mark.cls + '" title="' + mark.label + '">' + mark.k +
+            '<span class="gs-sr"> (' + mark.label + ')</span></span>' : '') +
+          '</button></li>';
+      }).join('');
+    }
+
+    function renderEditor() {
+      var dirty = !!openFile && edText.value !== savedText;
+      edText.hidden = !openFile;
+      edEmpty.hidden = !!openFile;
+      edEmpty.textContent = lastFiles.length
+        ? 'Pick a file on the left to open it here.'
+        : 'No files yet. Use + New to create one.';
+      edName.textContent = openFile || '';
+      edSave.disabled = !dirty;
+      edRevert.disabled = !dirty;
+      edStatus.textContent = dirty ? 'unsaved' : edNote;
+      dirtyDot.hidden = !Object.keys(drafts).length;
+    }
+
+    async function openInEditor(f) {
+      openFile = f;
+      edNote = '';
+      try { savedText = await sb.readFile(f); } catch (e) { savedText = ''; }
+      edText.value = f in drafts ? drafts[f] : savedText;
+      renderFileBrowser();
+      renderEditor();
+    }
+
+    // After any command, undo or reset, pick up what changed on disk. A file
+    // with an unsaved draft keeps the draft: the learner's typing wins.
+    async function syncEditor() {
+      if (openFile && lastFiles.indexOf(openFile) === -1 && !(openFile in drafts)) {
+        openFile = null;
+        edText.value = '';
+        savedText = '';
+      }
+      if (openFile) {
+        try { savedText = await sb.readFile(openFile); } catch (e) { savedText = ''; }
+        if (!(openFile in drafts) && edText.value !== savedText) edText.value = savedText;
+      }
+      renderFileBrowser();
+      renderEditor();
+    }
+
+    // Writing a file from the editor is a state change like any command:
+    // it gets an undo entry and re-runs the task checks.
+    async function editorWrite(name, text, label) {
+      if (busy) return false;
+      busy = true;
+      input.disabled = true;
+      var snap = captureUndo(label);
+      try {
+        await sb.writeFile(name, text);
+      } catch (e) {
+        edNote = 'could not save: ' + e.message;
+        busy = false;
+        input.disabled = false;
+        renderEditor();
+        return false;
+      }
+      if (sb.changedSince(snap.core)) {
+        undoStack.push(snap);
+        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+      }
+      await refresh();
+      input.disabled = false;
+      busy = false;
+      return true;
+    }
+
+    async function saveFile() {
+      if (!openFile || edText.value === savedText) return;
+      var name = openFile, text = edText.value;
+      delete drafts[name];
+      if (await editorWrite(name, text, 'save ' + name)) {
+        edNote = 'saved';
+        renderEditor();
+      } else {
+        drafts[name] = text;
+      }
+    }
+
+    function revertFile() {
+      if (!openFile) return;
+      delete drafts[openFile];
+      edText.value = savedText;
+      edNote = '';
+      renderFileBrowser();
+      renderEditor();
+      edText.focus();
+    }
+
+    // Names stay inside the working directory and out of .git; a lesson
+    // never needs anything else, and git would refuse most of the rest.
+    function badFileName(name) {
+      if (!name) return 'Type a file name.';
+      if (/^\//.test(name) || /(^|\/)\.\.?(\/|$)/.test(name)) return 'Use a name inside the project, like notes.md or data/notes.md.';
+      if (/\/$/.test(name)) return 'That is a folder name. Add a file name after the slash.';
+      if (/^\.git(\/|$)/.test(name)) return 'Files inside .git belong to git. Pick another name.';
+      if (/\s/.test(name)) return 'Leave spaces out of file names; they make commands harder to type.';
+      return null;
+    }
+
+    async function createFile(raw) {
+      var name = raw.trim().replace(/^\.\//, '');
+      var problem = badFileName(name);
+      if (problem) { fbErr.textContent = problem; return; }
+      fbErr.textContent = '';
+      fbCreate.hidden = true;
+      fbName.value = '';
+      if (lastFiles.indexOf(name) === -1) {
+        if (!(await editorWrite(name, '', 'create ' + name))) return;
+      }
+      await openInEditor(name);
+      edText.focus();
+    }
+
+    fbList.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('.gs-fb-file') : null;
+      if (b) openInEditor(b.getAttribute('data-file')).then(function () { edText.focus(); });
+    });
+    edText.addEventListener('input', function () {
+      if (!openFile) return;
+      var was = openFile in drafts;
+      if (edText.value === savedText) delete drafts[openFile];
+      else drafts[openFile] = edText.value;
+      edNote = '';
+      if (was !== (openFile in drafts)) renderFileBrowser();
+      renderEditor();
+    });
+    edText.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveFile();
+      }
+    });
+    edSave.addEventListener('click', function () { saveFile(); });
+    edRevert.addEventListener('click', revertFile);
+    fbNewBtn.addEventListener('click', function () {
+      fbCreate.hidden = !fbCreate.hidden;
+      fbErr.textContent = '';
+      if (!fbCreate.hidden) fbName.focus();
+    });
+    fbCreate.addEventListener('submit', function (e) {
+      e.preventDefault();
+      createFile(fbName.value);
+    });
+    fbName.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { fbCreate.hidden = true; fbName.value = ''; fbErr.textContent = ''; fbNewBtn.focus(); }
+    });
+
     function write(html, cls) {
       var line = el('div', 'gs-line' + (cls ? ' ' + cls : ''), html);
       out.appendChild(line);
@@ -2319,6 +2587,9 @@
       renderStages(stagesNode, status, graph, files, isRepo);
       renderDiff(diffNode, diff);
       renderGraph(svg, graph);
+      lastFiles = files;
+      lastStatus = isRepo ? status : null;
+      await syncEditor();
       lastGraph = graph;
       lastGraphW = svg.clientWidth;
 
@@ -2457,7 +2728,10 @@
         '{y}other{/}  help, clear, reset, undo',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
-        'nicety, not a git command — real git has no undo).'
+        'nicety, not a git command — real git has no undo).',
+        '',
+        'The {y}Editor{/} tab above the terminal opens files for editing.',
+        'Saved edits land in the working directory, ready for git add.'
       ].join('\n');
     }
 
@@ -2471,6 +2745,13 @@
       undoStack.length = 0;
       tasks.forEach(function (t) { t._done = false; t._wasDone = false; });
       selectTab('files');
+      // unsaved drafts belong to the run being thrown away
+      drafts = {};
+      openFile = null;
+      edText.value = '';
+      savedText = '';
+      edNote = '';
+      fbCreate.hidden = true;
       try {
         await sb.reset(seed);
       } catch (e) {

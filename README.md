@@ -231,6 +231,13 @@ semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
 rejected with `(fetch first)`.
 
+**Editor:** the title bar above the terminal switches between the
+**Terminal** and an **Editor** tab. The editor lists the working directory
+(with `U`/`M`/`A` git status letters), opens any file, creates new ones with
+`+ New`, and saves with the Save button or Ctrl/Cmd+S. Edits stay unsaved
+drafts until then, so they reach `git status` only once saved; each save can
+be undone like a command.
+
 Up arrow recalls previous commands. **Undo** (the button, or typing `undo`)
 takes back the last state-changing command as if it was never typed: repo,
 checklist, history and terminal all rewind together, up to 20 steps. Like

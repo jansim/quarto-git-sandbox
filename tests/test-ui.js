@@ -288,6 +288,107 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     /origin/.test(host.querySelector('.gs-state').textContent),
     host.querySelector('.gs-state').innerHTML);
 
+  // workspace title bar: Terminal and Editor tabs over the dark pane
+  const view = () => host.querySelector('.gs-wtab.is-active').getAttribute('data-view');
+  const pane = (n) => host.querySelector('.gs-view[data-view="' + n + '"]');
+  const click = (n) => n.dispatchEvent(new win.Event('click', { bubbles: true }));
+  const fileBtn = (f) => host.querySelector('.gs-fb-file[data-file="' + f + '"]');
+  const edText = host.querySelector('.gs-ed-text');
+  const type = (text) => { edText.value = text; edText.dispatchEvent(new win.Event('input')); };
+  check('title bar has Terminal and Editor tabs',
+    host.querySelectorAll('.gs-titlebar .gs-wtab').length === 2 &&
+    host.querySelector('.gs-titlebar').getAttribute('role') === 'tablist');
+  check('terminal view shows by default', view() === 'terminal' &&
+    pane('terminal').hidden === false && pane('editor').hidden === true);
+  click(host.querySelector('.gs-wtab[data-view="editor"]'));
+  check('clicking Editor swaps the views', view() === 'editor' &&
+    pane('terminal').hidden === true && pane('editor').hidden === false &&
+    host.querySelector('.gs-wtab[data-view="editor"]').getAttribute('aria-selected') === 'true');
+  check('file browser lists the working directory',
+    ['a.txt', 'b.txt', 'c.txt', 'd.txt'].every((f) => !!fileBtn(f)),
+    host.querySelector('.gs-fb-list').innerHTML);
+  check('editor prompts to pick a file', edText.hidden === true &&
+    /Pick a file/.test(host.querySelector('.gs-ed-empty').textContent));
+
+  click(fileBtn('a.txt')); await sleep(30);
+  check('clicking a file opens it', edText.hidden === false && edText.value === 'a\n' &&
+    host.querySelector('.gs-ed-name').textContent === 'a.txt' &&
+    fileBtn('a.txt').classList.contains('is-open'), JSON.stringify(edText.value));
+  check('save is disabled while nothing changed', host.querySelector('.gs-ed-save').disabled === true);
+
+  type('a\nmore\n');
+  check('typing marks the file unsaved',
+    host.querySelector('.gs-ed-save').disabled === false &&
+    !!fileBtn('a.txt').querySelector('.gs-fb-dirty') &&
+    host.querySelector('.gs-wtab-dirty').hidden === false);
+  check('an unsaved edit does not reach the working directory',
+    badge('files').textContent === '✓', badge('files').outerHTML);
+
+  click(fileBtn('b.txt')); await sleep(30);
+  check('switching files keeps the draft', edText.value === 'b\n' && !!fileBtn('a.txt').querySelector('.gs-fb-dirty'));
+  click(fileBtn('a.txt')); await sleep(30);
+  check('the draft comes back', edText.value === 'a\nmore\n', JSON.stringify(edText.value));
+
+  click(host.querySelector('.gs-ed-save')); await sleep(60);
+  check('save writes the working directory',
+    (await inst.sandbox.readFile('a.txt')) === 'a\nmore\n');
+  check('saved file shows as modified in git terms',
+    badge('files').textContent === '1' &&
+    /M/.test(fileBtn('a.txt').querySelector('.gs-fb-mark').textContent),
+    fileBtn('a.txt').outerHTML);
+  check('saving clears the unsaved markers',
+    !fileBtn('a.txt').querySelector('.gs-fb-dirty') &&
+    host.querySelector('.gs-wtab-dirty').hidden === true &&
+    /saved/.test(host.querySelector('.gs-ed-status').textContent));
+  check('a save is undoable', host.querySelector('.gs-undo').disabled === false);
+
+  click(host.querySelector('.gs-undo')); await sleep(60);
+  check('undo reverts the save, and the open editor follows',
+    edText.value === 'a\n' && badge('files').textContent === '✓', JSON.stringify(edText.value));
+  check('undo names the save', /Undid: save a\.txt/.test(host.querySelector('.gs-out').textContent));
+
+  type('changed\n');
+  click(host.querySelector('.gs-ed-revert'));
+  check('revert drops the draft', edText.value === 'a\n' &&
+    host.querySelector('.gs-wtab-dirty').hidden === true);
+
+  // a terminal command that rewrites the open file updates the editor
+  await run('echo fresh > a.txt');
+  check('editor reloads a file changed from the terminal', edText.value === 'fresh\n',
+    JSON.stringify(edText.value));
+  await run('echo a > a.txt');
+
+  // new files, including in a folder that does not exist yet
+  click(host.querySelector('.gs-fb-new'));
+  const nameIn = host.querySelector('.gs-fb-name');
+  check('+ New reveals a name field', host.querySelector('.gs-fb-create').hidden === false);
+  nameIn.value = '../escape.txt';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(30);
+  check('a name outside the project is refused in place',
+    /inside the project/.test(host.querySelector('.gs-fb-err').textContent),
+    host.querySelector('.gs-fb-err').textContent);
+  nameIn.value = 'notes/todo.md';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(60);
+  check('a new file is created and opened', !!fileBtn('notes/todo.md') &&
+    host.querySelector('.gs-ed-name').textContent === 'notes/todo.md' &&
+    /U/.test(fileBtn('notes/todo.md').querySelector('.gs-fb-mark').textContent),
+    host.querySelector('.gs-fb-list').innerHTML);
+  type('- write tests\n');
+  edText.dispatchEvent(new win.KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true }));
+  await sleep(60);
+  check('Ctrl+S saves', (await inst.sandbox.readFile('notes/todo.md')) === '- write tests\n');
+  await run('git add .');
+  check('the saved file stages from the terminal',
+    /A/.test(fileBtn('notes/todo.md').querySelector('.gs-fb-mark').textContent),
+    fileBtn('notes/todo.md').outerHTML);
+  await run('git rm notes/todo.md');
+  check('a deleted open file closes the editor', edText.hidden === true && !fileBtn('notes/todo.md'));
+
+  click(host.querySelector('.gs-wtab[data-view="terminal"]'));
+  check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);
+
   const svg = host.querySelector('.gs-graph');
   const style = `<style>
     .gs-sha{font-family:monospace;font-size:12px;fill:#717171}

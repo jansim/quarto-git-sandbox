@@ -1308,7 +1308,14 @@
       currentBranch: currentBranch,
       listFiles: listFiles,
       readFile: function (p) { return fs.promises.readFile(abs(p), 'utf8'); },
-      writeFile: function (p, c) { return ensureWorkdir().then(function () { return fs.promises.writeFile(abs(p), c); }); },
+      // Creates missing parent folders, so the editor can make `data/notes.md`
+      // without a separate mkdir.
+      writeFile: function (p, c) {
+        var target = abs(p);
+        return ensureWorkdir()
+          .then(function () { return fs.promises.mkdir(fs._dirname(target), { recursive: true }); })
+          .then(function () { return fs.promises.writeFile(target, c); });
+      },
       get fs() { return fs; },
       get dir() { return dir; },
       git: gitlib
