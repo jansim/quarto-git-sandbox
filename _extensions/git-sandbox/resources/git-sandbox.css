@@ -742,8 +742,8 @@
 .gs-sha  { font-family: var(--gs-mono); font-size: 12px; fill: var(--gs-gray-body); }
 .gs-msg  { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray); }
 .gs-ref  { font-family: var(--gs-mono); font-size: 11px; fill: var(--gs-blue-500); }
-.gs-ref-head { fill: #FFFFFF; }
-.gs-ref-remote { fill: var(--gs-gray-body); }
+.gs-ref-head { font-weight: 700; fill: var(--gs-blue-600); }
+.gs-ref-remote { fill: var(--gs-gray); }
 
 /* remote (mock origin) — its own tab, so no divider needed */
 
@@ -793,15 +793,6 @@
   overflow: auto;
 }
 .gs-tree-svg { display: block; }
-.gs-tree-key {
-  flex: 0 0 auto;
-  padding: 8px 16px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--gs-gray);
-  border-top: 1px solid var(--gs-blue-50);
-}
-.gs-tree-key code { font-family: var(--gs-mono); font-size: 11px; color: var(--gs-blue-500); }
 
 .gs-tree-c   { font-family: var(--gs-mono); font-size: 13px; font-weight: 700; fill: var(--gs-blue-600); }
 /* a white halo keeps the hash legible where an edge runs under it */

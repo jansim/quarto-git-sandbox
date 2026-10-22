@@ -2029,9 +2029,6 @@
       var title = make('title', {}, g);
       title.textContent = 'C' + nm.n + ' ' + c.short + ': ' + c.message;
       var circle = make('circle', { r: R, fill: tint(nm.color, 0.8), stroke: nm.color, 'stroke-width': 2.5 }, g);
-      if (c.parents.length > 1) {
-        make('circle', { r: R - 4.5, fill: 'none', stroke: nm.color, 'stroke-width': 1.2 }, g);
-      }
       var label = make('text', { 'class': 'gs-tree-c', 'text-anchor': 'middle', y: 5 }, g);
       label.textContent = 'C' + nm.n;
       var sha = make('text', { 'class': 'gs-tree-sha', 'text-anchor': 'middle', y: R + 14 }, g);
@@ -2253,7 +2250,8 @@
     };
   }
 
-  return { createTreeView: createTreeView };
+  // tint is shared with the History graph, so both panels draw alike
+  return { createTreeView: createTreeView, tint: tint };
 });
 
 
@@ -2275,6 +2273,8 @@
   var ICON_PLUS = icon('M8 3v10M3 8h10');
 
   var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
+
+  function tint(hex, amount) { return root.GitSandboxTree.tint(hex, amount); }
 
   function esc(s) {
     return String(s)
@@ -2414,7 +2414,7 @@
       var tx = graphW + 6;
       var refLayouts = (c.refs || []).map(function (r) {
         var label = (r.isHead ? 'HEAD → ' : '') + r.name;
-        var w = label.length * 6.6 + 14;
+        var w = label.length * (r.isHead ? 7.1 : 6.6) + 14;  // the HEAD label is bold
         var lay = { label: label, x: tx, w: w, isHead: r.isHead, remote: r.remote };
         tx += w + 6;
         return lay;
@@ -2467,21 +2467,33 @@
       var cx = x(c.lane), cy = cyOf(i), row = rows[i];
       var isMerge = (c.parents || []).length > 1;
 
+      // Outlined in the lane colour over a pale tint of it, as in the commit
+      // tree; merge commits stay hollow.
+      var color = LANE_COLORS[c.lane % LANE_COLORS.length];
       var circle = document.createElementNS(NS, 'circle');
       circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
-      circle.setAttribute('r', isMerge ? 7 : 6);
-      circle.setAttribute('fill', isMerge ? '#FFFFFF' : LANE_COLORS[c.lane % LANE_COLORS.length]);
-      circle.setAttribute('stroke', LANE_COLORS[c.lane % LANE_COLORS.length]);
-      circle.setAttribute('stroke-width', isMerge ? '3' : '2');
+      circle.setAttribute('r', 7);
+      circle.setAttribute('fill', isMerge ? '#FFFFFF' : tint(color, 0.8));
+      circle.setAttribute('stroke', color);
+      circle.setAttribute('stroke-width', '2.5');
       svg.appendChild(circle);
 
-      // ref pills
+      // ref labels, styled like the commit tree's: a tinted box outlined in
+      // the branch colour, bolder for HEAD, dashed grey for remote refs
       row.refLayouts.forEach(function (rl) {
         var rect = document.createElementNS(NS, 'rect');
         rect.setAttribute('x', rl.x); rect.setAttribute('y', cy - 10);
         rect.setAttribute('width', rl.w); rect.setAttribute('height', 20);
-        rect.setAttribute('rx', 10);
-        rect.setAttribute('fill', rl.isHead ? '#447099' : (rl.remote ? '#E7E9EC' : '#D0DBE5'));
+        rect.setAttribute('rx', 5);
+        if (rl.remote) {
+          rect.setAttribute('fill', '#FFFFFF');
+          rect.setAttribute('stroke', '#717171');
+          rect.setAttribute('stroke-dasharray', '3 2');
+        } else {
+          rect.setAttribute('fill', tint(color, rl.isHead ? 0.62 : 0.85));
+          rect.setAttribute('stroke', color);
+        }
+        rect.setAttribute('stroke-width', rl.isHead ? '2' : '1.2');
         svg.appendChild(rect);
         var lt = document.createElementNS(NS, 'text');
         lt.setAttribute('x', rl.x + 7); lt.setAttribute('y', cy + 4);
@@ -2720,7 +2732,6 @@
         ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"><div class="gs-tree-inner">' +
             '<div class="gs-tree-head"><span class="gs-eyebrow">Commit tree</span></div>' +
             '<div class="gs-tree-scroll"><svg class="gs-tree-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>' +
-            '<div class="gs-tree-key"><code>C0</code> is the first commit · <code>*</code> marks your branch</div>' +
           '</div></div>'
         : '');
 

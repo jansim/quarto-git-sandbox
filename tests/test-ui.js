@@ -560,7 +560,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check('a merge commit is drawn with both edges', merge.parents.length === 2 &&
       box2.querySelectorAll('.gs-tree-edge').length === 5, String(box2.querySelectorAll('.gs-tree-edge').length));
     check('merge commit is C4', t.tree.labelOf(merge.oid) === 'C4', t.tree.labelOf(merge.oid));
-    check('merge commit gets the double ring', nodeOf(merge.oid).querySelectorAll('circle').length === 2);
+    check('merge commit is a single circle like any other', nodeOf(merge.oid).querySelectorAll('circle').length === 1);
 
     box2.querySelector('.gs-reset').dispatchEvent(new win.Event('click'));
     await t.ready; await sleep(400);

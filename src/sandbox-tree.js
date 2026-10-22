@@ -262,9 +262,6 @@
       var title = make('title', {}, g);
       title.textContent = 'C' + nm.n + ' ' + c.short + ': ' + c.message;
       var circle = make('circle', { r: R, fill: tint(nm.color, 0.8), stroke: nm.color, 'stroke-width': 2.5 }, g);
-      if (c.parents.length > 1) {
-        make('circle', { r: R - 4.5, fill: 'none', stroke: nm.color, 'stroke-width': 1.2 }, g);
-      }
       var label = make('text', { 'class': 'gs-tree-c', 'text-anchor': 'middle', y: 5 }, g);
       label.textContent = 'C' + nm.n;
       var sha = make('text', { 'class': 'gs-tree-sha', 'text-anchor': 'middle', y: R + 14 }, g);
@@ -486,5 +483,6 @@
     };
   }
 
-  return { createTreeView: createTreeView };
+  // tint is shared with the History graph, so both panels draw alike
+  return { createTreeView: createTreeView, tint: tint };
 });

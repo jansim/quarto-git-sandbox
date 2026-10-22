@@ -12,6 +12,10 @@
   commits taken back by `undo` shrink away. The exercise widens into the
   right margin in Quarto, and the pane drops below the box when the box is
   narrow.
+- The History graph now matches the commit tree's look: commits are
+  outlined in their lane colour over a pale tint of it, and branch labels
+  are tinted boxes outlined in the branch colour (bold for `HEAD`, dashed
+  grey for remote-tracking refs) instead of solid pills.
 - New `cd` command for moving between folders inside the project. The prompt
   shows the current folder, relative paths in shell and git commands resolve
   from it, and `git add .` stages only that folder and below. `cd`, `cd ~`

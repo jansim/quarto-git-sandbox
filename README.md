@@ -155,8 +155,8 @@ tree-view: true
   `C0` is the first commit. Each also shows its short hash, which matches
   `git log --oneline` because this is a real repository.
 - The first commit is at the top and history grows downwards. Each commit
-  hangs under its first parent, and a merge commit (drawn with a double
-  ring) sits below both of its parents.
+  hangs under its first parent, and a merge commit sits below both of its
+  parents.
 - Branches are labels pointing at their tips. `main*` marks the branch
   `HEAD` is on; a detached `HEAD` gets a label of its own, and
   remote-tracking refs such as `origin/main` are dashed.
