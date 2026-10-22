@@ -464,8 +464,8 @@
   // Chips that changed column glide across one after another (FLIP), chips
   // that only shifted within a column settle into place, and new ones fade
   // in once the travellers have left. On a commit (`commitColor` is the new
-  // commit's lane colour) the staged chips flow together into one commit
-  // node, drawn like the nodes in the graph, which then drops into the
+  // commit's lane colour) the staged chips morph together into one commit
+  // node, drawn like the nodes in the graph, which then glides into the
   // repository. A no-op where the Web Animations API is missing, the panel
   // is hidden, or the reader asked for reduced motion.
   function animateStages(node, before, commitColor) {
@@ -475,20 +475,17 @@
     var now = chipRects(node);
     var repo = node.querySelector('.gs-chip-repo');
     var repoBox = repo ? chipBox(node, repo) : null;
-    var STAGGER = 70, MAX_STAGGER = 350;
+    var STAGGER = 40, MAX_STAGGER = 200;
     var claimed = {}, travellers = 0, committing = [];
 
     function stagger(n) { return Math.min(n * STAGGER, MAX_STAGGER); }
 
-    // across columns: slow enough to follow, lifted while in the air
+    // across columns: slow enough to follow
     function glide(el, from, to) {
       var dx = from.x - to.x, dy = from.y - to.y;
       if (!dx && !dy) return;
-      el.animate([
-        { transform: 'translate(' + dx + 'px, ' + dy + 'px)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-        { transform: 'translate(' + dx / 2 + 'px, ' + dy / 2 + 'px) scale(1.04)', boxShadow: '0 4px 12px rgba(17,28,38,0.18)', offset: 0.5 },
-        { transform: 'none', boxShadow: '0 0 0 rgba(0,0,0,0)' }
-      ], { duration: 560, delay: stagger(travellers++), easing: 'cubic-bezier(0.45, 0, 0.25, 1)', fill: 'backwards' });
+      el.animate([{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'none' }],
+        { duration: 520, delay: stagger(travellers++), easing: 'cubic-bezier(0.45, 0, 0.25, 1)', fill: 'backwards' });
     }
 
     // within a column: closing the gap a departing chip left behind
@@ -510,10 +507,10 @@
       if (now[other] && !before[other]) { glide(now[other].el, old, now[other]); claimed[other] = true; }
     });
 
-    var landed = committing.length ? commitIntoRepo(node, committing, repo, repoBox, commitColor, stagger) : 0;
+    var landed = committing.length ? commitIntoRepo(node, committing, repo, repoBox, commitColor) : 0;
 
     // newcomers wait until the travellers are under way
-    var lastStart = stagger(Math.max(travellers, committing.length) - 1);
+    var lastStart = stagger(Math.max(travellers - 1, 0));
     Object.keys(now).forEach(function (key) {
       // the repository chip is relabelled ("3 commits"), not new
       if (claimed[key] || before[key] || key.indexOf('repo:') === 0) return;
@@ -521,74 +518,71 @@
         { duration: 360, delay: (committing.length ? 300 : 120) + lastStart, easing: 'ease-out', fill: 'backwards' });
     });
     if (landed) {
-      // the new count shows as the commit lands, with a small bump
-      repo.animate([{ color: 'rgba(0,0,0,0)' }, { color: 'rgba(0,0,0,0)' }], { duration: landed });
-      repo.animate([{ transform: 'none' }, { transform: 'scale(1.06)', offset: 0.4 }, { transform: 'none' }],
-        { duration: 420, delay: landed, easing: 'ease-out' });
+      // the new count fades in as the commit lands
+      var ink = (root.getComputedStyle && root.getComputedStyle(repo).color) || '#22384C';
+      repo.animate([{ color: 'rgba(0,0,0,0)' }, { color: 'rgba(0,0,0,0)', offset: landed / (landed + 240) }, { color: ink }],
+        { duration: landed + 240 });
     }
   }
 
-  // The commit half of animateStages: copies of the staged chips (`olds`,
-  // chipRects() entries from before the render) flow together into one
-  // commit node, a circle drawn like the graph's, which hops across into the
+  // The commit half of animateStages: the staged chips (`olds`, chipRects()
+  // entries from before the render) become one shape that morphs into a
+  // commit node, a circle drawn like the graph's, and glides into the
   // repository chip. Returns when, in ms, the node lands.
-  var NODE = 16, GATHER = 520, FLY = 620;
-  function commitIntoRepo(node, olds, repo, repoBox, color, stagger) {
-    // where the staged files meet: the middle of where they were
-    var gx = 0, gy = 0;
-    olds.forEach(function (o) { gx += o.x + o.w / 2; gy += o.y + o.h / 2; });
-    gx /= olds.length; gy /= olds.length;
-    var tx = repoBox.x + repoBox.w / 2, ty = repoBox.y + repoBox.h / 2;
-    var look = { borderRadius: '50%', padding: '0px', backgroundColor: tint(color, 0.8),
-                 color: 'rgba(0,0,0,0)', boxShadow: 'inset 0 0 0 2.5px ' + color };
-    function box(x, y, w, h, style, extra) {
-      var f = { left: x - w / 2 + 'px', top: y - h / 2 + 'px', width: w + 'px', height: h + 'px' };
-      [style, extra || {}].forEach(function (o) { Object.keys(o).forEach(function (k) { f[k] = o[k]; }); });
-      return f;
-    }
-    function add(el) {
-      el.classList.add('gs-chip-ghost');
-      node.appendChild(el);
-      return function () { if (el.parentNode) el.parentNode.removeChild(el); };
-    }
-
-    // each staged file folds into the meeting point, one after another
-    olds.forEach(function (old, i) {
-      var ghost = old.el.cloneNode(true);
-      // not a real chip: keep it out of the next chipRects()
-      ghost.removeAttribute('data-col');
-      ghost.removeAttribute('data-file');
-      var done = add(ghost);
-      // the old chip is detached by now; the ghost has its classes
-      var cs = root.getComputedStyle ? root.getComputedStyle(ghost) : null;
-      var chip = {
-        borderRadius: '4px', padding: (cs && cs.padding) || '3px 6px',
-        backgroundColor: (cs && cs.backgroundColor) || '#DBE6D3',
-        color: (cs && cs.color) || '#394D27', boxShadow: 'inset 0 0 0 0px ' + color
-      };
-      ghost.animate([
-        box(old.x + old.w / 2, old.y + old.h / 2, old.w, old.h, chip, { opacity: 1 }),
-        box(gx, gy, NODE, NODE, look, { opacity: 1 })
-      ], { duration: GATHER, delay: stagger(i), easing: 'cubic-bezier(0.45, 0, 0.25, 1)', fill: 'backwards' })
-        .onfinish = done;
+  var NODE = 16, MORPH = 480, MOVE = 520;
+  function commitIntoRepo(node, olds, repo, repoBox, color) {
+    // one box around all the staged chips, holding copies of them
+    var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    olds.forEach(function (o) {
+      x0 = Math.min(x0, o.x); y0 = Math.min(y0, o.y);
+      x1 = Math.max(x1, o.x + o.w); y1 = Math.max(y1, o.y + o.h);
     });
+    var shape = document.createElement('span');
+    shape.className = 'gs-chip-ghost gs-commit-node';
+    node.appendChild(shape);
+    var parts = olds.map(function (old) {
+      var part = old.el.cloneNode(true);
+      // not a real chip: keep it out of the next chipRects()
+      part.removeAttribute('data-col');
+      part.removeAttribute('data-file');
+      part.classList.add('gs-chip-part');
+      part.style.left = old.x - x0 + 'px';
+      part.style.top = old.y - y0 + 'px';
+      part.style.width = old.w + 'px';
+      shape.appendChild(part);
+      return part;
+    });
+    // the copies are attached now, so they have the staged chips' colour
+    var cs = root.getComputedStyle ? root.getComputedStyle(parts[0]) : null;
+    var green = (cs && cs.backgroundColor) || '#DBE6D3';
 
-    // the commit itself: pops up as the last file folds in, then hops
-    // across and down into the repository
-    var born = stagger(olds.length - 1) + GATHER - 80;
-    var commit = document.createElement('span');
-    commit.className = 'gs-chip gs-commit-node';
-    var done = add(commit);
-    var mx = (gx + tx) / 2, my = Math.min(gy, ty) - 28;
-    commit.animate([
-      box(gx, gy, NODE, NODE, look, { opacity: 0, transform: 'scale(0.6)', offset: 0, easing: 'ease-out' }),
-      box(gx, gy, NODE, NODE, look, { opacity: 1, transform: 'scale(1.25)', offset: 0.12, easing: 'ease-in-out' }),
-      box(gx, gy, NODE, NODE, look, { opacity: 1, transform: 'scale(1)', offset: 0.25, easing: 'ease-in' }),
-      box(mx, my, NODE, NODE, look, { opacity: 1, transform: 'scale(1)', offset: 0.6, easing: 'ease-out' }),
-      box(tx, ty, NODE, NODE, look, { opacity: 1, transform: 'scale(1)', offset: 0.9, easing: 'ease-in' }),
-      box(tx, ty, NODE, NODE, look, { opacity: 0, transform: 'scale(0.3)', offset: 1 })
-    ], { duration: FLY / 0.75, delay: born, fill: 'both' }).onfinish = done;
-    return Math.round(born + FLY / 0.75 * 0.9);
+    var total = MORPH + MOVE, formed = MORPH / total, landed = (MORPH + MOVE * 0.85) / total;
+    var cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    var tx = repoBox.x + repoBox.w / 2, ty = repoBox.y + repoBox.h / 2;
+    var ease = 'cubic-bezier(0.45, 0, 0.25, 1)';
+    function frame(x, y, w, h, offset, look) {
+      return {
+        left: x - w / 2 + 'px', top: y - h / 2 + 'px', width: w + 'px', height: h + 'px',
+        borderRadius: look.r, backgroundColor: look.bg, boxShadow: 'inset 0 0 0 ' + look.ring + 'px ' + color,
+        opacity: look.op, offset: offset, easing: ease
+      };
+    }
+    var commit = { r: '50%', bg: tint(color, 0.8), ring: 2.5, op: 1 };
+    shape.animate([
+      frame(cx, cy, x1 - x0, y1 - y0, 0, { r: '4px', bg: 'rgba(0,0,0,0)', ring: 0, op: 1 }),
+      // the chips have merged into one block
+      frame(cx, cy, (x1 - x0) * 0.8, (y1 - y0) * 0.8, formed * 0.35, { r: '6px', bg: green, ring: 0, op: 1 }),
+      frame(cx, cy, NODE, NODE, formed, commit),
+      frame(tx, ty, NODE, NODE, landed, commit),
+      frame(tx, ty, NODE, NODE, 1, { r: '50%', bg: tint(color, 0.8), ring: 2.5, op: 0 })
+    ], { duration: total, fill: 'forwards' }).onfinish = function () {
+      if (shape.parentNode) shape.parentNode.removeChild(shape);
+    };
+    // the files' own labels and colours give way to the one block
+    parts.forEach(function (part) {
+      part.animate([{ opacity: 1 }, { opacity: 0 }], { duration: MORPH * 0.35, easing: 'ease-in', fill: 'forwards' });
+    });
+    return Math.round(MORPH + MOVE * 0.85);
   }
 
   // The lane colour of the commit HEAD points at, as the graph draws it.

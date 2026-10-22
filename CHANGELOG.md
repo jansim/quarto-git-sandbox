@@ -3,12 +3,10 @@
 ## Unreleased
 
 - The File Status animations are paced to be followed. `git add` eases files
-  across one after another instead of snapping them over all at once, and
-  the files left behind close the gap afterwards. On `git commit` the
-  staged files flow together into one commit node, drawn like the commits in
-  the graph, which hops into the repository; the new commit count appears
-  as it lands, and files that reappear as unchanged fade in once the
-  commit is on its way.
+  across instead of snapping them over, and the files left behind close the
+  gap afterwards. On `git commit` the staged files morph together into one
+  commit node, drawn like the commits in the graph, which glides into the
+  repository; the new commit count fades in as it lands.
 - The demo gains a second page, `example-revealjs.qmd`: a reveal.js deck
   with a box on one slide and another view of the same repository on a
   later slide. The demo site publishes it next to the guide.

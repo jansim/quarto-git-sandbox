@@ -730,13 +730,14 @@
 .gs-chip-empty { background: transparent; color: var(--gs-gray-body); font-style: italic; }
 /* A tracked file with no changes: present but quiet, so modified files pop. */
 .gs-chip-work.gs-chip-clean { background: var(--gs-off-white); color: var(--gs-gray-body); }
-/* A copy of a staged chip flying into the repository on commit, folding
-   into a dot on the way: border-box so the dot's size is its real size, and
-   no wrapping so the label clips instead of reflowing as it shrinks. */
+/* On commit, the staged chips become one shape that morphs into a commit
+   node and moves into the repository: border-box so the node's size is its
+   real size, clipping the copies of the chips inside it as it shrinks. */
 .gs-chip-ghost {
   position: absolute; margin: 0; pointer-events: none; z-index: 2;
-  box-sizing: border-box; overflow: hidden; white-space: nowrap;
+  box-sizing: border-box; overflow: hidden;
 }
+.gs-chip-ghost .gs-chip-part { position: absolute; margin: 0; box-sizing: border-box; }
 /* A file with unresolved conflict markers: outlined as well as tinted, so it
    stands apart from merely modified files without relying on colour. */
 .gs-chip-work.gs-chip-conflict { background: #FFFFFF; color: #763218; box-shadow: inset 0 0 0 2px #C4441A; font-weight: 700; }

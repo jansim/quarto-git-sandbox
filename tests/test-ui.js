@@ -715,19 +715,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     calls.length = 0;
     await a.run('git commit -m one');
     check('git commit stays on File Status', box.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'files');
-    const ghost = calls.find(c => c.el.classList && c.el.classList.contains('gs-chip-ghost') &&
-      !c.el.classList.contains('gs-commit-node'));
-    const node = calls.find(c => c.el.classList && c.el.classList.contains('gs-commit-node'));
+    const shape = calls.find(c => c.el.classList && c.el.classList.contains('gs-commit-node'));
+    const frames = shape ? shape.frames : [];
     const centre = f => parseFloat(f.left) + parseFloat(f.width) / 2;
-    check('git commit folds the staged chip into a commit node',
-      !!ghost && ghost.frames[0].borderRadius === '4px' && ghost.frames[1].borderRadius === '50%' &&
-      ghost.frames[1].width === ghost.frames[1].height, JSON.stringify(ghost && ghost.frames));
-    check('the ghost is a copy of the staged chip', !!ghost && /a\.txt/.test(ghost.el.textContent));
-    check('the ghost is not counted as a chip', !!ghost && !ghost.el.hasAttribute('data-file'));
-    const nodeEnd = node && node.frames[node.frames.length - 1];
-    check('which flies into the repository, drawn like a graph node',
-      !!node && centre(node.frames[0]) === 260 && centre(nodeEnd) === 460 && nodeEnd.opacity === 0 &&
-      /2\.5px #447099/.test(node.frames[0].boxShadow), JSON.stringify(node && node.frames));
+    const formed = frames.find(f => f.borderRadius === '50%');
+    check('git commit morphs the staged chips into a commit node',
+      !!shape && frames[0].borderRadius === '4px' && centre(frames[0]) === 260 &&
+      !!formed && formed.width === formed.height && /2\.5px #447099/.test(formed.boxShadow),
+      JSON.stringify(frames));
+    check('which starts out as a copy of the staged chips', !!shape && /a\.txt/.test(shape.el.textContent));
+    check('the copies are not counted as chips', !!shape && !shape.el.querySelector('[data-file]'));
+    check('and moves into the repository', !!shape && centre(frames.at(-1)) === 460 && frames.at(-1).opacity === 0,
+      JSON.stringify(frames));
     calls.length = 0;
     await a.run('reset');
     check('no animation after a reset', calls.length === 0, calls.length);
