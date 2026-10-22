@@ -16,7 +16,8 @@
 Interactive Git exercises for Quarto documents. Each exercise is a **real Git
 repository running in the reader's browser**. Learners type real `git`
 commands and watch a working-directory/staging/repository diagram, a live
-diff of what changed, and a live commit graph update as they go. Exercises
+diff of what changed, and a live commit graph update as they go; a chevron
+on each commit in the graph opens what that commit changed. Exercises
 can also add a **mock remote**: a second repository inside the page that
 learners `push` to, `fetch` and `pull` from, drawn as its own commit graph,
 including realistic rejected pushes when the remote is ahead.
@@ -109,7 +110,11 @@ tasks:
 | `seed` | Commands run before the learner arrives, to set up a starting history. |
 | `done-note` | Shown once every task is complete. Markdown allowed. |
 | `tasks` | The checklist. Each needs a `text:` and a `when:`. |
-| `tree-view` | `true` adds a commit tree beside the box, drawn like [Learn Git Branching](https://learngitbranching.js.org/). Off by default. |
+| `tree-view` | The commit tree beside the box, drawn like [Learn Git Branching](https://learngitbranching.js.org/). `true` shows it, `false` leaves it out, and `toggle` (the default) puts a button in the header that opens it. |
+| `editor` | `false` removes the Editor tab, leaving a terminal-only box. Default `true`. |
+| `panels` | The views below the terminal (File Status, Changes, History, Remote). `true` shows them, `false` leaves them out, and `toggle` (the default) shows them with a chevron that folds them away. |
+| `share` | The `id` of another exercise whose repository this box is a view of: same files and history, its own title, tasks and layout. Takes no `seed`. |
+| `panel-tabs` | Which of those views to offer, e.g. `[files, history]`. Any of `files`, `changes`, `history`, `remote`; all four by default. The first one listed opens first. |
 
 Two notes on quoting, because both bite:
 
@@ -152,9 +157,12 @@ message, so the push → rejected → pull → push loop can be taught honestly.
 
 ### The commit tree
 
-`tree-view: true` adds a pane down the right of the box that draws the
-history the way [Learn Git Branching](https://learngitbranching.js.org/)
-does. It is off by default.
+The commit tree is a pane down the right of the box that draws the history
+the way [Learn Git Branching](https://learngitbranching.js.org/) does. By
+default (`tree-view: toggle`) it is closed, and a small graph button in the
+box's header opens and closes it. `tree-view: true` shows it from the start
+(and widens the box into the page margin to make room for it); `tree-view:
+false` takes the pane and its button away.
 
 ```yaml
 tree-view: true
@@ -197,6 +205,8 @@ you can check for states the learner passes through.
 | `on main` | `HEAD` is on `main` |
 | `merged report into main` | A `git merge` (or `git pull`) has actually brought `report` into `main`, and its result is still in `main`'s history. Both fast-forward and merge-commit merges count; creating `report` from `main`'s tip does not, and neither does a merge that reports "Already up to date" |
 | `merge commit` | Some commit has two parents |
+| `merging` | A merge stopped on conflicts and has not been committed or aborted yet |
+| `conflicts` | Some files still have unresolved conflicts (not yet marked with `git add`) |
 | `file report.qmd` | That file exists in the working directory |
 | `file report.qmd contains "Q3"` | It exists and contains that text. `/regex/` works too |
 | `ran /git\s+status/` | The learner ran a matching command. Plain text matches as a substring |
@@ -304,9 +314,12 @@ exercise to its seeded state and clears the undo history.
 - **No network remotes.** The remote is a mock that lives in the page: there
   is no `clone`, and nothing talks to a real server. isomorphic-git can talk
   to GitHub through a CORS proxy, which is a real but separate piece of work.
-- **No conflict resolution.** isomorphic-git merges cleanly or fails. A
-  conflicting `merge` or `pull` prints an explanation and suggests resetting,
-  so a lesson stays honest about the limit rather than faking it.
+- **No three-way merge tool.** A conflicting `merge` or `pull` behaves as in
+  real git: it writes `<<<<<<<` / `=======` / `>>>>>>>` markers into the
+  files, stages everything that merged cleanly, and stops. The learner edits
+  the files (in the Editor tab, or with `echo`), marks them resolved with
+  `git add`, and concludes with `git commit`; `git merge --abort` gives up.
+  What it does not offer is a side-by-side merge editor.
 - **No `rebase`, `stash`, `reset --hard`, `cherry-pick` or `revert`.** These
   could be added to the engine in `src/sandbox-core.js`.
 

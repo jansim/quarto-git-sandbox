@@ -52,11 +52,35 @@ title: Tasks not a list
 tasks: commits >= 1
 ```
 
-## A tree-view that is not true or false
+## A tree-view that is not true, false or toggle
 
 ```git-sandbox
 title: Bad tree-view
 tree-view: sometimes
+```
+
+## An editor switch that is not true or false
+
+```git-sandbox
+title: Bad editor
+editor: toggle
+```
+
+## A panel that does not exist
+
+```git-sandbox
+title: Bad panel-tabs
+panels: toggle
+panel-tabs: [files, graph]
+```
+
+## A view of another exercise with a seed of its own
+
+```git-sandbox
+title: Seeded view
+share: duplicated
+seed: |
+  git init
 ```
 
 ## Options that are not key/value at all

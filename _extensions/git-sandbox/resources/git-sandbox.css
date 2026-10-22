@@ -95,6 +95,23 @@
 /* nothing on the stack yet */
 .gs-undo:disabled { opacity: 0.45; cursor: default; }
 
+/* `tree-view: toggle`: opens and closes the commit tree pane */
+.gs-tree-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gs-blue);
+  background: #FFFFFF;
+  border: 1px solid var(--gs-blue-100);
+  border-radius: 4px;
+  padding: 5px 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.gs-tree-btn .gs-icon { width: 16px; height: 16px; }
+.gs-tree-btn:hover, .gs-tree-btn[aria-pressed="true"] { background: var(--gs-blue); color: #FFFFFF; border-color: var(--gs-blue); }
+.gs-tree-btn:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: 2px; }
+
 /* -------------------------------- body ------------------------------- */
 
 .gs-body {
@@ -484,6 +501,7 @@
 .gs-fb-mark { font-size: 11px; font-weight: 700; }
 .gs-fb-mark-new { color: var(--gs-t-green); }
 .gs-fb-mark-mod { color: var(--gs-t-yellow); }
+.gs-fb-mark-conflict { color: var(--gs-t-red); }
 .gs-fb-changed { font-size: 8px; color: var(--gs-t-yellow); }
 
 /* "Show hidden files": a small switch pinned to the sidebar's foot */
@@ -637,11 +655,33 @@
 }
 .gs-tab-badge-ok { background: #DBE6D3; color: #394D27; }
 
+/* `panels: toggle`: folds the views away, leaving the tab row (and its
+   badges) as a summary; a tab click unfolds them again. */
+.gs-viz-toggle {
+  align-self: center;
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--gs-blue-500);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px;
+  cursor: pointer;
+}
+.gs-viz-toggle:hover { background: var(--gs-off-white); border-color: var(--gs-blue-50); }
+.gs-viz-toggle:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: -1px; }
+.gs-viz-toggle .gs-icon { transition: transform 0.15s ease; }
+.gs-viz-toggle[aria-expanded="true"] .gs-icon { transform: rotate(90deg); }
+.gs-viz.is-folded { padding-bottom: 10px; }
+.gs-viz.is-folded .gs-tabs { margin-bottom: 0; border-bottom-color: transparent; }
+.gs-viz.is-folded .gs-tab.is-active { border-bottom-color: transparent; }
+
 .gs-panel { min-width: 0; }
 
 /* stages */
 
 .gs-stages {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto 1fr auto 1fr;
   align-items: stretch;
@@ -690,6 +730,11 @@
 .gs-chip-empty { background: transparent; color: var(--gs-gray-body); font-style: italic; }
 /* A tracked file with no changes: present but quiet, so modified files pop. */
 .gs-chip-work.gs-chip-clean { background: var(--gs-off-white); color: var(--gs-gray-body); }
+/* A copy of a staged chip flying into the repository on commit. */
+.gs-chip-ghost { position: absolute; margin: 0; pointer-events: none; z-index: 2; }
+/* A file with unresolved conflict markers: outlined as well as tinted, so it
+   stands apart from merely modified files without relying on colour. */
+.gs-chip-work.gs-chip-conflict { background: #FFFFFF; color: #763218; box-shadow: inset 0 0 0 2px #C4441A; font-weight: 700; }
 
 .gs-arrow {
   display: flex;
@@ -779,8 +824,34 @@
 /* graph */
 
 /* Deep histories scroll inside the panel instead of stretching the box. */
-.gs-graph-scroll { overflow-x: hidden; max-height: 360px; overflow-y: auto; }
+.gs-graph-scroll { position: relative; overflow-x: hidden; max-height: 360px; overflow-y: auto; }
 .gs-graph { display: block; width: 100%; }
+
+/* A commit's contents, opened from the chevron at the end of its row and
+   laid over the gap the graph leaves under that row. */
+.gs-cd-toggle { cursor: pointer; outline: none; }
+.gs-cd-toggle-bg { fill: transparent; stroke: transparent; }
+.gs-cd-toggle:hover .gs-cd-toggle-bg { fill: var(--gs-off-white); stroke: var(--gs-blue-50); }
+.gs-cd-toggle:focus-visible .gs-cd-toggle-bg { stroke: var(--gs-blue-vibrant); stroke-width: 2; }
+.gs-cd-toggle.is-open .gs-cd-toggle-bg { fill: var(--gs-blue-50); }
+.gs-cd-chev { fill: none; stroke: var(--gs-blue-500); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.gs-cd-layer { position: absolute; top: 0; left: 0; right: 0; height: 0; }
+.gs-cd {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--gs-blue-50);
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-size: 12px;
+  color: var(--gs-gray);
+}
+.gs-cd-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--gs-gray-body); margin-bottom: 4px; }
+.gs-cd-oid { font-family: var(--gs-mono); font-size: 11px; color: var(--gs-gray); word-break: break-all; }
+.gs-cd-msg { white-space: pre-wrap; font-size: 13px; color: var(--gs-blue-500); margin-bottom: 6px; }
+.gs-cd-note { color: var(--gs-gray-body); margin-bottom: 6px; }
+.gs-cd-note code { font-family: var(--gs-mono); font-size: 11px; }
+.gs-cd .gs-diff-file:not(:last-child) { margin-bottom: 6px; }
 .gs-sha  { font-family: var(--gs-mono); font-size: 12px; fill: var(--gs-gray-body); }
 .gs-msg  { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray); }
 .gs-ref  { font-family: var(--gs-mono); font-size: 11px; fill: var(--gs-blue-500); }
@@ -795,7 +866,7 @@
 
 /* ----------------------------- commit tree ---------------------------- */
 
-/* `tree-view: true` adds a learngitbranching-style pane down the right of
+/* `tree-view: true` (or an opened `toggle`) adds a learngitbranching-style pane down the right of
    the whole box. Its contents are positioned out of flow, so the box keeps
    the height its main column gives it and a tall tree scrolls instead. */
 .gs.gs-has-tree {
@@ -955,9 +1026,39 @@
   color: var(--gs-gray-body);
 }
 
+/* ------------------------------ reveal.js ----------------------------- */
+
+/* On a slide: reveal.js styles bare lists and sets a large base font size,
+   so put the box's own back, and keep it short enough for a 700px-tall
+   slide. */
+.reveal .gs { margin: 12px 0; font-size: 16px; line-height: 1.5; text-align: left; }
+.reveal .gs ul.gs-task-list, .reveal .gs ul.gs-fb-list { display: block; margin: 0; padding: 0; }
+.reveal .gs .gs-term-wrap { height: 230px; }
+.reveal .gs .gs-graph-scroll, .reveal .gs .gs-diff { max-height: 200px; }
+.reveal .gs .gs-tree-below .gs-tree-scroll { height: 200px; }
+
+/* The box fills the rest of its slide at a height set from JS, and its
+   parts share that height without ever changing it: the terminal stretches,
+   the task list scrolls past a third of the box, and the views below get
+   a fixed area whatever the panel holds, so `git add` and `git commit`
+   never make the box (or the slide) jump. */
+.reveal .gs.gs-fill {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+.reveal .gs-fill > .gs-body { display: flex; flex-direction: column; min-height: 0; }
+.reveal .gs-fill .gs-term-wrap { flex: 1 1 0; height: auto; min-height: 140px; }
+.reveal .gs-fill .gs-tasks { flex: 0 0 auto; max-height: 33%; overflow-y: auto; }
+.reveal .gs-fill .gs-viz { flex: 0 0 auto; padding-top: 10px; padding-bottom: 10px; }
+.reveal .gs-fill .gs-tabs { margin-bottom: 8px; }
+.reveal .gs-fill .gs-panel { height: 150px; overflow-y: auto; }
+.reveal .gs-fill .gs-graph-scroll, .reveal .gs-fill .gs-diff { max-height: none; overflow: visible; }
+
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
-  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tabs,
+  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
   .gs-titlebar, .gs-view-editor { display: none; }
   /* the terminal transcript prints even if the editor was showing */
   .gs-view[data-view="terminal"][hidden] { display: flex; }

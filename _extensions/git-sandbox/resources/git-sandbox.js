@@ -443,6 +443,138 @@
       await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
     }
 
+    /* ------------------------- merge conflicts ---------------------- */
+
+    // A merge that stops on conflicts leaves MERGE_HEAD and MERGE_MSG in
+    // .git, as real git does, plus sandbox-merge.json: what is being merged
+    // into what, and which files are still unresolved. isomorphic-git keeps
+    // the unmerged index entries (and refuses to commit over them) but has
+    // no API to list them, so the list lives here and shrinks as the learner
+    // runs `git add` or `git rm`. Everything is in the in-memory fs, so undo
+    // snapshots carry a half-finished merge along with the rest.
+    var MERGE_STATE = '/.git/sandbox-merge.json';
+
+    async function mergeState() {
+      try { return JSON.parse(await fs.promises.readFile(dir + MERGE_STATE, 'utf8')); }
+      catch (e) { return null; }
+    }
+
+    async function saveMergeState(st) {
+      await fs.promises.writeFile(dir + '/.git/MERGE_HEAD', st.oid + '\n');
+      await fs.promises.writeFile(dir + '/.git/MERGE_MSG', st.message + '\n');
+      await fs.promises.writeFile(dir + MERGE_STATE, JSON.stringify(st));
+    }
+
+    async function clearMergeState() {
+      ['/.git/MERGE_HEAD', '/.git/MERGE_MSG', MERGE_STATE].forEach(function (f) {
+        fs._store.delete(dir + f);
+      });
+    }
+
+    // `git add` / `git rm` on a conflicted path marks it resolved
+    async function markResolved(paths) {
+      var st = await mergeState();
+      if (!st) return;
+      st.unresolved = st.unresolved.filter(function (c) { return paths.indexOf(c.file) === -1; });
+      await fs.promises.writeFile(dir + MERGE_STATE, JSON.stringify(st));
+    }
+
+    function unmergedError(verb) {
+      return {
+        out: 'error: ' + verb + ' is not possible because you have unmerged files.\n' +
+             "hint: Fix them up in the work tree, and then use 'git add/rm <file>'\n" +
+             'hint: as appropriate to mark resolution and make a commit.\n' +
+             'fatal: Exiting because of an unresolved conflict.',
+        ok: false
+      };
+    }
+
+    // Working files (not .git) as path -> bytes, to tell afterwards which
+    // ones a merge touched.
+    function workdirBytes() {
+      var out = {};
+      var prefix = dir + '/';
+      fs._store.forEach(function (v, k) {
+        if (k.indexOf(prefix) !== 0 || k.indexOf(dir + '/.git/') === 0 || v.type !== 'file') return;
+        out[k.slice(prefix.length)] = v.content;
+      });
+      return out;
+    }
+
+    function sameBytes(a, b) {
+      if (!a || !b || a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+
+    // Merge `theirs` (a ref) into the checked-out branch `ours`; `label` is
+    // what the learner calls the other side, and goes into the conflict
+    // markers and the merge record. Shared by `git merge` and `git pull`.
+    // Returns isomorphic-git's result, or { conflict: <command result> }.
+    async function mergeInto(ours, theirs, label, message) {
+      var before = workdirBytes();
+      var result;
+      try {
+        result = await gitlib.merge(opts({
+          ours: ours, theirs: theirs, theirName: label,
+          abortOnConflict: false,
+          author: { name: author.name, email: author.email },
+          message: message
+        }));
+      } catch (e) {
+        if (e.code !== 'MergeConflictError') throw e;
+        return { conflict: await stopOnConflicts(ours, theirs, label, message, before, e.data) };
+      }
+      // bring the working directory in line with the new ref
+      await gitlib.checkout(opts({ ref: ours, force: true }));
+      if (!result.alreadyMerged) mergesDone.push({ from: label, into: ours });
+      return result;
+    }
+
+    async function stopOnConflicts(ours, theirs, label, message, before, data) {
+      var conflicted = data.filepaths || [];
+      var kindOf = function (f) {
+        if ((data.deleteByUs || []).indexOf(f) !== -1) return 'deleted by us';
+        if ((data.deleteByTheirs || []).indexOf(f) !== -1) return 'deleted by them';
+        return 'both modified';
+      };
+      // isomorphic-git writes the cleanly merged files to the working
+      // directory but leaves them out of the index. Real git stages them, so
+      // they go into the merge commit without a `git add`; do the same, but
+      // only for files the merge actually changed, so the learner's own
+      // unstaged edits stay unstaged.
+      var after = workdirBytes();
+      var seen = {};
+      Object.keys(before).concat(Object.keys(after)).forEach(function (f) { seen[f] = true; });
+      var paths = Object.keys(seen).sort();
+      for (var i = 0; i < paths.length; i++) {
+        var f = paths[i];
+        if (conflicted.indexOf(f) !== -1 || sameBytes(before[f], after[f])) continue;
+        if (after[f]) await gitlib.add(opts({ filepath: f }));
+        else await gitlib.remove(opts({ filepath: f }));
+      }
+      var unresolved = conflicted.map(function (f) { return { file: f, kind: kindOf(f) }; });
+      await saveMergeState({
+        from: label, into: ours, message: message,
+        oid: await gitlib.resolveRef(opts({ ref: theirs })),
+        files: conflicted.slice(), unresolved: unresolved
+      });
+      var lines = [];
+      unresolved.forEach(function (c) {
+        if (c.kind === 'both modified') {
+          lines.push('Auto-merging ' + c.file);
+          lines.push('{r}CONFLICT (content){/}: Merge conflict in ' + c.file);
+        } else {
+          var gone = c.kind === 'deleted by us' ? 'HEAD' : label;
+          var kept = c.kind === 'deleted by us' ? label : 'HEAD';
+          lines.push('{r}CONFLICT (modify/delete){/}: ' + c.file + ' deleted in ' + gone +
+            ' and modified in ' + kept + '. Version ' + kept + ' of ' + c.file + ' left in tree.');
+        }
+      });
+      lines.push('Automatic merge failed; fix conflicts and then commit the result.');
+      return { out: lines.join('\n'), ok: false, conflict: true };
+    }
+
     /* ------------------------- graph model ------------------------- */
 
     // Shared commit-graph builder. refEntries: [{ name, oid, isHead, remote }].
@@ -618,11 +750,22 @@
     //   HEAD:    0 = absent,               1 = present
     //   WORKDIR: 0 = absent,               1 = same as HEAD, 2 = different from HEAD
     //   STAGE:   0 = absent, 1 = same as HEAD, 2 = same as WORKDIR, 3 = different from both
+    //
+    // During a merge that stopped on conflicts, `merging` is true and the
+    // files still to resolve are in `conflicted` ([{ file, kind }]) and in
+    // none of the other lists.
     async function statusModel() {
       var matrix = await gitlib.statusMatrix(opts());
-      var res = { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [] };
+      var merge = await mergeState();
+      var res = {
+        staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [],
+        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge
+      };
+      var skip = {};
+      res.conflicted.forEach(function (c) { skip[c.file] = true; });
       matrix.forEach(function (row) {
         var file = row[0], head = row[1], workdir = row[2], stage = row[3];
+        if (skip[file]) return;
 
         if (head === 0) {
           // file is not in the last commit
@@ -649,8 +792,16 @@
     /* ---------------------------- commits --------------------------- */
 
     async function makeCommit(msg, st) {
-      var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
+      var o = { message: msg, author: { name: author.name, email: author.email } };
+      var merge = await mergeState();
+      // concluding a conflicted merge: the commit gets both parents
+      if (merge) o.parent = [await gitlib.resolveRef(opts({ ref: 'HEAD' })), merge.oid];
+      var sha = await gitlib.commit(opts(o));
       var branch = await currentBranch();
+      if (merge) {
+        await clearMergeState();
+        mergesDone.push({ from: merge.from, into: merge.into });
+      }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
         out: '[' + branch + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
@@ -658,17 +809,37 @@
       };
     }
 
+    // Can `git commit` go ahead? Null if so, else the refusal. A merge
+    // commit may record no change of its own (the learner kept their side
+    // of every conflict), so only an ordinary commit needs something staged.
+    async function commitBlocker(st) {
+      if (st.conflicted.length) return unmergedError('Committing');
+      if (st.merging || st.staged.length || st.stagedDeleted.length) return null;
+      var extra = st.untracked.length || st.modified.length
+        ? '\nUse `git add <file>` to stage changes first.' : '';
+      return { out: 'On branch ' + (await currentBranch()) + '\nnothing to commit, working tree clean' + extra, ok: false };
+    }
+
     // what `git commit` without -m puts in the editor, as real git does
     async function commitTemplate(st) {
-      var lines = [
-        '',
+      var merge = await mergeState();
+      var lines = merge ? [merge.message, ''] : [''];
+      if (merge && merge.files.length) {
+        lines.push('# Conflicts:');
+        merge.files.forEach(function (f) { lines.push('#\t' + f); });
+        lines.push('#');
+      }
+      lines = lines.concat([
         '# Please enter the commit message for your changes. Lines starting',
         "# with '#' will be ignored, and an empty message aborts the commit.",
         '#',
-        '# On branch ' + (await currentBranch()),
+        '# On branch ' + (await currentBranch())
+      ]);
+      if (merge) lines.push('# All conflicts fixed but you are still merging.');
+      lines = lines.concat([
         '#',
         '# Changes to be committed:'
-      ];
+      ]);
       st.staged.forEach(function (s) { lines.push('#\t' + s.kind + ':   ' + s.file); });
       st.stagedDeleted.forEach(function (f) { lines.push('#\tdeleted:    ' + f); });
       lines.push('#');
@@ -684,8 +855,10 @@
         .join('\n').replace(/^\n+|\n+$/g, '');
       if (!msg) return { out: 'Aborting commit due to empty commit message.', ok: false, kind: 'git' };
       var st = await statusModel();
-      if (!st.staged.length && !st.stagedDeleted.length) {
-        return { out: 'nothing to commit, working tree clean', ok: false, kind: 'git' };
+      var blocked = await commitBlocker(st);
+      if (blocked) {
+        blocked.kind = 'git';
+        return blocked;
       }
       var r = await makeCommit(msg, st);
       r.kind = 'git';
@@ -731,11 +904,23 @@
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
           if (!anyCommit) lines.push('', 'No commits yet');
+          if (st.conflicted.length) {
+            lines.push('You have unmerged paths.',
+              '  (fix conflicts and run "git commit")',
+              '  (use "git merge --abort" to abort the merge)');
+          } else if (st.merging) {
+            lines.push('All conflicts fixed but you are still merging.',
+              '  (use "git commit" to conclude merge)');
+          }
 
           if (st.staged.length || st.stagedDeleted.length) {
             lines.push('', 'Changes to be committed:');
             st.staged.forEach(function (s) { lines.push('  {g}' + s.kind + ':   ' + s.file + '{/}'); });
             st.stagedDeleted.forEach(function (f) { lines.push('  {g}deleted:    ' + f + '{/}'); });
+          }
+          if (st.conflicted.length) {
+            lines.push('', 'Unmerged paths:', '  (use "git add <file>..." to mark resolution)');
+            st.conflicted.forEach(function (c) { lines.push('  {r}' + c.kind + ':   ' + c.file + '{/}'); });
           }
           if (st.modified.length || st.deleted.length) {
             lines.push('', 'Changes not staged for commit:');
@@ -746,7 +931,8 @@
             lines.push('', 'Untracked files:');
             st.untracked.forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
-          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length && !st.untracked.length) {
+          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length &&
+              !st.untracked.length && !st.conflicted.length) {
             lines.push('', 'nothing to commit, working tree clean');
           }
           return { out: lines.join('\n'), ok: true };
@@ -754,7 +940,7 @@
 
         case 'add': {
           if (!rest.length) return { out: "Nothing specified, nothing added.\nhint: try 'git add .' or 'git add <file>'", ok: false };
-          var added = 0;
+          var added = [];
           for (var i = 0; i < rest.length; i++) {
             var spec = rest[i];
             if (spec === '.' || spec === '-A' || spec === '--all' || spec === '*') {
@@ -766,17 +952,25 @@
                 if (under && row[0].indexOf(under) !== 0) continue;
                 if (row[2] === 0) await gitlib.remove(opts({ filepath: row[0] }));
                 else await gitlib.add(opts({ filepath: row[0] }));
-                added++;
+                added.push(row[0]);
               }
             } else {
               var f = rel(spec);
               try { await fs.promises.stat(abs(spec)); }
-              catch (e) { return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false }; }
+              catch (e) {
+                // a conflicted file the learner deleted: staging the deletion resolves it
+                var gone = (await statusModel()).conflicted.some(function (c) { return c.file === f; });
+                if (!gone) return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
+                await gitlib.remove(opts({ filepath: f }));
+                added.push(f);
+                continue;
+              }
               await gitlib.add(opts({ filepath: f }));
-              added++;
+              added.push(f);
             }
           }
-          return { out: '', ok: true, silentNote: added + ' path(s) staged' };
+          await markResolved(added);
+          return { out: '', ok: true, silentNote: added.length + ' path(s) staged' };
         }
 
         case 'rm': {
@@ -784,6 +978,7 @@
           if (!target) return { out: 'usage: git rm <file>', ok: false };
           await gitlib.remove(opts({ filepath: rel(target) }));
           try { await fs.promises.unlink(abs(target)); } catch (e) {}
+          await markResolved([rel(target)]);
           return { out: "rm '" + rel(target) + "'", ok: true };
         }
 
@@ -795,12 +990,8 @@
           }
           if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
-          if (!st2.staged.length && !st2.stagedDeleted.length) {
-            var br2 = await currentBranch();
-            var extra = st2.untracked.length || st2.modified.length
-              ? '\nUse `git add <file>` to stage changes first.' : '';
-            return { out: 'On branch ' + br2 + '\nnothing to commit, working tree clean' + extra, ok: false };
-          }
+          var blocked = await commitBlocker(st2);
+          if (blocked) return blocked;
           if (msg === null) {
             // Without -m, real git opens an editor (usually vim) on
             // COMMIT_EDITMSG. The engine has no screen, so it hands the
@@ -874,19 +1065,49 @@
           if (!names2.length) return { out: 'fatal: missing branch name', ok: false };
           var name = names2[0];
           var all2 = await gitlib.listBranches(opts());
+          var midMerge = await statusModel();
+          if (midMerge.conflicted.length) {
+            return {
+              out: 'error: you need to resolve your current index first\n' +
+                midMerge.conflicted.map(function (c) { return c.file + ': needs merge'; }).join('\n'),
+              ok: false
+            };
+          }
           if (create) {
             if (all2.indexOf(name) !== -1) return { out: "fatal: a branch named '" + name + "' already exists", ok: false };
+            // like real git, switching away drops a merge whose conflicts
+            // are all resolved but not yet committed
+            if (midMerge.merging) await clearMergeState();
             await gitlib.branch(opts({ ref: name, checkout: true }));
             return { out: "Switched to a new branch '" + name + "'", ok: true };
           }
           if (all2.indexOf(name) === -1) {
             return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git checkout -b " + name + "` to create it", ok: false };
           }
+          if (midMerge.merging) await clearMergeState();
           await gitlib.checkout(opts({ ref: name }));
           return { out: "Switched to branch '" + name + "'", ok: true };
         }
 
         case 'merge': {
+          var inMerge = await statusModel();
+          if (rest[0] === '--abort') {
+            if (!inMerge.merging) return { out: 'fatal: There is no merge to abort (MERGE_HEAD missing).', ok: false };
+            // back to the last commit, as `git reset --merge` does; files the
+            // merge brought in are staged, so the forced checkout drops them
+            await gitlib.checkout(opts({ ref: await currentBranch(), force: true }));
+            await clearMergeState();
+            return { out: '', ok: true };
+          }
+          if (rest[0] === '--continue') {
+            if (!inMerge.merging) return { out: 'fatal: There is no merge in progress (MERGE_HEAD missing).', ok: false };
+            return gitCommand(['commit']);
+          }
+          if (inMerge.conflicted.length) return unmergedError('Merging');
+          if (inMerge.merging) {
+            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+              'Please, commit your changes before you merge.', ok: false };
+          }
           var theirs = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
           if (!theirs) return { out: 'usage: git merge <branch>', ok: false };
           var ours = await currentBranch();
@@ -895,26 +1116,12 @@
           if (theirs === ours) return { out: 'Already up to date.', ok: true };
           var result;
           try {
-            result = await gitlib.merge(opts({
-              ours: ours, theirs: theirs,
-              author: { name: author.name, email: author.email },
-              message: "Merge branch '" + theirs + "' into " + ours
-            }));
+            result = await mergeInto(ours, theirs, theirs, "Merge branch '" + theirs + "' into " + ours);
           } catch (e) {
-            if (e.code === 'MergeNotSupportedError' || e.code === 'MergeConflictError') {
-              return {
-                out: 'CONFLICT: both branches changed the same file.\n' +
-                     'Automatic merge failed. In this sandbox, conflicts are not resolvable —\n' +
-                     'try `reset` and take the guided path instead.',
-                ok: false
-              };
-            }
             return { out: 'fatal: ' + e.message, ok: false };
           }
-          // bring the working directory in line with the new ref
-          await gitlib.checkout(opts({ ref: ours, force: true }));
+          if (result.conflict) return result.conflict;
           if (result.alreadyMerged) return { out: 'Already up to date.', ok: true };
-          mergesDone.push({ from: theirs, into: ours });
           if (result.fastForward) return { out: 'Updating ' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
           return { out: "Merge made by the 'recursive' strategy.", ok: true };
         }
@@ -1002,6 +1209,12 @@
 
         case 'pull': {
           if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var inMerge2 = await statusModel();
+          if (inMerge2.conflicted.length) return unmergedError('Pulling');
+          if (inMerge2.merging) {
+            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+              'Please, commit your changes before you merge.', ok: false };
+          }
           var lbr = await currentBranch();
           if (!lbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
           var fetched = await gitCommand(['fetch']);
@@ -1012,35 +1225,30 @@
           if (theirOid === oursOid) return { out: prefix2 + 'Already up to date.', ok: true };
           var pres;
           try {
-            pres = await gitlib.merge(opts({
-              ours: lbr, theirs: 'refs/remotes/origin/' + lbr,
-              author: { name: author.name, email: author.email },
-              message: "Merge branch '" + lbr + "' of " + remoteUrl
-            }));
+            pres = await mergeInto(lbr, 'refs/remotes/origin/' + lbr, 'origin/' + lbr,
+              "Merge branch '" + lbr + "' of " + remoteUrl);
           } catch (e) {
-            if (e.code === 'MergeNotSupportedError' || e.code === 'MergeConflictError') {
-              return {
-                out: prefix2 + 'CONFLICT: the remote changed the same lines you did.\n' +
-                     'Automatic merge failed. In this sandbox, conflicts are not resolvable yet —\n' +
-                     'try `reset` and take the guided path instead.',
-                ok: false
-              };
-            }
             return { out: prefix2 + 'fatal: ' + e.message, ok: false };
           }
-          await gitlib.checkout(opts({ ref: lbr, force: true }));
+          if (pres.conflict) {
+            pres.conflict.out = prefix2 + pres.conflict.out;
+            return pres.conflict;
+          }
           if (pres.alreadyMerged) return { out: prefix2 + 'Already up to date.', ok: true };
-          mergesDone.push({ from: 'origin/' + lbr, into: lbr });
           if (pres.fastForward) return { out: prefix2 + 'Updating ' + oursOid.slice(0, 7) + '..' + theirOid.slice(0, 7) + '\nFast-forward', ok: true };
           return { out: prefix2 + "Merge made by the 'recursive' strategy.", ok: true };
         }
 
         case 'diff': {
           var st3 = await statusModel();
-          if (!st3.modified.length && !st3.untracked.length) return { out: '', ok: true };
+          // a conflicted file shows its markers against the last commit
+          var diffFiles = st3.modified.concat(st3.conflicted
+            .filter(function (c) { return c.kind === 'both modified'; })
+            .map(function (c) { return c.file; })).sort();
+          if (!diffFiles.length) return { out: '', ok: true };
           var chunks = [];
-          for (var d = 0; d < st3.modified.length; d++) {
-            var file = st3.modified[d];
+          for (var d = 0; d < diffFiles.length; d++) {
+            var file = diffFiles[d];
             var headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' }));
             var blob = await gitlib.readBlob(opts({ oid: headOid, filepath: file }));
             var oldTxt = new TextDecoder().decode(blob.blob);
@@ -1101,17 +1309,74 @@
           oldTxt = new TextDecoder().decode(blob.blob);
         }
         if (workdir !== 0) newTxt = await fs.promises.readFile(dir + '/' + file, 'utf8');
-        // Strip one trailing newline per side so the panel never shows a
-        // phantom blank last line.
-        oldTxt = oldTxt.replace(/\n$/, '');
-        newTxt = newTxt.replace(/\n$/, '');
-        var lines;
-        if (kind === 'new') lines = newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
-        else if (kind === 'deleted') lines = oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
-        else lines = diffLines(oldTxt, newTxt);
-        files.push({ file: file, kind: kind, lines: lines });
+        files.push({ file: file, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
       }
       return { files: files };
+    }
+
+    // One file's lines for the diff views; kind is 'new', 'modified' or
+    // 'deleted'. One trailing newline per side is dropped so the panel never
+    // shows a phantom blank last line.
+    function fileDiff(kind, oldTxt, newTxt) {
+      oldTxt = oldTxt.replace(/\n$/, '');
+      newTxt = newTxt.replace(/\n$/, '');
+      if (kind === 'new') return newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
+      if (kind === 'deleted') return oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
+      return diffLines(oldTxt, newTxt);
+    }
+
+    // path -> blob oid for every file in a commit's tree
+    async function flatTree(commitOid) {
+      var out = {};
+      async function walkTree(treeOid, prefix) {
+        var t = await gitlib.readTree(opts({ oid: treeOid }));
+        for (var i = 0; i < t.tree.length; i++) {
+          var e = t.tree[i];
+          if (e.type === 'tree') await walkTree(e.oid, prefix + e.path + '/');
+          else if (e.type === 'blob') out[prefix + e.path] = e.oid;
+        }
+      }
+      var c = await gitlib.readCommit(opts({ oid: commitOid }));
+      await walkTree(c.commit.tree, '');
+      return out;
+    }
+
+    async function blobText(oid) {
+      var b = await gitlib.readBlob(opts({ oid: oid }));
+      if (b.blob.indexOf(0) !== -1) return null;
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(b.blob); }
+      catch (e) { return null; }
+    }
+
+    // What `git show` would tell you about one commit: who, when, the full
+    // message, and what it changed. A merge commit is compared with its
+    // first parent, as `git show --first-parent` does, so it lists what the
+    // merge brought in. files: [{ file, kind, lines, binary }].
+    async function commitDetails(oid) {
+      var c = await gitlib.readCommit(opts({ oid: oid }));
+      var parents = c.commit.parent || [];
+      var mine = await flatTree(oid);
+      var theirs = parents.length ? await flatTree(parents[0]) : {};
+      var paths = {};
+      Object.keys(mine).concat(Object.keys(theirs)).forEach(function (p) { paths[p] = true; });
+      var files = [];
+      var sorted = Object.keys(paths).sort();
+      for (var i = 0; i < sorted.length; i++) {
+        var f = sorted[i];
+        if (mine[f] === theirs[f]) continue;
+        var kind = !theirs[f] ? 'new' : (!mine[f] ? 'deleted' : 'modified');
+        var oldTxt = theirs[f] ? await blobText(theirs[f]) : '';
+        var newTxt = mine[f] ? await blobText(mine[f]) : '';
+        if (oldTxt === null || newTxt === null) { files.push({ file: f, kind: kind, lines: [], binary: true }); continue; }
+        files.push({ file: f, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
+      }
+      var a = c.commit.author;
+      return {
+        oid: oid, short: oid.slice(0, 7), parents: parents,
+        author: a.name, email: a.email, timestamp: a.timestamp,
+        message: (c.commit.message || '').replace(/\n+$/, ''),
+        files: files
+      };
     }
 
     function usageGit() {
@@ -1121,7 +1386,7 @@
         '  git add <file> | .            git commit -m "message"',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
-        '  git switch [-c] <branch>      git merge <branch>',
+        '  git switch [-c] <branch>      git merge <branch> | --abort',
         '  git remote add origin <url>   git push [-u origin <branch>]',
         '  git fetch                     git pull',
         '  git config user.name "..."'
@@ -1379,12 +1644,16 @@
       graphModel: graphModel,
       statusModel: statusModel,
       diffModel: diffModel,
+      commitDetails: commitDetails,
       remoteModel: remoteModel,
       pwd: displayCwd,
       // cwd relative to the project folder: '' at its top, 'src/lib' below
       cwdPath: function () { return cwd === dir ? '' : cwd.slice(dir.length + 1); },
       isRepo: isRepo,
       currentBranch: currentBranch,
+      // { from, into, files, unresolved } while a merge is stopped on
+      // conflicts, else null
+      mergeState: mergeState,
       listFiles: listFiles,
       listTree: listTree,
       // The file API below takes paths from the project's top folder, not
@@ -1429,6 +1698,7 @@
      when: branch report and on main
      when: merged report into main
      when: merge commit
+     when: merging and not conflicts
      when: file report.qmd contains "Q3"
      when: ran /git\s+status/
      when: not clean
@@ -1627,8 +1897,16 @@
             var s = ctx.status;
             return ctx.isRepo && s.staged.length === 0 && s.modified.length === 0 &&
                    s.untracked.length === 0 && s.deleted.length === 0 &&
-                   s.stagedDeleted.length === 0;
+                   s.stagedDeleted.length === 0 && !(s.conflicted || []).length;
           };
+
+        // a merge stopped on conflicts and not yet committed or aborted
+        case 'merging':
+          return function (ctx) { return !!ctx.status.merging; };
+
+        // ...with files whose conflicts are not yet marked resolved
+        case 'conflicts':
+          return function (ctx) { return (ctx.status.conflicted || []).length > 0; };
 
         case 'staged':
           return function (ctx) {
@@ -1752,7 +2030,7 @@
         default:
           throw new Error('unknown condition "' + word + '". Available: repo, clean, staged, ' +
             'commits, commits on <branch>, branch <name>, on <branch>, merged <a> into <b>, ' +
-            'merge commit, file <name> [contains "text"], ran /regex/, remote, pushed');
+            'merge commit, merging, conflicts, file <name> [contains "text"], ran /regex/, remote, pushed');
       }
     }
 
@@ -2319,6 +2597,23 @@
   var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
   var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
   var ICON_PLUS = icon('M8 3v10M3 8h10');
+  // a small commit graph: two branches off a trunk
+  var ICON_TREE = '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+    '<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
+    '<path d="M5 5.3v5.4M5 10c0-2.5 6-2 6-4.7"/>' +
+    '<circle cx="5" cy="3.5" r="1.8"/><circle cx="5" cy="12.5" r="1.8"/><circle cx="11" cy="3.5" r="1.8"/></g></svg>';
+
+  var PANEL_NAMES = ['files', 'changes', 'history', 'remote'];
+
+  // `tree-view` and `panels` take true (always shown), false (left out
+  // entirely) or 'toggle' (shown, with a button to fold it away). Anything
+  // else falls back to the default.
+  function showMode(v, dflt) {
+    if (v === true || v === false || v === 'toggle') return v;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return dflt;
+  }
 
   var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
 
@@ -2393,7 +2688,8 @@
         if (r.editor) {
           throw new Error('seed command opened an editor: ' + lines[i] + ' — give git commit a message with -m');
         }
-        if (!r.ok) {
+        // a seed may leave a merge stopped on conflicts for the learner to resolve
+        if (!r.ok && !r.conflict) {
           // A broken seed is an authoring bug, so make it loud rather than
           // leaving the learner in a half-built repository.
           throw new Error('seed command failed: ' + lines[i] + ' — ' + String(r.out).split('\n')[0]);
@@ -2417,7 +2713,22 @@
 
   /* --------------------------- commit graph -------------------------- */
 
-  function renderGraph(svg, model) {
+  // x where a commit row's text (refs, sha, message) starts
+  function graphTextX(model) {
+    var maxLane = 0;
+    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
+    return 22 + maxLane * 24 + 22 + 6;
+  }
+
+  // `extra`, for the local history only: { onToggle(oid), open: { oid: px } }.
+  // Each row then gets a chevron that opens the commit's contents, and an
+  // open row grows by its px so the details (an HTML layer the caller
+  // places) fit beneath it with the lanes running on past them. Returns
+  // { detailTop: { oid: y } } for that placement.
+  function renderGraph(svg, model, extra) {
+    extra = extra || {};
+    var open = extra.open || {};
+    var layout = { detailTop: {} };
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     var NS = 'http://www.w3.org/2000/svg';
 
@@ -2434,13 +2745,12 @@
       t.setAttribute('class', 'gs-empty-text');
       t.textContent = 'No commits yet.';
       svg.appendChild(t);
-      return;
+      return layout;
     }
 
     var rowH = 44, laneW = 24, padTop = 26, padLeft = 22, lineH = 17;
-    var maxLane = 0;
-    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
-    var graphW = padLeft + maxLane * laneW + 22;
+    var graphW = graphTextX(model) - 6;
+    var toggleW = extra.onToggle ? 28 : 0;
 
     // Wrap a commit message to a character budget, breaking on spaces and
     // hard-breaking any single word longer than the line.
@@ -2471,10 +2781,11 @@
         return lay;
       });
       var shaX = tx, msgX = tx + 62;
-      var maxChars = Math.max(8, Math.floor((W - msgX - 12) / 6.8));
+      var maxChars = Math.max(8, Math.floor((W - msgX - 12 - toggleW) / 6.8));
       var lines = wrapWords(c.message, maxChars);
+      var baseH = Math.max(rowH, lines.length * lineH + 20);
       return { refLayouts: refLayouts, shaX: shaX, msgX: msgX, lines: lines,
-               h: Math.max(rowH, lines.length * lineH + 20) };
+               baseH: baseH, h: baseH + (open[c.oid] || 0) };
     });
 
     // Second pass: stack rows so a wrapped message never overlaps the next.
@@ -2570,7 +2881,46 @@
         msg.appendChild(ts);
       });
       svg.appendChild(msg);
+
+      if (extra.onToggle) {
+        svg.appendChild(commitToggle(NS, c, W - 22, cy, !!open[c.oid], extra.onToggle));
+        if (open[c.oid]) layout.detailTop[c.oid] = tops[i] + row.baseH - 6;
+      }
     });
+    return layout;
+  }
+
+  // The chevron at the end of a history row: a keyboard-reachable SVG
+  // button that opens or closes the commit's contents.
+  function commitToggle(NS, c, x, cy, isOpen, onToggle) {
+    var g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'gs-cd-toggle' + (isOpen ? ' is-open' : ''));
+    g.setAttribute('role', 'button');
+    g.setAttribute('tabindex', '0');
+    g.setAttribute('data-oid', c.oid);
+    g.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    g.setAttribute('aria-label', (isOpen ? 'Hide' : 'Show') + ' the contents of commit ' + c.short);
+    var title = document.createElementNS(NS, 'title');
+    title.textContent = isOpen ? 'Hide contents' : 'Show contents';
+    g.appendChild(title);
+    var hit = document.createElementNS(NS, 'rect');
+    hit.setAttribute('x', x - 11); hit.setAttribute('y', cy - 11);
+    hit.setAttribute('width', 22); hit.setAttribute('height', 22);
+    hit.setAttribute('rx', 5);
+    hit.setAttribute('class', 'gs-cd-toggle-bg');
+    g.appendChild(hit);
+    var chev = document.createElementNS(NS, 'path');
+    // points right when closed and down when open, like the file browser's
+    chev.setAttribute('d', isOpen
+      ? 'M' + (x - 4) + ',' + (cy - 2) + ' l4,4 l4,-4'
+      : 'M' + (x - 2) + ',' + (cy - 4) + ' l4,4 l-4,4');
+    chev.setAttribute('class', 'gs-cd-chev');
+    g.appendChild(chev);
+    g.addEventListener('click', function () { onToggle(c.oid); });
+    g.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(c.oid); }
+    });
+    return g;
   }
 
   /* ------------------------------ diff panel ------------------------- */
@@ -2584,29 +2934,52 @@
       node.innerHTML = '<div class="gs-diff-empty">Working directory clean — no changes since the last commit.</div>';
       return;
     }
-    node.innerHTML = model.files.map(function (f) {
-      var rows = f.lines.map(function (l) {
-        var cls = l.t === '+' ? ' gs-diff-add' : (l.t === '-' ? ' gs-diff-del' : '');
-        return '<div class="gs-diff-line' + cls + '">' +
-          '<span class="gs-diff-num">' + (l.a || '') + '</span>' +
-          '<span class="gs-diff-num">' + (l.b || '') + '</span>' +
-          '<span class="gs-diff-sign">' + (l.t === ' ' ? '' : l.t) + '</span>' +
-          '<span class="gs-diff-text">' + esc(l.text) + '</span>' +
-        '</div>';
-      }).join('');
-      return '<div class="gs-diff-file">' +
-        '<div class="gs-diff-filehead">' +
-          '<span class="gs-diff-name">' + esc(f.file) + '</span>' +
-          '<span class="gs-diff-kind gs-diff-kind-' + f.kind + '">' + f.kind + '</span>' +
-        '</div>' + rows +
-      '</div>';
-    }).join('');
+    node.innerHTML = model.files.map(diffFileHtml).join('');
+  }
+
+  // one file's block in a diff view (the Changes panel, a commit's contents)
+  function diffFileHtml(f) {
+    var rows = f.binary
+      ? '<div class="gs-diff-line"><span class="gs-diff-text">Binary file, not shown.</span></div>'
+      : f.lines.map(function (l) {
+          var cls = l.t === '+' ? ' gs-diff-add' : (l.t === '-' ? ' gs-diff-del' : '');
+          return '<div class="gs-diff-line' + cls + '">' +
+            '<span class="gs-diff-num">' + (l.a || '') + '</span>' +
+            '<span class="gs-diff-num">' + (l.b || '') + '</span>' +
+            '<span class="gs-diff-sign">' + (l.t === ' ' ? '' : l.t) + '</span>' +
+            '<span class="gs-diff-text">' + esc(l.text) + '</span>' +
+          '</div>';
+        }).join('');
+    return '<div class="gs-diff-file">' +
+      '<div class="gs-diff-filehead">' +
+        '<span class="gs-diff-name">' + esc(f.file) + '</span>' +
+        '<span class="gs-diff-kind gs-diff-kind-' + f.kind + '">' + f.kind + '</span>' +
+      '</div>' + rows +
+    '</div>';
+  }
+
+  // The contents of one commit, shown under its row in the History graph.
+  function commitDetailsHtml(d) {
+    var when = new Date(d.timestamp * 1000);
+    var whenText = isNaN(when.getTime()) ? '' : when.toLocaleString();
+    var note = d.parents.length > 1
+      ? '<div class="gs-cd-note">A merge of ' + d.parents.map(function (p) { return '<code>' + p.slice(0, 7) + '</code>'; }).join(' and ') +
+        '. Changes are shown against the first parent, so they are what the merge brought in.</div>'
+      : (!d.parents.length ? '<div class="gs-cd-note">The first commit: everything in it is new.</div>' : '');
+    var files = d.files.length
+      ? d.files.map(diffFileHtml).join('')
+      : '<div class="gs-diff-empty">No file changes.</div>';
+    return '<div class="gs-cd-meta"><code class="gs-cd-oid">' + esc(d.oid) + '</code>' +
+        '<span>' + esc(d.author) + ' &lt;' + esc(d.email) + '&gt;</span>' +
+        (whenText ? '<span>' + esc(whenText) + '</span>' : '') + '</div>' +
+      '<div class="gs-cd-msg">' + esc(d.message) + '</div>' + note +
+      '<div class="gs-cd-files" aria-label="Files changed">' + files + '</div>';
   }
 
   /* -------------------------- staging diagram ------------------------ */
 
   function renderStages(node, status, graph, files, isRepo) {
-    var needAdd = []
+    var needAdd = (status.conflicted || []).map(function (c) { return { f: c.file, k: 'conflict: ' + c.kind, conflict: true }; })
       .concat(status.untracked.map(function (f) { return { f: f, k: 'untracked' }; }))
       .concat(status.modified.map(function (f) { return { f: f, k: 'modified' }; }))
       .concat(status.deleted.map(function (f) { return { f: f, k: 'deleted' }; }));
@@ -2627,8 +3000,9 @@
       var chips = items.length
         ? items.map(function (it) {
             var quiet = it.k === 'unchanged' || it.k === 'not in git yet';
-            var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '');
-            return '<span class="' + cls + '">' + esc(it.f) +
+            var cls = 'gs-chip gs-chip-' + kind + (quiet ? ' gs-chip-clean' : '') +
+              (it.conflict ? ' gs-chip-conflict' : '');
+            return '<span class="' + cls + '" data-col="' + kind + '" data-file="' + esc(it.f) + '">' + esc(it.f) +
                    '<span class="gs-chip-k">' + esc(it.k) + '</span></span>';
           }).join('')
         : '<span class="gs-chip gs-chip-empty">empty</span>';
@@ -2651,7 +3025,114 @@
       col('Repository', 'permanent history', repoItems, 'repo');
   }
 
+  // Where each file chip sits, keyed by column and file ("stage:a.txt"): a
+  // file can be in two columns at once (staged, then edited again).
+  function chipRects(node) {
+    var out = {};
+    var base = node.getBoundingClientRect();
+    node.querySelectorAll('.gs-chip[data-file]').forEach(function (c) {
+      var r = c.getBoundingClientRect();
+      if (!r.width) return;
+      out[c.getAttribute('data-col') + ':' + c.getAttribute('data-file')] = {
+        el: c, x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height
+      };
+    });
+    return out;
+  }
+
+  // Show files travelling between the columns after a re-render, so
+  // `git add` visibly carries a file from the working directory to the
+  // staging area and `git commit` carries the staged files into the
+  // repository. `before` is chipRects() from just before the render. Chips
+  // that moved glide from where they were (FLIP), committed ones fly into
+  // the repository as ghosts, and new ones fade in. A no-op where the Web
+  // Animations API is missing, the panel is hidden, or the reader asked for
+  // reduced motion.
+  function animateStages(node, before, committed) {
+    if (!before || typeof node.animate !== 'function') return;
+    if (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!node.getBoundingClientRect().width || !Object.keys(before).length) return;
+    var now = chipRects(node);
+    var repo = node.querySelector('.gs-chip-repo');
+    var repoBox = repo ? chipBox(node, repo) : null;
+    var ease = { duration: 480, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' };
+    var claimed = {};
+
+    function glide(el, from, to) {
+      var dx = from.x - to.x, dy = from.y - to.y;
+      if (!dx && !dy) return;
+      el.animate([{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'none' }], ease);
+    }
+
+    Object.keys(before).forEach(function (key) {
+      var old = before[key];
+      var colName = key.slice(0, key.indexOf(':'));
+      var file = key.slice(key.indexOf(':') + 1);
+      if (now[key]) { glide(now[key].el, old, now[key]); claimed[key] = true; return; }
+      if (colName === 'stage' && committed && repoBox) {
+        // into the repository: a copy of the old chip flies there and fades
+        var ghost = old.el.cloneNode(true);
+        ghost.classList.add('gs-chip-ghost');
+        ghost.style.left = old.x + 'px';
+        ghost.style.top = old.y + 'px';
+        ghost.style.width = old.w + 'px';
+        node.appendChild(ghost);
+        var dx = repoBox.x + repoBox.w / 2 - (old.x + old.w / 2);
+        var dy = repoBox.y + repoBox.h / 2 - (old.y + old.h / 2);
+        // stays solid for most of the trip, so the eye can follow it
+        ghost.animate([
+          { transform: 'none', opacity: 1 },
+          { transform: 'translate(' + dx * 0.85 + 'px, ' + dy * 0.85 + 'px) scale(0.85)', opacity: 0.9, offset: 0.7 },
+          { transform: 'translate(' + dx + 'px, ' + dy + 'px) scale(0.5)', opacity: 0 }
+        ], { duration: 650, easing: ease.easing }).onfinish = function () { if (ghost.parentNode) ghost.parentNode.removeChild(ghost); };
+        return;
+      }
+      // across to the other column: `git add` (work -> stage) or back
+      var other = (colName === 'work' ? 'stage' : 'work') + ':' + file;
+      if (now[other] && !before[other]) { glide(now[other].el, old, now[other]); claimed[other] = true; }
+    });
+
+    Object.keys(now).forEach(function (key) {
+      // the repository chip is relabelled ("3 commits"), not new
+      if (claimed[key] || before[key] || key.indexOf('repo:') === 0) return;
+      now[key].el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, delay: committed ? 200 : 0, fill: 'backwards' });
+    });
+    if (committed && repo) {
+      repo.animate([{ transform: 'none' }, { transform: 'scale(1.06)' }, { transform: 'none' }],
+        { duration: 360, delay: 520 });
+    }
+  }
+
+  function chipBox(node, el) {
+    var base = node.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
+  }
+
   /* ------------------------------- mount ----------------------------- */
+
+  // Exercises that share one repository (`share: <id>`), by that id. The
+  // exercise with the id is the origin and seeds it; every view of it gets
+  // the same sandbox, and they keep each other up to date. The undo stack
+  // belongs to the group: it holds the repository's history, whichever
+  // view a change was made in.
+  var groups = {};
+
+  function groupFor(key, config) {
+    var g = key ? groups[key] : null;
+    if (g) return g;
+    g = {
+      sb: root.GitSandboxCore.createSandbox({
+        git: root.git,
+        displayDir: (config.prompt || '~/project').replace(/\s*\$\s*$/, '')
+      }),
+      seed: null,
+      ready: Promise.resolve(),
+      undo: [],
+      members: []
+    };
+    if (key) groups[key] = g;
+    return g;
+  }
 
   function mount(selector, config) {
     config = config || {};
@@ -2673,37 +3154,65 @@
       return null;
     }
 
-    var sb = root.GitSandboxCore.createSandbox({
-      git: root.git,
-      displayDir: (config.prompt || '~/project').replace(/\s*\$\s*$/, '')
-    });
+    // `share: <id>` makes this box another view of exercise <id>'s
+    // repository: its own title, tasks, terminal and layout, the same files
+    // and history.
+    var shareKey = config.share ? String(config.share) : null;
+    var group = groupFor(shareKey || host.id || null, config);
+    var isOrigin = !shareKey;
+    var sb = group.sb;
+    var self = {};
+    group.members.push(self);
     var history = [];
     var histIdx = -1;
     var busy = false;
     var tasks = normaliseTasks(config.tasks);
     var seed = normaliseSeed(config.seed);
+    // only the origin seeds a shared repository; a view that mounts before
+    // its origin starts empty and catches up when the origin arrives
+    if (isOrigin) group.seed = seed;
     var intro = normaliseIntro(config.intro);
-    // the learngitbranching-style pane is opt-in: `tree-view: true`
-    var treeOn = !!config.treeView && !!root.GitSandboxTree;
+    // The learngitbranching-style pane: `tree-view: true` shows it beside
+    // the box, 'toggle' (the default) puts a button in the header that
+    // opens it, and false leaves it out.
+    var treeMode = root.GitSandboxTree ? showMode(config.treeView, 'toggle') : false;
+    var treeOn = treeMode !== false;
+    var treeShown = treeMode === true;
+    // The editor tab (and with it the tab strip) can be turned off.
+    var editorOn = config.editor !== false && config.editor !== 'false';
+    // The panels below the terminal: the same three modes, here 'toggle'
+    // starts open with a chevron to fold them. `panelTabs` picks which
+    // panels there are at all.
+    var panelTabs = Array.isArray(config.panelTabs)
+      ? PANEL_NAMES.filter(function (n) { return config.panelTabs.indexOf(n) !== -1; })
+      : PANEL_NAMES.slice();
+    var panelMode = panelTabs.length ? showMode(config.panels, 'toggle') : false;
+    var panelsOpen = panelMode !== false;
 
     host.classList.add('gs');
-    host.classList.toggle('gs-has-tree', treeOn);
+    host.classList.toggle('gs-has-tree', treeShown);
     host.innerHTML =
       '<div class="gs-head">' +
         // The workspace tabs live in the title bar and open onto the dark
         // pane below it: the terminal and the file editor share that pane,
         // one at a time, like tabs in a code editor.
-        '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
-          '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
-            '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
-          '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
-            '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
-            '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
-        '</div>' +
+        (editorOn
+          ? '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
+              '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
+                '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
+              '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+                '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+                '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+            '</div>'
+          : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state" role="status"></span>' +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
+        (treeMode === 'toggle'
+          ? '<button type="button" class="gs-tree-btn" aria-pressed="false" aria-label="Commit tree"' +
+            ' title="Show the commit tree">' + ICON_TREE + '</button>'
+          : '') +
       '</div>' +
       '<div class="gs-body">' +
         '<div class="gs-term-wrap">' +
@@ -2756,7 +3265,7 @@
           '</div>' +
         '</div>' +
         '<div class="gs-tasks"></div>' +
-        '<div class="gs-viz">' +
+        '<div class="gs-viz"' + (panelMode === false ? ' hidden' : '') + '>' +
           // One panel at a time; each tab carries a live badge so the folded
           // panels still tell you what they hold at a glance.
           '<div class="gs-tabs" role="tablist" aria-label="Repository views">' +
@@ -2764,29 +3273,36 @@
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="changes">Changes<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="history">History<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="remote" hidden>Remote<span class="gs-tab-badge" hidden></span></button>' +
+            (panelMode === 'toggle'
+              ? '<button type="button" class="gs-viz-toggle" aria-expanded="true" aria-label="Repository views"' +
+                ' title="Hide these views">' + ICON_CHEVRON + '</button>'
+              : '') +
           '</div>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="files">' +
+          // divs, not <section>s: reveal.js takes every section for a slide
+          '<div class="gs-panel" role="tabpanel" data-panel="files">' +
             '<div class="gs-stages"></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="changes" hidden>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="changes" hidden>' +
             '<div class="gs-diff"></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="history" hidden>' +
-            '<div class="gs-graph-scroll"><svg class="gs-graph" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
-          '</section>' +
-          '<section class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="history" hidden>' +
+            '<div class="gs-graph-scroll"><svg class="gs-graph" xmlns="http://www.w3.org/2000/svg"></svg>' +
+              '<div class="gs-cd-layer"></div></div>' +
+          '</div>' +
+          '<div class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
             '<div class="gs-remote" hidden>' +
               '<div class="gs-graph-scroll"><svg class="gs-remote-graph" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
               '<div class="gs-remote-sync"></div>' +
             '</div>' +
-          '</section>' +
+          '</div>' +
         '</div>' +
       '</div>' +
       (treeOn
         // Beside the whole box rather than in a tab, so learners can keep
         // an eye on the tree while they type.
         // A div, not an <aside>: Quarto's page grid sends asides to the margin.
-        ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"><div class="gs-tree-inner">' +
+        ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"' + (treeShown ? '' : ' hidden') + '>' +
+            '<div class="gs-tree-inner">' +
             '<div class="gs-tree-head"><span class="gs-eyebrow">Commit tree</span></div>' +
             '<div class="gs-tree-scroll"><svg class="gs-tree-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>' +
           '</div></div>'
@@ -2799,6 +3315,11 @@
     var stagesNode = host.querySelector('.gs-stages');
     var diffNode = host.querySelector('.gs-diff');
     var svg = host.querySelector('.gs-graph');
+    var cdLayer = host.querySelector('.gs-cd-layer');
+    // History rows opened to show what the commit changed. Details are
+    // cached by oid: a commit never changes, it can only go away.
+    var openCommits = {};
+    var commitInfo = {};
     var remoteWrap = host.querySelector('.gs-remote');
     var remoteSvg = host.querySelector('.gs-remote-graph');
     var remoteSync = host.querySelector('.gs-remote-sync');
@@ -2821,8 +3342,31 @@
     // ticks, the command history and the terminal together, so the undone
     // command leaves no trace anywhere. Only commands that actually changed
     // state get an entry, so `undo` never appears to do nothing.
-    var undoStack = [];
+    var undoStack = group.undo;
     var UNDO_DEPTH = 20;
+
+    function pushUndo(snap) {
+      snap.owner = self;
+      undoStack.push(snap);
+      if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+    }
+
+    // can this view undo? only its own change, and only the latest one:
+    // undoing past a change made in another view would take that back too
+    function canUndo() {
+      var top = undoStack[undoStack.length - 1];
+      return !!top && top.owner === self;
+    }
+
+    // the other views of a shared repository redraw after every change
+    // here; `note` is a line for their terminals
+    function notifyViews(note) {
+      group.members.forEach(function (m) {
+        if (m === self || !m.refresh) return;
+        if (note) m.note(note);
+        m.refresh();
+      });
+    }
 
     function captureUndo(line) {
       return {
@@ -2837,13 +3381,15 @@
     }
 
     function doUndo() {
-      var entry = undoStack.pop();
-      if (!entry) {
+      if (!canUndo()) {
         write('<span class="gs-echo-prompt">' +
           esc(host.querySelector('.gs-prompt').textContent) + '</span> undo', 'gs-echo');
-        writeText('Nothing to undo.');
+        writeText(undoStack.length
+          ? 'The last change was made in another view of this repository. Undo it there.'
+          : 'Nothing to undo.');
         return;
       }
+      var entry = undoStack.pop();
       sb.restore(entry.core);
       // C-names given out since the snapshot are handed back, so the next
       // commit reuses the undone one's name
@@ -2862,25 +3408,50 @@
     var tabPanels = {};
     host.querySelectorAll('.gs-tab').forEach(function (b) { tabButtons[b.getAttribute('data-tab')] = b; });
     host.querySelectorAll('.gs-panel').forEach(function (p) { tabPanels[p.getAttribute('data-panel')] = p; });
-    var activeTab = 'files';
+    var panelOn = {};
+    panelTabs.forEach(function (n) { panelOn[n] = true; });
+    // panels left out by `panel-tabs` never show; Remote also waits for a remote
+    PANEL_NAMES.forEach(function (n) { if (!panelOn[n]) tabButtons[n].hidden = true; });
+    var defaultTab = panelTabs.filter(function (n) { return n !== 'remote'; })[0] || 'remote';
+    var activeTab = defaultTab;
+    var vizToggle = host.querySelector('.gs-viz-toggle');
 
-    function selectTab(name) {
-      if (!tabButtons[name] || tabButtons[name].hidden) return;
+    // `fromUser`: a click on a tab also unfolds folded panels; a command
+    // choosing a tab for the learner leaves them folded.
+    function selectTab(name, fromUser) {
+      if (!tabButtons[name] || tabButtons[name].hidden || !panelOn[name]) return;
       activeTab = name;
+      if (fromUser && !panelsOpen) setPanelsOpen(true);
+      showPanels();
+    }
+
+    function showPanels() {
       Object.keys(tabButtons).forEach(function (k) {
-        var on = k === name;
+        var on = k === activeTab;
         tabButtons[k].classList.toggle('is-active', on);
         tabButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
-        tabPanels[k].hidden = !on;
+        tabPanels[k].hidden = !on || !panelsOpen;
       });
       // A graph drawn while its panel was hidden used the fallback width;
       // now that it has a real width, redraw at it.
       redrawGraph();
     }
 
+    function setPanelsOpen(open) {
+      panelsOpen = open;
+      host.querySelector('.gs-viz').classList.toggle('is-folded', !open);
+      if (vizToggle) {
+        vizToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        vizToggle.title = open ? 'Hide these views' : 'Show these views';
+      }
+      showPanels();
+    }
+
     Object.keys(tabButtons).forEach(function (k) {
-      tabButtons[k].addEventListener('click', function () { selectTab(k); });
+      tabButtons[k].addEventListener('click', function () { selectTab(k, true); });
     });
+    if (vizToggle) vizToggle.addEventListener('click', function () { setPanelsOpen(!panelsOpen); });
+    if (activeTab !== 'files') showPanels();
 
     function setBadge(name, text) {
       var badge = tabButtons[name].querySelector('.gs-tab-badge');
@@ -2896,9 +3467,11 @@
       var t = line.trim().split(/\s+/);
       var c = t[0], s = t[1] || '';
       if (c === 'git') {
-        if (/^(init|add|rm|status|restore|mv)$/.test(s)) return 'files';
+        // a commit stays on File Status, where the staged files can be
+        // seen moving into the repository
+        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
         if (s === 'diff') return 'changes';
-        if (/^(commit|merge|log|branch|checkout|switch)$/.test(s)) return 'history';
+        if (/^(merge|log|branch|checkout|switch)$/.test(s)) return 'history';
         if (/^(push|pull|fetch|remote)$/.test(s)) return 'remote';
         return null;
       }
@@ -2911,13 +3484,15 @@
     // last model whenever the width actually changes.
     var lastGraph = null;
     var lastGraphW = 0;
+    var lastCommitCount = 0;
+    var stagesInstant = true;
     var lastRemoteGraph = null;
     var lastRemoteGraphW = 0;
     function redrawGraph() {
       var w = svg.clientWidth;
       if (lastGraph && w && w !== lastGraphW) {
         lastGraphW = w;
-        renderGraph(svg, lastGraph);
+        drawHistory(lastGraph);
       }
       var rw = remoteSvg.clientWidth;
       if (lastRemoteGraph && rw && rw !== lastRemoteGraphW) {
@@ -2947,6 +3522,49 @@
       if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fitTree).observe(host);
       else root.addEventListener('resize', fitTree);
       fitTree();
+    }
+
+    // `tree-view: toggle`: the header button opens and closes the pane. The
+    // tree keeps up with every command while closed, so it opens current.
+    var treeBtn = host.querySelector('.gs-tree-btn');
+    function setTreeShown(on) {
+      treeShown = on;
+      host.classList.toggle('gs-has-tree', on);
+      host.querySelector('.gs-tree').hidden = !on;
+      treeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      treeBtn.title = on ? 'Hide the commit tree' : 'Show the commit tree';
+      if (on) {
+        lastTreeW = 0;
+        fitTree();
+      }
+    }
+    if (treeBtn) treeBtn.addEventListener('click', function () { setTreeShown(!treeShown); });
+
+    // On a reveal.js slide the box fills the rest of the slide at a fixed
+    // height (see .gs-fill in the CSS): the terminal takes up the slack and
+    // the views below get a fixed area that scrolls, so neither the box nor
+    // anything around it moves as the repository changes.
+    var slide = host.closest ? host.closest('.reveal .slides section') : null;
+    if (slide) {
+      host.classList.add('gs-fill');
+      var fillSlide = function () {
+        // offsets are only real while the slide is displayed
+        if (!host.offsetParent) return;
+        var deck = root.Reveal && root.Reveal.getConfig ? root.Reveal.getConfig() : null;
+        var slideH = deck && typeof deck.height === 'number' ? deck.height : 700;
+        var top = 0;
+        for (var n = host; n && n !== slide && slide.contains(n); n = n.offsetParent) top += n.offsetTop;
+        var h = Math.max(320, Math.floor(slideH - top - 8));
+        if (host.style.height !== h + 'px') host.style.height = h + 'px';
+      };
+      var hookDeck = function () {
+        if (!root.Reveal || !root.Reveal.on || hookDeck.done) return;
+        hookDeck.done = true;
+        ['ready', 'slidechanged', 'resize'].forEach(function (ev) { root.Reveal.on(ev, fillSlide); });
+      };
+      fillSlide();
+      hookDeck();
+      root.addEventListener('load', function () { hookDeck(); fillSlide(); });
     }
 
     /* ------------------------ workspace views ------------------------- */
@@ -3035,6 +3653,7 @@
 
     function fileMark(f, status) {
       if (!status) return null;
+      if ((status.conflicted || []).some(function (c) { return c.file === f; })) return { k: '!', label: 'conflict', cls: 'conflict' };
       if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
       if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
       if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
@@ -3151,7 +3770,7 @@
       edStatus.textContent = dirty ? 'unsaved'
         : openFile && openKind !== 'text' ? 'read-only' + (openKind === 'readonly' ? ', managed by git' : '')
         : edNote;
-      dirtyDot.hidden = !Object.keys(drafts).length;
+      if (dirtyDot) dirtyDot.hidden = !Object.keys(drafts).length;
     }
 
     // Read the open file and decide how it can be shown. Anything under
@@ -3217,11 +3836,9 @@
         renderEditor();
         return false;
       }
-      if (sb.changedSince(snap.core)) {
-        undoStack.push(snap);
-        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
-      }
+      if (sb.changedSince(snap.core)) pushUndo(snap);
       await refresh();
+      notifyViews();
       input.disabled = false;
       busy = false;
       return true;
@@ -3405,18 +4022,23 @@
       var graph = await sb.graphModel();
       var isRepo = await sb.isRepo();
       var status = isRepo ? await sb.statusModel()
-        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [] };
+        : { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [], conflicted: [], merging: false };
       var files = await sb.listFiles();
       var diff = await sb.diffModel();
+      var chipsBefore = chipRects(stagesNode);
       renderStages(stagesNode, status, graph, files, isRepo);
+      // a reset (or the first drawing) appears at once, like the tree
+      if (!stagesInstant) animateStages(stagesNode, chipsBefore, graph.commits.length > lastCommitCount);
+      stagesInstant = false;
+      lastCommitCount = graph.commits.length;
       renderDiff(diffNode, diff);
-      renderGraph(svg, graph);
+      lastGraph = graph;
+      drawHistory(graph);
       lastTree = await sb.listTree();
       fileSet = {};
       lastTree.forEach(function (e) { if (e.type === 'file') fileSet[e.path] = true; });
       lastStatus = isRepo ? status : null;
       await syncEditor();
-      lastGraph = graph;
       lastGraphW = svg.clientWidth;
       if (tree) drawTree(graph);
 
@@ -3435,13 +4057,13 @@
 
       // Tab badges: enough signal that folded panels lose nothing you would
       // catch at a glance. A count means "something here"; ✓ means clean.
-      var changed = status.untracked.length + status.modified.length +
+      var changed = (status.conflicted || []).length + status.untracked.length + status.modified.length +
         status.deleted.length + status.staged.length + status.stagedDeleted.length;
       setBadge('files', isRepo ? (changed ? String(changed) : '✓')
         : (files.length ? String(files.length) : ''));
       setBadge('changes', !isRepo ? '' : (diff && diff.files.length ? String(diff.files.length) : '✓'));
       setBadge('history', graph.commits.length ? String(graph.commits.length) : '');
-      tabButtons.remote.hidden = !remote;
+      tabButtons.remote.hidden = !remote || !panelOn.remote;
       if (remote) {
         setBadge('remote', !remote.tracked ? ''
           : (!remote.ahead && !remote.behind) ? '✓'
@@ -3449,7 +4071,7 @@
              (remote.ahead && remote.behind ? ' ' : '') +
              (remote.behind ? '⇣' + remote.behind : '')));
       } else if (activeTab === 'remote') {
-        selectTab('files');
+        selectTab(defaultTab);
       }
 
       var stateHtml = remote ? '<span class="gs-state-pill gs-state-remote">⇄ origin</span>' : '';
@@ -3483,12 +4105,54 @@
       }
       renderTasks();
 
-      undoBtn.disabled = !undoStack.length;
+      undoBtn.disabled = !canUndo();
 
       var br = graph.head;
       // follows `cd`, so the prompt always says which folder paths resolve in
+      // a stopped merge shows as (main|MERGING), as git's own prompt does
       host.querySelector('.gs-prompt').textContent =
-        sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
+        sb.pwd() + (br ? ' (' + br + (status.merging ? '|MERGING' : '') + ')' : '') + ' $';
+    }
+
+    // The history graph, with the contents of each opened commit laid out
+    // under its row: the details are HTML (diffs need text layout), placed
+    // over a gap the graph leaves for them.
+    function drawHistory(graph) {
+      cdLayer.innerHTML = '';
+      var heights = {}, nodes = {};
+      var left = graphTextX(graph);
+      var width = Math.max(160, (svg.clientWidth || 640) - left - 40);
+      graph.commits.forEach(function (c) {
+        if (!openCommits[c.oid] || !commitInfo[c.oid]) return;
+        var n = el('div', 'gs-cd', commitDetailsHtml(commitInfo[c.oid]));
+        n.setAttribute('data-oid', c.oid);
+        n.style.left = left + 'px';
+        n.style.width = width + 'px';
+        cdLayer.appendChild(n);
+        nodes[c.oid] = n;
+        // jsdom (and a hidden panel) has no layout: estimate instead
+        heights[c.oid] = (n.offsetHeight || 90 + commitInfo[c.oid].files.reduce(function (sum, f) {
+          return sum + 30 + f.lines.length * 18;
+        }, 0)) + 14;
+      });
+      var lay = renderGraph(svg, graph, { open: heights, onToggle: toggleCommit });
+      Object.keys(nodes).forEach(function (oid) { nodes[oid].style.top = lay.detailTop[oid] + 'px'; });
+    }
+
+    async function toggleCommit(oid) {
+      if (openCommits[oid]) {
+        delete openCommits[oid];
+      } else {
+        if (!commitInfo[oid]) {
+          try { commitInfo[oid] = await sb.commitDetails(oid); }
+          catch (e) { return; }
+        }
+        openCommits[oid] = true;
+      }
+      if (lastGraph) drawHistory(lastGraph);
+      // the redraw replaced the button; keep keyboard focus on it
+      var again = svg.querySelector('.gs-cd-toggle[data-oid="' + oid + '"]');
+      if (again && again.focus) again.focus();
     }
 
     function drawTree(graph) {
@@ -3691,6 +4355,7 @@
         // never reaches the engine: undo is a sandbox affordance, not git
         doUndo();
         await refresh();
+        notifyViews();
         input.disabled = false;
         busy = false;
         input.focus();
@@ -3711,15 +4376,17 @@
       else if (trimmed === 'help') { writeText(helpText()); }
       else if (trimmed === 'reset') { await doReset(); }
       else { writeText(r.out, r.ok ? '' : 'gs-err'); }
-      if (r.ok && trimmed !== 'reset' && sb.changedSince(snap.core)) {
-        undoStack.push(snap);
-        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
-      }
+      // a merge that stops on conflicts fails but still changes the repo,
+      // and undoing it is the quickest way back out
+      var changed = sb.changedSince(snap.core);
+      if (trimmed !== 'reset' && changed) pushUndo(snap);
+      // Switch before the refresh too, so the panel is on screen while its
+      // chips move; and after, for a tab the refresh has just revealed.
+      var want = r.ok ? tabFor(line) : null;
+      if (want) selectTab(want);
       await refresh();
-      if (r.ok) {
-        var want = tabFor(line);
-        if (want) selectTab(want);
-      }
+      if (want) selectTab(want);
+      if (changed && trimmed !== 'reset') notifyViews();
       input.disabled = false;
       busy = false;
       input.focus();
@@ -3742,7 +4409,7 @@
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
         '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
-        '       branch [-d], checkout [-b], switch [-c], merge, config,',
+        '       branch [-d], checkout [-b], switch [-c], merge [--abort], config,',
         '       remote add origin, push [-u], pull, fetch',
         '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
         '       mkdir, cd, pwd',
@@ -3752,15 +4419,23 @@
         'Press {y}i{/} to type, {y}Esc{/} to stop typing, then {y}:wq{/} and Enter to',
         'save and commit, or {y}:q!{/} and Enter to give up.',
         '',
+        'A {y}merge{/} that conflicts leaves {y}<<<<<<<{/} markers in the files: edit them',
+        'to keep what you want, then {y}git add{/} and {y}git commit{/}. {y}git merge --abort{/}',
+        'gives up.',
+        '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
-        'nicety, not a git command — real git has no undo).',
+        'nicety, not a git command — real git has no undo).'
+      ].concat(editorOn ? [
         '',
         'The {y}Editor{/} tab above the terminal opens files for editing.',
         'Saved edits land in the working directory, ready for git add.'
-      ].join('\n');
+      ] : []).join('\n');
     }
 
-    async function doReset() {
+    // `initial`: the box is mounting, not being reset by the learner. A
+    // view of a shared repository then shows it as it stands instead of
+    // starting it over.
+    async function doReset(initial) {
       if (vim) {
         // abandon the commit in progress; the submit waiting on it bows out
         vim.abandon();
@@ -3773,9 +4448,9 @@
       // go too or they re-complete themselves on the very next refresh.
       history.length = 0;
       histIdx = 0;
-      undoStack.length = 0;
+      if (!(initial && !isOrigin)) undoStack.length = 0;
       tasks.forEach(function (t) { t._done = false; t._wasDone = false; });
-      selectTab('files');
+      selectTab(defaultTab);
       // unsaved drafts belong to the run being thrown away
       drafts = {};
       openFile = null;
@@ -3787,8 +4462,18 @@
       upLevels = 0;
       expanded = {};
       if (tree) { tree.reset(); treeInstant = true; }
+      openCommits = {};
+      commitInfo = {};
+      stagesInstant = true;
       try {
-        await sb.reset(seed);
+        if (initial && !isOrigin) {
+          await group.ready;
+        } else {
+          // a view's Reset starts the shared repository over from its seed
+          var resetting = sb.reset(group.seed);
+          group.ready = resetting.then(function () {}, function () {});
+          await resetting;
+        }
       } catch (e) {
         writeText('{r}This exercise could not be set up: ' + e.message + '{/}', 'gs-err');
         await refresh();
@@ -3796,6 +4481,7 @@
       }
       intro.forEach(function (l) { writeText(l); });
       await refresh();
+      if (!(initial && !isOrigin)) notifyViews(initial ? '' : '{y}This repository was reset from another view.{/}');
     }
 
     form.addEventListener('submit', function (e) {
@@ -3825,7 +4511,9 @@
     host.querySelector('.gs-out').addEventListener('click', function () { input.focus(); });
 
     renderHints();
-    var ready = doReset();
+    var ready = doReset(true);
+    self.refresh = function () { return ready.then(refresh); };
+    self.note = function (text) { writeText(text); };
 
     return { sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks, tree: tree };
   }

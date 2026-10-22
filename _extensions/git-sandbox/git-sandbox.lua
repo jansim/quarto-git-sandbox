@@ -17,6 +17,9 @@ local yaml = dofile(pandoc.path.join({ script_dir, 'yaml.lua' }))
 
 local counter = 0
 local seen_ids = {}
+-- `share:` targets, checked once the whole document has been read, since a
+-- view may come before the exercise it shares
+local shares = {}
 
 ------------------------------------------------------------------ messages
 
@@ -112,8 +115,11 @@ end
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
-  donenote = true, ['tree-view'] = true, ['tree_view'] = true
+  donenote = true, ['tree-view'] = true, ['tree_view'] = true,
+  editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true,
+  share = true
 }
+local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
 
 local function check_keys(tbl, allowed, where, problems)
@@ -137,14 +143,56 @@ local function build_config(cfg, problems)
 
   if cfg.seed ~= nil and cfg.seed ~= '' then out.seed = tostring(cfg.seed) end
 
-  -- yaml.lua leaves scalars as strings, so spell out what counts as on
-  local tree = cfg['tree-view']
-  if tree == nil then tree = cfg['tree_view'] end
-  if tree ~= nil and tree ~= '' then
-    local v = tostring(tree):lower()
-    if v == 'true' or v == 'yes' or v == 'on' then out.treeView = true
-    elseif not (v == 'false' or v == 'no' or v == 'off') then
-      problems[#problems + 1] = ('"tree-view" must be true or false, got "%s"'):format(tostring(tree))
+  -- another view of an exercise's repository: same files and history, its
+  -- own title, tasks and layout
+  if cfg.share ~= nil and cfg.share ~= '' then
+    out.share = slugify(cfg.share)
+    if out.share == '' then
+      problems[#problems + 1] = '"share" must name the id of another exercise'
+    elseif out.seed then
+      problems[#problems + 1] = '"seed" cannot be combined with "share": the shared repository is ' ..
+        'set up by the seed of the exercise it shares'
+    end
+  end
+
+  -- yaml.lua leaves scalars as strings, so spell out what counts as on.
+  -- Returns true, false, 'toggle' (when allowed), or nil if unset or bad.
+  local function switch(key, allow_toggle)
+    local raw = cfg[key]
+    if raw == nil then raw = cfg[key:gsub('-', '_')] end
+    if raw == nil or raw == '' then return nil end
+    local v = tostring(raw):lower()
+    if v == 'true' or v == 'yes' or v == 'on' then return true end
+    if v == 'false' or v == 'no' or v == 'off' then return false end
+    if allow_toggle and v == 'toggle' then return 'toggle' end
+    problems[#problems + 1] = ('"%s" must be %s, got "%s"'):format(
+      key, allow_toggle and 'true, false or toggle' or 'true or false', tostring(raw))
+    return nil
+  end
+
+  -- left unset, the browser applies the defaults: tree-view and panels
+  -- 'toggle', editor true
+  local tree = switch('tree-view', true)
+  if tree ~= nil then out.treeView = tree end
+  local panels = switch('panels', true)
+  if panels ~= nil then out.panels = panels end
+  local editor = switch('editor', false)
+  if editor ~= nil then out.editor = editor end
+
+  local tabs = cfg['panel-tabs']
+  if tabs == nil then tabs = cfg['panel_tabs'] end
+  if tabs ~= nil and tabs ~= '' then
+    out.panelTabs = {}
+    for _, t in ipairs(as_array(tabs)) do
+      local name = tostring(t):lower()
+      local known = false
+      for _, n in ipairs(PANEL_NAMES) do if n == name then known = true end end
+      if known then
+        out.panelTabs[#out.panelTabs + 1] = name
+      else
+        problems[#problems + 1] = ('"panel-tabs" lists "%s"; the panels are %s'):format(
+          tostring(t), table.concat(PANEL_NAMES, ', '))
+      end
     end
   end
 
@@ -242,6 +290,15 @@ function CodeBlock(el)
   end
   seen_ids[id] = true
 
+  if config.share then
+    if config.share == id then
+      warn(('exercise "%s" shares itself; drop the "share" option'):format(id))
+      config.share = nil
+    else
+      shares[#shares + 1] = { from = id, to = config.share }
+    end
+  end
+
   if not quarto.doc.isFormat('html:js') then
     return static_fallback(cfg, config)
   end
@@ -251,7 +308,8 @@ function CodeBlock(el)
   local json = quarto.json.encode(config)
   -- The tree pane needs room beside the box, so let the exercise run on
   -- into the right margin, as Quarto's own wide figures do.
-  local classes = config.treeView and 'git-sandbox column-page-right' or 'git-sandbox'
+  -- (A tree that opens on demand drops below the box when there is no room.)
+  local classes = config.treeView == true and 'git-sandbox column-page-right' or 'git-sandbox'
   return pandoc.Blocks({
     pandoc.RawBlock('html',
       '<div class="' .. classes .. '" id="' .. id .. '">' ..
@@ -259,4 +317,15 @@ function CodeBlock(el)
     pandoc.RawBlock('html',
       '<script>(window.__gsPending=window.__gsPending||[]).push(["#' .. id .. '",' .. json .. ']);</script>')
   })
+end
+
+-- Runs after every block: a `share:` naming no exercise still works (the
+-- view starts with an empty repository), but it is almost certainly a typo.
+function Pandoc(doc)
+  for _, sh in ipairs(shares) do
+    if not seen_ids[sh.to] then
+      warn(('exercise "%s" shares "%s", but no exercise has that id'):format(sh.from, sh.to))
+    end
+  end
+  return nil
 end

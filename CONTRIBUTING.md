@@ -57,6 +57,7 @@ without a toolchain.
 | `tests/test-errors.js` | Bad options and bad conditions produce visible messages |
 | `tests/test-embed.js` | The same widget on a plain HTML page, without Quarto |
 | `tests/test-rendered.js` | The real rendered `example.qmd`, driven end to end |
+| `tests/test-revealjs.js` | The rendered `example-revealjs.qmd`: boxes on reveal.js slides, one repository shared across two |
 
 The UI and end-to-end suites use jsdom, so they run in CI without a browser.
 `test-rendered.js` loads the actual rendered HTML, executes its real scripts,

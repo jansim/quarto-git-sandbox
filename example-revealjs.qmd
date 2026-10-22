@@ -1,0 +1,88 @@
+---
+title: "Git, one slide at a time"
+subtitle: "The git-sandbox extension inside a reveal.js presentation"
+format:
+  revealjs:
+    embed-resources: true
+    slide-number: true
+    include-in-header:
+      text: |
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;700&family=Source+Code+Pro:wght@400&display=swap" rel="stylesheet">
+filters:
+  - git-sandbox
+---
+
+## A repository on a slide
+
+A ` ```git-sandbox ` block works on a slide like anywhere else. On a slide
+there is less room, so the next one leaves out the editor and the commit
+tree and offers only two of the views below the terminal; the chevron at
+the end of their tabs folds them away.
+
+Source code and issues:
+[github.com/jansim/quarto-git-sandbox](https://github.com/jansim/quarto-git-sandbox).
+The [author's guide](example.html) explains every option.
+
+## Make a first commit
+
+```git-sandbox
+id: deck-repo
+title: Start a project
+prompt: "~/slides-demo $"
+editor: false
+tree-view: false
+panel-tabs: [files, history]
+intro: |
+  An empty folder. Make it a repository and commit a file.
+tasks:
+  - text: Turn the folder into a repository with `git init`
+    when: repo
+  - text: Create a file, stage it and commit it
+    when: commits >= 1
+```
+
+## Meanwhile, on a later slide
+
+```git-sandbox
+id: deck-branch
+share: deck-repo
+title: Branch and merge, same repository
+editor: false
+tree-view: true
+panels: false
+intro: |
+  This is the repository from the previous slide, commits and all.
+  Branch off, commit, and merge back; the tree on the right follows.
+tasks:
+  - text: Create and switch to a branch called `idea`
+    when: on idea
+  - text: Commit on `idea`
+    when: commits on idea >= 2
+  - text: Go back to `main` and merge `idea`
+    when: on main and merged idea into main
+```
+
+## How the second slide was written
+
+`share` points a box at an earlier exercise's repository. The view has
+its own title, tasks and layout, and no `seed`: the repository comes from
+the box it shares.
+
+````markdown
+```git-sandbox
+id: deck-branch
+share: deck-repo
+title: Branch and merge, same repository
+editor: false
+tree-view: true
+panels: false
+tasks:
+  - text: Create and switch to a branch called `idea`
+    when: on idea
+```
+````
+
+Typing in a box does not move the slides: reveal.js leaves keys alone
+while the terminal has focus. Click outside the box to navigate again.

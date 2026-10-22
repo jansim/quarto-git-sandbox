@@ -602,6 +602,176 @@ async function scenario(name, fn) {
     check('git init in a subfolder explains', !r.ok && /cd ~/.test(r.out), r.out);
   });
 
+  /* ---------------- commit details (History view) ---------------- */
+  await scenario('commit details', async ({ sb, run, check }) => {
+    for (const l of ['git init', 'mkdir src', 'echo "one" > a.txt', 'echo "x" > src/b.txt', 'git add .',
+      'git commit -m "First"', 'echo "two" >> a.txt', 'git rm src/b.txt', 'echo "c" > c.txt', 'git add .',
+      'git commit -m "Second"']) await run(l);
+    const g = await sb.graphModel();
+    const second = await sb.commitDetails(g.commits[0].oid);
+    check('details carry the full message and author', second.message === 'Second' && second.author === 'Your Name' &&
+      second.oid === g.commits[0].oid && second.parents.length === 1, JSON.stringify(second));
+    check('details list changed files with their kind',
+      JSON.stringify(second.files.map(f => [f.file, f.kind])) ===
+      JSON.stringify([['a.txt', 'modified'], ['c.txt', 'new'], ['src/b.txt', 'deleted']]),
+      JSON.stringify(second.files.map(f => [f.file, f.kind])));
+    const a = second.files[0];
+    check('a modified file carries a line diff',
+      a.lines.some(l => l.t === '+' && l.text === 'two') && a.lines.some(l => l.t === ' ' && l.text === 'one'),
+      JSON.stringify(a.lines));
+    const first = await sb.commitDetails(g.commits[1].oid);
+    check('the first commit compares with nothing', first.parents.length === 0 &&
+      first.files.every(f => f.kind === 'new') && first.files.length === 2, JSON.stringify(first.files));
+
+    await run('git checkout -b side');
+    await run('echo "s" > s.txt');
+    await run('git add .');
+    await run('git commit -m "Side"');
+    await run('git checkout main');
+    await run('echo "m" > m.txt');
+    await run('git add .');
+    await run('git commit -m "Main"');
+    await run('git merge side');
+    const merge = await sb.commitDetails((await sb.graphModel()).commits[0].oid);
+    check('a merge shows what it brought in (against the first parent)',
+      merge.parents.length === 2 && JSON.stringify(merge.files.map(f => f.file)) === '["s.txt"]',
+      JSON.stringify(merge.files));
+  });
+
+  /* ---------------- merge conflicts ---------------- */
+  const conflictSetup = async (run) => {
+    for (const l of ['git init', 'echo "base" > f.txt', 'echo "keep" > d.txt', 'git add .', 'git commit -m one',
+      'git checkout -b feat', 'echo "theirs" > f.txt', 'echo "new" > g.txt', 'echo "changed" > d.txt',
+      'git add .', 'git commit -m feat', 'git checkout main', 'echo "ours" > f.txt', 'git rm d.txt',
+      'git add .', 'git commit -m mine']) await run(l);
+  };
+
+  await scenario('merge conflict', async ({ sb, run, check }) => {
+    await conflictSetup(run);
+    await run('echo "scratch" > notes.txt');   // the learner's own untracked file
+    let r = await run('git merge feat');
+    check('conflicting merge fails like git',
+      !r.ok && r.conflict && /CONFLICT \(content\): Merge conflict in f\.txt/.test(r.out) &&
+      /Automatic merge failed; fix conflicts and then commit the result\./.test(r.out), r.out);
+    check('modify/delete conflict reported',
+      /CONFLICT \(modify\/delete\): d\.txt deleted in HEAD and modified in feat/.test(r.out), r.out);
+    check('markers written to the file',
+      (await sb.readFile('f.txt')) === '<<<<<<< main\nours\n=======\ntheirs\n>>>>>>> feat\n',
+      JSON.stringify(await sb.readFile('f.txt')));
+    let st = await sb.statusModel();
+    check('status model is merging', st.merging === true);
+    check('conflicted files listed with their kind',
+      JSON.stringify(st.conflicted) === JSON.stringify([{ file: 'd.txt', kind: 'deleted by us' }, { file: 'f.txt', kind: 'both modified' }]),
+      JSON.stringify(st.conflicted));
+    check('cleanly merged file is staged', st.staged.some(s => s.file === 'g.txt'), JSON.stringify(st));
+    check('learner\'s untracked file stays untracked', st.untracked.indexOf('notes.txt') !== -1, JSON.stringify(st));
+    check('conflicted files are not also modified', st.modified.indexOf('f.txt') === -1, JSON.stringify(st));
+    check('MERGE_HEAD written', /^[0-9a-f]{40}\n$/.test(await sb.readFile('.git/MERGE_HEAD')));
+
+    r = await run('git status');
+    check('status says unmerged paths', /You have unmerged paths/.test(r.out) &&
+      /both modified:   f\.txt/.test(r.out) && /deleted by us:   d\.txt/.test(r.out), r.out);
+    r = await run('git diff');
+    check('diff shows the markers', /\+<<<<<<< main/.test(r.out), r.out);
+
+    r = await run('git commit -m "too soon"');
+    check('commit refused with unresolved files', !r.ok && /Committing is not possible because you have unmerged files/.test(r.out), r.out);
+    r = await run('git merge feat');
+    check('second merge refused', !r.ok && /Merging is not possible/.test(r.out), r.out);
+    r = await run('git checkout feat');
+    check('checkout refused', !r.ok && /resolve your current index first/.test(r.out) && /f\.txt: needs merge/.test(r.out), r.out);
+
+    await run('echo "both" > f.txt');
+    r = await run('git add f.txt');
+    st = await sb.statusModel();
+    check('git add marks one file resolved', st.conflicted.length === 1 && st.conflicted[0].file === 'd.txt', JSON.stringify(st.conflicted));
+    await run('rm d.txt');
+    r = await run('git add d.txt');
+    check('git add of a deleted conflicted file resolves it', r.ok, r.out);
+    st = await sb.statusModel();
+    check('no conflicts left', st.conflicted.length === 0 && st.merging === true, JSON.stringify(st));
+    r = await run('git status');
+    check('status says all conflicts fixed', /All conflicts fixed but you are still merging/.test(r.out), r.out);
+    r = await run('git merge feat');
+    check('merging again before committing is refused', !r.ok && /MERGE_HEAD exists/.test(r.out), r.out);
+
+    r = await run('git commit');
+    check('commit without -m offers the merge message',
+      r.ok && r.editor && /^Merge branch 'feat' into main\n/.test(r.editor.text) && /# Conflicts:\n#\td\.txt\n#\tf\.txt/.test(r.editor.text),
+      JSON.stringify(r.editor));
+    r = await sb.finishCommit(r.editor.text);
+    check('finishing the editor commit concludes the merge', r.ok, r.out);
+    const g = await sb.graphModel();
+    check('merge commit has two parents', g.commits[0].parents.length === 2, JSON.stringify(g.commits[0]));
+    check('merge recorded for `merged feat into main`', g.merges.some(m => m.from === 'feat' && m.into === 'main'), JSON.stringify(g.merges));
+    st = await sb.statusModel();
+    check('merge state cleared', !st.merging && !(await sb.mergeState()));
+    check('resolution committed', (await sb.readFile('f.txt')) === 'both\n');
+    r = await run('git log --oneline');
+    check('log shows the merge', /Merge branch 'feat' into main/.test(r.out), r.out);
+  });
+
+  await scenario('merge conflict, abort and undo', async ({ sb, run, check }) => {
+    await conflictSetup(run);
+    let r = await run('git merge --abort');
+    check('abort with no merge', !r.ok && /There is no merge to abort/.test(r.out), r.out);
+    const before = sb.snapshot();
+    await run('git merge feat');
+    check('conflict changes state (so it can be undone)', sb.changedSince(before));
+    r = await run('git merge --abort');
+    check('abort succeeds', r.ok, r.out);
+    const st = await sb.statusModel();
+    check('abort clears the merge', !st.merging && !st.conflicted.length);
+    check('abort restores our file', (await sb.readFile('f.txt')) === 'ours\n');
+    check('abort removes files the merge brought in', (await sb.listFiles()).indexOf('g.txt') === -1, JSON.stringify(await sb.listFiles()));
+    check('abort leaves a clean tree', !st.staged.length && !st.modified.length && !st.untracked.length, JSON.stringify(st));
+    r = await run('git commit -m "nothing"');
+    check('nothing to commit after abort', !r.ok && /nothing to commit/.test(r.out), r.out);
+
+    await run('git merge feat');
+    sb.restore(before);
+    check('restoring a snapshot leaves the merge', !(await sb.statusModel()).merging);
+
+    // -m commits while merging, even when the resolution keeps our side
+    await run('git merge feat');
+    await run('echo "ours" > f.txt');
+    await run('git add .');
+    r = await run('git commit -m "Keep ours"');
+    check('-m concludes the merge', r.ok && /Keep ours/.test(r.out), r.out);
+    check('merge commit with two parents', (await sb.graphModel()).commits[0].parents.length === 2);
+  });
+
+  await scenario('merge --continue and switching away', async ({ sb, run, check }) => {
+    await conflictSetup(run);
+    await run('git merge feat');
+    let r = await run('git merge --continue');
+    check('--continue refused while unresolved', !r.ok && /unmerged files/.test(r.out), r.out);
+    await run('git add .');
+    r = await run('git merge --continue');
+    check('--continue opens the editor once resolved', r.ok && !!r.editor, JSON.stringify(r));
+    r = await run('git switch -c side');
+    check('switching away once resolved works', r.ok, r.out);
+    check('and drops the merge', !(await sb.statusModel()).merging);
+  });
+
+  await scenario('pull conflict', async ({ sb, run, check }) => {
+    for (const l of ['git init', 'git remote add origin https://example.com/r.git', 'echo "base" > f.txt',
+      'git add .', 'git commit -m one', 'git push -u origin main', 'echo "remote" > f.txt', 'git add .',
+      'git commit -m remote', 'git push', 'rewind 1', 'echo "local" > f.txt', 'git add .', 'git commit -m local']) await run(l);
+    let r = await run('git pull');
+    check('conflicting pull stops with markers', !r.ok && /CONFLICT \(content\)/.test(r.out) &&
+      /<<<<<<< main\nlocal\n=======\nremote\n>>>>>>> origin\/main/.test(await sb.readFile('f.txt')), r.out + '\n' + await sb.readFile('f.txt'));
+    r = await run('git pull');
+    check('second pull refused', !r.ok && /Pulling is not possible/.test(r.out), r.out);
+    await run('echo "merged" > f.txt');
+    await run('git add f.txt');
+    r = await run('git commit -m "Merge the remote"');
+    check('commit concludes the pull', r.ok, r.out);
+    check('pull merge recorded', (await sb.graphModel()).merges.some(m => m.from === 'origin/main' && m.into === 'main'));
+    r = await run('git push');
+    check('push after resolving', r.ok && /main -> main/.test(r.out), r.out);
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));

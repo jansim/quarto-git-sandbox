@@ -30,7 +30,13 @@ This page is written for **authors**. Each section shows a working box,
 explains what the reader sees, and includes the exact block that produced
 it, ready to copy into your own lesson. For the full option and condition
 reference, see the
-[README](https://github.com/ryjohnson09/quarto-git-sandbox).
+[README](https://github.com/jansim/quarto-git-sandbox#readme). There is
+also a [reveal.js deck](example-revealjs.html) with boxes on its slides.
+
+::: {.callout-note appearance="simple"}
+The extension's source code, issue tracker and releases live at
+[github.com/jansim/quarto-git-sandbox](https://github.com/jansim/quarto-git-sandbox).
+:::
 
 ## Reading a git box
 
@@ -41,9 +47,9 @@ Before writing exercises, know what your learners are looking at.
 A git box
 is a stack. At the top, a **terminal**: the prompt shows the folder
 and, once a repository exists, the current branch. Learners type commands
-and press Enter; the **Try:** buttons under the input fill in a command so
-nobody is stuck guessing syntax; the up arrow recalls history, and `help`
-lists everything the sandbox supports.
+and press Enter; where the author gives `hints`, **Try:** buttons under the
+input fill in a command so nobody is stuck guessing syntax; the up arrow
+recalls history, and `help` lists everything the sandbox supports.
 
 Directly under the terminal sits **Tasks**, the task checklist you
 author. Tasks tick themselves when their condition becomes true (a
@@ -55,9 +61,10 @@ checklist and terminal rewind together, so experimenting is cheap.
 Below the checklist, a tabbed panel re-renders after *every* command. One
 tab shows at a time; the others fold behind a live badge, where a count
 means "something here" and a green check means clean or in sync. The
-active tab follows the last command (`git add` shows File Status, `git commit`
-shows History), and clicking a tab holds it until the next command with an
-opinion.
+active tab follows the last command (`git add` and `git commit` show File
+Status, where the files can be seen moving between the columns; `git log`
+and `git merge` show History), and clicking a tab holds it until the next
+command with an opinion.
 
 - **File Status**: the working directory / staging area / repository diagram.
   Files appear as chips and move from one area to the next as they are
@@ -139,8 +146,8 @@ tasks:
 ## The smallest useful block
 
 You need very little. `title` labels the box, `intro` prints in the
-terminal, `hints` gives learners clickable commands, and `tasks` is the
-checklist. With no `seed`, the box starts as an empty, untracked folder:
+terminal, and `tasks` is the checklist. With no `seed`, the box starts as
+an empty, untracked folder:
 
 ````markdown
 ```git-sandbox
@@ -150,7 +157,6 @@ prompt: "~/scratch $"
 intro: |
   This box was authored in a few lines of YAML. It starts as an
   empty folder; nothing is tracked yet.
-hints: [git init, 'echo "hello" > notes.txt', git add notes.txt, 'git commit -m "First note"']
 tasks:
   - text: Turn the folder into a repository
     when: repo
@@ -166,7 +172,6 @@ prompt: "~/scratch $"
 intro: |
   This box was authored in a few lines of YAML. It starts as an
   empty folder; nothing is tracked yet.
-hints: [git init, 'echo "hello" > notes.txt', git add notes.txt, 'git commit -m "First note"']
 tasks:
   - text: Turn the folder into a repository
     when: repo
@@ -179,8 +184,11 @@ Three authoring notes that save time:
 - **`intro` is terminal output, not Markdown.** Use `{y}…{/}` for yellow,
   `{g}` green, `{r}` red, `{b}` blue, `{w}` bold. Backticks appear
   literally.
-- **Quoting in `hints`.** In a flow sequence, wrap any entry containing a
-  double quote in single quotes: `'git commit -m "First note"'`.
+- **`hints` are optional.** The tour at the top of this page uses them:
+  clickable buttons under the input that fill in a command. They help
+  beginners, and they give the game away, so the other boxes here leave
+  them out. In the flow sequence, wrap any entry containing a double quote
+  in single quotes: `'git commit -m "First note"'`.
 - **`prompt` is cosmetic but load-bearing.** The folder name it shows is
   also used in `git init` output and `pwd`, so pick something that fits
   your lesson's story. The current branch is appended automatically.
@@ -202,7 +210,6 @@ prompt: "~/demo-project $"
 intro: |
   Each task below shows the {y}when:{/} condition that checks it.
   Complete them in any order.
-hints: [git checkout -b docs, 'echo "## Setup" > SETUP.md', git add ., 'git commit -m "Describe the setup"', git checkout main, git merge docs]
 done-note: Every condition here is plain YAML. See the README for the full list.
 seed: |
   git init
@@ -299,7 +306,6 @@ prompt: "~/sales-analysis $"
 intro: |
   A colleague worked on the {y}forecast{/} branch while main moved on.
   Run {y}git log --oneline{/} on each branch, then merge and watch the graph.
-hints: [git branch, git log --oneline, 'echo "fixed" > hotfix.md', git add ., 'git commit -m "Fix the date parsing"', git merge forecast, git branch -d forecast]
 done-note: Two lanes, one merge commit. Seeds let every learner start from exactly this moment.
 seed: |
   git init
@@ -347,6 +353,49 @@ Seed failures are loud: if a seed command fails, the box says so instead of
 dropping the learner into a half-built repository. And **Reset** re-runs
 the seed, so learners always return to the exact state you designed.
 
+## Flow: resolving a merge conflict
+
+When both branches change the same line, `git merge` stops as real git
+does: it writes conflict markers into the file, the prompt reads
+`(main|MERGING)`, and the *File Status* tab outlines the conflicted file.
+The learner edits it (in the *Editor* tab, or with `echo`), marks it
+resolved with `git add`, and concludes with `git commit`. `git merge
+--abort` gives up, and **Undo** takes the merge back like any command. The
+`merging` and `conflicts` conditions follow each step.
+
+```git-sandbox
+id: conflict-flow
+title: Resolve a merge conflict
+prompt: "~/sales-analysis $"
+intro: |
+  You and a colleague both retitled {y}README.md{/}. Merge their
+  {y}title{/} branch and see what git does with two edits to one line.
+done-note: A conflict is git asking you to decide. Take the markers out, `git add`, commit.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  git checkout -b title
+  echo "# Sales analysis 2026" > README.md
+  git add .
+  git commit -m "Retitle for the new year"
+  git checkout main
+  echo "# Quarterly sales analysis" > README.md
+  git add .
+  git commit -m "Say which sales"
+tasks:
+  - text: Merge `title` into `main` and read the `CONFLICT` message
+    when: conflicts
+  - text: Edit `README.md` down to the line you want, then mark it resolved with `git add`
+    when: merging and not conflicts and not file README.md contains "<<<<<<<"
+  - text: Conclude the merge with `git commit`
+    when: merged title into main and merge commit
+```
+
+A seed may also end on the conflicting `git merge`, so the learner starts
+in the middle of it.
+
 ## Flow: a remote, push and pull
 
 `git remote add origin <url>` in a seed creates a **mock remote**, a
@@ -368,7 +417,6 @@ intro: |
   While you were away, a colleague pushed a commit to the shared repository.
   Compare the {y}History{/} tab with the {y}Remote{/} tab: the remote is ahead.
   (Try {y}git push{/} first if you want to see what a rejected push looks like.)
-hints: [git fetch, git pull, git log --oneline, 'echo "sales <- read_csv(\"sales.csv\")" > load.R', git add ., 'git commit -m "Load the sales data"', git push]
 done-note: Pull, work, push, and the two graphs agree again. The rewind trick in the seed is what made the remote start out ahead.
 seed: |
   git init
@@ -416,8 +464,9 @@ branch is on the remote.
 
 ## Optional: a commit tree beside the box
 
-Add `tree-view: true` to a block and the box gains a **commit tree** pane
-on its right, drawn in the style of
+Every box has a small graph button at the right of its header that opens
+a **commit tree** pane. Add `tree-view: true` to a block and the pane is
+open from the start, on the box's right, drawn in the style of
 [Learn Git Branching](https://learngitbranching.js.org/). Each commit is a
 circle named `C0`, `C1`, … in the order it was made, with its short hash
 underneath, the first commit at the top, and every branch a label
@@ -425,7 +474,7 @@ pointing at its tip; `main*` marks the branch `HEAD` is on. Every command
 animates: a new commit grows out of its parent, branch labels glide to
 their new tips, and commits that `undo` takes back shrink away. The box
 widens into the right margin to make room, and the pane drops below the
-box on narrow screens. It is off by default.
+box on narrow screens. `tree-view: false` removes the pane and its button.
 
 ```git-sandbox
 id: tree-flow
@@ -435,7 +484,6 @@ tree-view: true
 intro: |
   Watch the {y}Commit tree{/} on the right as you go.
   Each command moves something there: commits, branch labels, or HEAD's {y}*{/}.
-hints: [git checkout -b report, 'echo "# Q3" > report.md', git add ., 'git commit -m "Start the report"', git checkout main, git merge report]
 done-note: That is the shape of every feature branch, drawn one commit at a time.
 seed: |
   git init
@@ -461,15 +509,69 @@ tree-view: true
 ```
 ````
 
+## Another view of the same repository
+
+`share: <id>` makes a box another view of an earlier exercise: the same
+files and history, with its own title, tasks, terminal and layout. Work
+done in either shows up in both. Use it to come back to a repository later
+in a lesson, or on a later slide of a reveal.js deck, without starting over.
+The box below shares `tree-flow` above: try a command in either.
+
+```git-sandbox
+id: tree-flow-view
+share: tree-flow
+title: The same repository, later on
+intro: |
+  This box shares its repository with "Branch, commit, merge" above.
+  Anything you did there is already here.
+panel-tabs: [history]
+tasks:
+  - text: Delete the merged `report` branch
+    when: merged report into main and not branch report
+```
+
+````markdown
+```git-sandbox
+share: tree-flow
+title: The same repository, later on
+```
+````
+
+The view has no `seed` of its own: the exercise it shares sets the
+repository up. **Reset** in any view starts the shared repository over from
+that seed, and **Undo** takes back the latest change if it was made in the
+same view.
+
+## Optional: trimming the box
+
+Each part of the box beyond the terminal can be offered, folded, or left
+out. `panels` does for the views below the terminal what `tree-view` does
+for the tree: `true` shows them, `toggle` (the default) adds a chevron that
+folds them away, and `false` removes them. `panel-tabs` picks which views
+there are, and `editor: false` removes the Editor tab.
+
+````markdown
+```git-sandbox
+title: Just the terminal and the history
+editor: false
+tree-view: false
+panels: true
+panel-tabs: [history]
+```
+````
+
 ## Where to go from here
 
-- The [README](https://github.com/ryjohnson09/quarto-git-sandbox) has the
+- The [README](https://github.com/jansim/quarto-git-sandbox#readme) has the
   complete option table, the full `when:` condition reference, the `js:`
   escape hatch for conditions the language cannot express, and notes on
   CSP and page weight for LMS embedding.
 - `example-embed.html` in the repository shows the sandbox running in a
   plain HTML page with no Quarto at all, useful for platforms that accept
   an HTML block or iframe.
-- Install with `quarto add ryjohnson09/quarto-git-sandbox`, add
+- [`example-revealjs.qmd`](example-revealjs.html) puts boxes on the
+  slides of a reveal.js deck, coming back to one repository on a later
+  slide with `share`.
+- Install with `quarto add jansim/quarto-git-sandbox`, add
   `git-sandbox` to your document's `filters`, and start with the minimal
   block above.

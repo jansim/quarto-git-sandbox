@@ -433,6 +433,138 @@
       await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
     }
 
+    /* ------------------------- merge conflicts ---------------------- */
+
+    // A merge that stops on conflicts leaves MERGE_HEAD and MERGE_MSG in
+    // .git, as real git does, plus sandbox-merge.json: what is being merged
+    // into what, and which files are still unresolved. isomorphic-git keeps
+    // the unmerged index entries (and refuses to commit over them) but has
+    // no API to list them, so the list lives here and shrinks as the learner
+    // runs `git add` or `git rm`. Everything is in the in-memory fs, so undo
+    // snapshots carry a half-finished merge along with the rest.
+    var MERGE_STATE = '/.git/sandbox-merge.json';
+
+    async function mergeState() {
+      try { return JSON.parse(await fs.promises.readFile(dir + MERGE_STATE, 'utf8')); }
+      catch (e) { return null; }
+    }
+
+    async function saveMergeState(st) {
+      await fs.promises.writeFile(dir + '/.git/MERGE_HEAD', st.oid + '\n');
+      await fs.promises.writeFile(dir + '/.git/MERGE_MSG', st.message + '\n');
+      await fs.promises.writeFile(dir + MERGE_STATE, JSON.stringify(st));
+    }
+
+    async function clearMergeState() {
+      ['/.git/MERGE_HEAD', '/.git/MERGE_MSG', MERGE_STATE].forEach(function (f) {
+        fs._store.delete(dir + f);
+      });
+    }
+
+    // `git add` / `git rm` on a conflicted path marks it resolved
+    async function markResolved(paths) {
+      var st = await mergeState();
+      if (!st) return;
+      st.unresolved = st.unresolved.filter(function (c) { return paths.indexOf(c.file) === -1; });
+      await fs.promises.writeFile(dir + MERGE_STATE, JSON.stringify(st));
+    }
+
+    function unmergedError(verb) {
+      return {
+        out: 'error: ' + verb + ' is not possible because you have unmerged files.\n' +
+             "hint: Fix them up in the work tree, and then use 'git add/rm <file>'\n" +
+             'hint: as appropriate to mark resolution and make a commit.\n' +
+             'fatal: Exiting because of an unresolved conflict.',
+        ok: false
+      };
+    }
+
+    // Working files (not .git) as path -> bytes, to tell afterwards which
+    // ones a merge touched.
+    function workdirBytes() {
+      var out = {};
+      var prefix = dir + '/';
+      fs._store.forEach(function (v, k) {
+        if (k.indexOf(prefix) !== 0 || k.indexOf(dir + '/.git/') === 0 || v.type !== 'file') return;
+        out[k.slice(prefix.length)] = v.content;
+      });
+      return out;
+    }
+
+    function sameBytes(a, b) {
+      if (!a || !b || a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+
+    // Merge `theirs` (a ref) into the checked-out branch `ours`; `label` is
+    // what the learner calls the other side, and goes into the conflict
+    // markers and the merge record. Shared by `git merge` and `git pull`.
+    // Returns isomorphic-git's result, or { conflict: <command result> }.
+    async function mergeInto(ours, theirs, label, message) {
+      var before = workdirBytes();
+      var result;
+      try {
+        result = await gitlib.merge(opts({
+          ours: ours, theirs: theirs, theirName: label,
+          abortOnConflict: false,
+          author: { name: author.name, email: author.email },
+          message: message
+        }));
+      } catch (e) {
+        if (e.code !== 'MergeConflictError') throw e;
+        return { conflict: await stopOnConflicts(ours, theirs, label, message, before, e.data) };
+      }
+      // bring the working directory in line with the new ref
+      await gitlib.checkout(opts({ ref: ours, force: true }));
+      if (!result.alreadyMerged) mergesDone.push({ from: label, into: ours });
+      return result;
+    }
+
+    async function stopOnConflicts(ours, theirs, label, message, before, data) {
+      var conflicted = data.filepaths || [];
+      var kindOf = function (f) {
+        if ((data.deleteByUs || []).indexOf(f) !== -1) return 'deleted by us';
+        if ((data.deleteByTheirs || []).indexOf(f) !== -1) return 'deleted by them';
+        return 'both modified';
+      };
+      // isomorphic-git writes the cleanly merged files to the working
+      // directory but leaves them out of the index. Real git stages them, so
+      // they go into the merge commit without a `git add`; do the same, but
+      // only for files the merge actually changed, so the learner's own
+      // unstaged edits stay unstaged.
+      var after = workdirBytes();
+      var seen = {};
+      Object.keys(before).concat(Object.keys(after)).forEach(function (f) { seen[f] = true; });
+      var paths = Object.keys(seen).sort();
+      for (var i = 0; i < paths.length; i++) {
+        var f = paths[i];
+        if (conflicted.indexOf(f) !== -1 || sameBytes(before[f], after[f])) continue;
+        if (after[f]) await gitlib.add(opts({ filepath: f }));
+        else await gitlib.remove(opts({ filepath: f }));
+      }
+      var unresolved = conflicted.map(function (f) { return { file: f, kind: kindOf(f) }; });
+      await saveMergeState({
+        from: label, into: ours, message: message,
+        oid: await gitlib.resolveRef(opts({ ref: theirs })),
+        files: conflicted.slice(), unresolved: unresolved
+      });
+      var lines = [];
+      unresolved.forEach(function (c) {
+        if (c.kind === 'both modified') {
+          lines.push('Auto-merging ' + c.file);
+          lines.push('{r}CONFLICT (content){/}: Merge conflict in ' + c.file);
+        } else {
+          var gone = c.kind === 'deleted by us' ? 'HEAD' : label;
+          var kept = c.kind === 'deleted by us' ? label : 'HEAD';
+          lines.push('{r}CONFLICT (modify/delete){/}: ' + c.file + ' deleted in ' + gone +
+            ' and modified in ' + kept + '. Version ' + kept + ' of ' + c.file + ' left in tree.');
+        }
+      });
+      lines.push('Automatic merge failed; fix conflicts and then commit the result.');
+      return { out: lines.join('\n'), ok: false, conflict: true };
+    }
+
     /* ------------------------- graph model ------------------------- */
 
     // Shared commit-graph builder. refEntries: [{ name, oid, isHead, remote }].
@@ -608,11 +740,22 @@
     //   HEAD:    0 = absent,               1 = present
     //   WORKDIR: 0 = absent,               1 = same as HEAD, 2 = different from HEAD
     //   STAGE:   0 = absent, 1 = same as HEAD, 2 = same as WORKDIR, 3 = different from both
+    //
+    // During a merge that stopped on conflicts, `merging` is true and the
+    // files still to resolve are in `conflicted` ([{ file, kind }]) and in
+    // none of the other lists.
     async function statusModel() {
       var matrix = await gitlib.statusMatrix(opts());
-      var res = { staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [] };
+      var merge = await mergeState();
+      var res = {
+        staged: [], modified: [], untracked: [], deleted: [], stagedDeleted: [],
+        conflicted: merge ? merge.unresolved.slice() : [], merging: !!merge
+      };
+      var skip = {};
+      res.conflicted.forEach(function (c) { skip[c.file] = true; });
       matrix.forEach(function (row) {
         var file = row[0], head = row[1], workdir = row[2], stage = row[3];
+        if (skip[file]) return;
 
         if (head === 0) {
           // file is not in the last commit
@@ -639,8 +782,16 @@
     /* ---------------------------- commits --------------------------- */
 
     async function makeCommit(msg, st) {
-      var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
+      var o = { message: msg, author: { name: author.name, email: author.email } };
+      var merge = await mergeState();
+      // concluding a conflicted merge: the commit gets both parents
+      if (merge) o.parent = [await gitlib.resolveRef(opts({ ref: 'HEAD' })), merge.oid];
+      var sha = await gitlib.commit(opts(o));
       var branch = await currentBranch();
+      if (merge) {
+        await clearMergeState();
+        mergesDone.push({ from: merge.from, into: merge.into });
+      }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
         out: '[' + branch + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
@@ -648,17 +799,37 @@
       };
     }
 
+    // Can `git commit` go ahead? Null if so, else the refusal. A merge
+    // commit may record no change of its own (the learner kept their side
+    // of every conflict), so only an ordinary commit needs something staged.
+    async function commitBlocker(st) {
+      if (st.conflicted.length) return unmergedError('Committing');
+      if (st.merging || st.staged.length || st.stagedDeleted.length) return null;
+      var extra = st.untracked.length || st.modified.length
+        ? '\nUse `git add <file>` to stage changes first.' : '';
+      return { out: 'On branch ' + (await currentBranch()) + '\nnothing to commit, working tree clean' + extra, ok: false };
+    }
+
     // what `git commit` without -m puts in the editor, as real git does
     async function commitTemplate(st) {
-      var lines = [
-        '',
+      var merge = await mergeState();
+      var lines = merge ? [merge.message, ''] : [''];
+      if (merge && merge.files.length) {
+        lines.push('# Conflicts:');
+        merge.files.forEach(function (f) { lines.push('#\t' + f); });
+        lines.push('#');
+      }
+      lines = lines.concat([
         '# Please enter the commit message for your changes. Lines starting',
         "# with '#' will be ignored, and an empty message aborts the commit.",
         '#',
-        '# On branch ' + (await currentBranch()),
+        '# On branch ' + (await currentBranch())
+      ]);
+      if (merge) lines.push('# All conflicts fixed but you are still merging.');
+      lines = lines.concat([
         '#',
         '# Changes to be committed:'
-      ];
+      ]);
       st.staged.forEach(function (s) { lines.push('#\t' + s.kind + ':   ' + s.file); });
       st.stagedDeleted.forEach(function (f) { lines.push('#\tdeleted:    ' + f); });
       lines.push('#');
@@ -674,8 +845,10 @@
         .join('\n').replace(/^\n+|\n+$/g, '');
       if (!msg) return { out: 'Aborting commit due to empty commit message.', ok: false, kind: 'git' };
       var st = await statusModel();
-      if (!st.staged.length && !st.stagedDeleted.length) {
-        return { out: 'nothing to commit, working tree clean', ok: false, kind: 'git' };
+      var blocked = await commitBlocker(st);
+      if (blocked) {
+        blocked.kind = 'git';
+        return blocked;
       }
       var r = await makeCommit(msg, st);
       r.kind = 'git';
@@ -721,11 +894,23 @@
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
           if (!anyCommit) lines.push('', 'No commits yet');
+          if (st.conflicted.length) {
+            lines.push('You have unmerged paths.',
+              '  (fix conflicts and run "git commit")',
+              '  (use "git merge --abort" to abort the merge)');
+          } else if (st.merging) {
+            lines.push('All conflicts fixed but you are still merging.',
+              '  (use "git commit" to conclude merge)');
+          }
 
           if (st.staged.length || st.stagedDeleted.length) {
             lines.push('', 'Changes to be committed:');
             st.staged.forEach(function (s) { lines.push('  {g}' + s.kind + ':   ' + s.file + '{/}'); });
             st.stagedDeleted.forEach(function (f) { lines.push('  {g}deleted:    ' + f + '{/}'); });
+          }
+          if (st.conflicted.length) {
+            lines.push('', 'Unmerged paths:', '  (use "git add <file>..." to mark resolution)');
+            st.conflicted.forEach(function (c) { lines.push('  {r}' + c.kind + ':   ' + c.file + '{/}'); });
           }
           if (st.modified.length || st.deleted.length) {
             lines.push('', 'Changes not staged for commit:');
@@ -736,7 +921,8 @@
             lines.push('', 'Untracked files:');
             st.untracked.forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
-          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length && !st.untracked.length) {
+          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length &&
+              !st.untracked.length && !st.conflicted.length) {
             lines.push('', 'nothing to commit, working tree clean');
           }
           return { out: lines.join('\n'), ok: true };
@@ -744,7 +930,7 @@
 
         case 'add': {
           if (!rest.length) return { out: "Nothing specified, nothing added.\nhint: try 'git add .' or 'git add <file>'", ok: false };
-          var added = 0;
+          var added = [];
           for (var i = 0; i < rest.length; i++) {
             var spec = rest[i];
             if (spec === '.' || spec === '-A' || spec === '--all' || spec === '*') {
@@ -756,17 +942,25 @@
                 if (under && row[0].indexOf(under) !== 0) continue;
                 if (row[2] === 0) await gitlib.remove(opts({ filepath: row[0] }));
                 else await gitlib.add(opts({ filepath: row[0] }));
-                added++;
+                added.push(row[0]);
               }
             } else {
               var f = rel(spec);
               try { await fs.promises.stat(abs(spec)); }
-              catch (e) { return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false }; }
+              catch (e) {
+                // a conflicted file the learner deleted: staging the deletion resolves it
+                var gone = (await statusModel()).conflicted.some(function (c) { return c.file === f; });
+                if (!gone) return { out: "fatal: pathspec '" + spec + "' did not match any files", ok: false };
+                await gitlib.remove(opts({ filepath: f }));
+                added.push(f);
+                continue;
+              }
               await gitlib.add(opts({ filepath: f }));
-              added++;
+              added.push(f);
             }
           }
-          return { out: '', ok: true, silentNote: added + ' path(s) staged' };
+          await markResolved(added);
+          return { out: '', ok: true, silentNote: added.length + ' path(s) staged' };
         }
 
         case 'rm': {
@@ -774,6 +968,7 @@
           if (!target) return { out: 'usage: git rm <file>', ok: false };
           await gitlib.remove(opts({ filepath: rel(target) }));
           try { await fs.promises.unlink(abs(target)); } catch (e) {}
+          await markResolved([rel(target)]);
           return { out: "rm '" + rel(target) + "'", ok: true };
         }
 
@@ -785,12 +980,8 @@
           }
           if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
-          if (!st2.staged.length && !st2.stagedDeleted.length) {
-            var br2 = await currentBranch();
-            var extra = st2.untracked.length || st2.modified.length
-              ? '\nUse `git add <file>` to stage changes first.' : '';
-            return { out: 'On branch ' + br2 + '\nnothing to commit, working tree clean' + extra, ok: false };
-          }
+          var blocked = await commitBlocker(st2);
+          if (blocked) return blocked;
           if (msg === null) {
             // Without -m, real git opens an editor (usually vim) on
             // COMMIT_EDITMSG. The engine has no screen, so it hands the
@@ -864,19 +1055,49 @@
           if (!names2.length) return { out: 'fatal: missing branch name', ok: false };
           var name = names2[0];
           var all2 = await gitlib.listBranches(opts());
+          var midMerge = await statusModel();
+          if (midMerge.conflicted.length) {
+            return {
+              out: 'error: you need to resolve your current index first\n' +
+                midMerge.conflicted.map(function (c) { return c.file + ': needs merge'; }).join('\n'),
+              ok: false
+            };
+          }
           if (create) {
             if (all2.indexOf(name) !== -1) return { out: "fatal: a branch named '" + name + "' already exists", ok: false };
+            // like real git, switching away drops a merge whose conflicts
+            // are all resolved but not yet committed
+            if (midMerge.merging) await clearMergeState();
             await gitlib.branch(opts({ ref: name, checkout: true }));
             return { out: "Switched to a new branch '" + name + "'", ok: true };
           }
           if (all2.indexOf(name) === -1) {
             return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git checkout -b " + name + "` to create it", ok: false };
           }
+          if (midMerge.merging) await clearMergeState();
           await gitlib.checkout(opts({ ref: name }));
           return { out: "Switched to branch '" + name + "'", ok: true };
         }
 
         case 'merge': {
+          var inMerge = await statusModel();
+          if (rest[0] === '--abort') {
+            if (!inMerge.merging) return { out: 'fatal: There is no merge to abort (MERGE_HEAD missing).', ok: false };
+            // back to the last commit, as `git reset --merge` does; files the
+            // merge brought in are staged, so the forced checkout drops them
+            await gitlib.checkout(opts({ ref: await currentBranch(), force: true }));
+            await clearMergeState();
+            return { out: '', ok: true };
+          }
+          if (rest[0] === '--continue') {
+            if (!inMerge.merging) return { out: 'fatal: There is no merge in progress (MERGE_HEAD missing).', ok: false };
+            return gitCommand(['commit']);
+          }
+          if (inMerge.conflicted.length) return unmergedError('Merging');
+          if (inMerge.merging) {
+            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+              'Please, commit your changes before you merge.', ok: false };
+          }
           var theirs = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
           if (!theirs) return { out: 'usage: git merge <branch>', ok: false };
           var ours = await currentBranch();
@@ -885,26 +1106,12 @@
           if (theirs === ours) return { out: 'Already up to date.', ok: true };
           var result;
           try {
-            result = await gitlib.merge(opts({
-              ours: ours, theirs: theirs,
-              author: { name: author.name, email: author.email },
-              message: "Merge branch '" + theirs + "' into " + ours
-            }));
+            result = await mergeInto(ours, theirs, theirs, "Merge branch '" + theirs + "' into " + ours);
           } catch (e) {
-            if (e.code === 'MergeNotSupportedError' || e.code === 'MergeConflictError') {
-              return {
-                out: 'CONFLICT: both branches changed the same file.\n' +
-                     'Automatic merge failed. In this sandbox, conflicts are not resolvable —\n' +
-                     'try `reset` and take the guided path instead.',
-                ok: false
-              };
-            }
             return { out: 'fatal: ' + e.message, ok: false };
           }
-          // bring the working directory in line with the new ref
-          await gitlib.checkout(opts({ ref: ours, force: true }));
+          if (result.conflict) return result.conflict;
           if (result.alreadyMerged) return { out: 'Already up to date.', ok: true };
-          mergesDone.push({ from: theirs, into: ours });
           if (result.fastForward) return { out: 'Updating ' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
           return { out: "Merge made by the 'recursive' strategy.", ok: true };
         }
@@ -992,6 +1199,12 @@
 
         case 'pull': {
           if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          var inMerge2 = await statusModel();
+          if (inMerge2.conflicted.length) return unmergedError('Pulling');
+          if (inMerge2.merging) {
+            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+              'Please, commit your changes before you merge.', ok: false };
+          }
           var lbr = await currentBranch();
           if (!lbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
           var fetched = await gitCommand(['fetch']);
@@ -1002,35 +1215,30 @@
           if (theirOid === oursOid) return { out: prefix2 + 'Already up to date.', ok: true };
           var pres;
           try {
-            pres = await gitlib.merge(opts({
-              ours: lbr, theirs: 'refs/remotes/origin/' + lbr,
-              author: { name: author.name, email: author.email },
-              message: "Merge branch '" + lbr + "' of " + remoteUrl
-            }));
+            pres = await mergeInto(lbr, 'refs/remotes/origin/' + lbr, 'origin/' + lbr,
+              "Merge branch '" + lbr + "' of " + remoteUrl);
           } catch (e) {
-            if (e.code === 'MergeNotSupportedError' || e.code === 'MergeConflictError') {
-              return {
-                out: prefix2 + 'CONFLICT: the remote changed the same lines you did.\n' +
-                     'Automatic merge failed. In this sandbox, conflicts are not resolvable yet —\n' +
-                     'try `reset` and take the guided path instead.',
-                ok: false
-              };
-            }
             return { out: prefix2 + 'fatal: ' + e.message, ok: false };
           }
-          await gitlib.checkout(opts({ ref: lbr, force: true }));
+          if (pres.conflict) {
+            pres.conflict.out = prefix2 + pres.conflict.out;
+            return pres.conflict;
+          }
           if (pres.alreadyMerged) return { out: prefix2 + 'Already up to date.', ok: true };
-          mergesDone.push({ from: 'origin/' + lbr, into: lbr });
           if (pres.fastForward) return { out: prefix2 + 'Updating ' + oursOid.slice(0, 7) + '..' + theirOid.slice(0, 7) + '\nFast-forward', ok: true };
           return { out: prefix2 + "Merge made by the 'recursive' strategy.", ok: true };
         }
 
         case 'diff': {
           var st3 = await statusModel();
-          if (!st3.modified.length && !st3.untracked.length) return { out: '', ok: true };
+          // a conflicted file shows its markers against the last commit
+          var diffFiles = st3.modified.concat(st3.conflicted
+            .filter(function (c) { return c.kind === 'both modified'; })
+            .map(function (c) { return c.file; })).sort();
+          if (!diffFiles.length) return { out: '', ok: true };
           var chunks = [];
-          for (var d = 0; d < st3.modified.length; d++) {
-            var file = st3.modified[d];
+          for (var d = 0; d < diffFiles.length; d++) {
+            var file = diffFiles[d];
             var headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' }));
             var blob = await gitlib.readBlob(opts({ oid: headOid, filepath: file }));
             var oldTxt = new TextDecoder().decode(blob.blob);
@@ -1091,17 +1299,74 @@
           oldTxt = new TextDecoder().decode(blob.blob);
         }
         if (workdir !== 0) newTxt = await fs.promises.readFile(dir + '/' + file, 'utf8');
-        // Strip one trailing newline per side so the panel never shows a
-        // phantom blank last line.
-        oldTxt = oldTxt.replace(/\n$/, '');
-        newTxt = newTxt.replace(/\n$/, '');
-        var lines;
-        if (kind === 'new') lines = newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
-        else if (kind === 'deleted') lines = oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
-        else lines = diffLines(oldTxt, newTxt);
-        files.push({ file: file, kind: kind, lines: lines });
+        files.push({ file: file, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
       }
       return { files: files };
+    }
+
+    // One file's lines for the diff views; kind is 'new', 'modified' or
+    // 'deleted'. One trailing newline per side is dropped so the panel never
+    // shows a phantom blank last line.
+    function fileDiff(kind, oldTxt, newTxt) {
+      oldTxt = oldTxt.replace(/\n$/, '');
+      newTxt = newTxt.replace(/\n$/, '');
+      if (kind === 'new') return newTxt.split('\n').map(function (t, k) { return { t: '+', text: t, b: k + 1 }; });
+      if (kind === 'deleted') return oldTxt.split('\n').map(function (t, k) { return { t: '-', text: t, a: k + 1 }; });
+      return diffLines(oldTxt, newTxt);
+    }
+
+    // path -> blob oid for every file in a commit's tree
+    async function flatTree(commitOid) {
+      var out = {};
+      async function walkTree(treeOid, prefix) {
+        var t = await gitlib.readTree(opts({ oid: treeOid }));
+        for (var i = 0; i < t.tree.length; i++) {
+          var e = t.tree[i];
+          if (e.type === 'tree') await walkTree(e.oid, prefix + e.path + '/');
+          else if (e.type === 'blob') out[prefix + e.path] = e.oid;
+        }
+      }
+      var c = await gitlib.readCommit(opts({ oid: commitOid }));
+      await walkTree(c.commit.tree, '');
+      return out;
+    }
+
+    async function blobText(oid) {
+      var b = await gitlib.readBlob(opts({ oid: oid }));
+      if (b.blob.indexOf(0) !== -1) return null;
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(b.blob); }
+      catch (e) { return null; }
+    }
+
+    // What `git show` would tell you about one commit: who, when, the full
+    // message, and what it changed. A merge commit is compared with its
+    // first parent, as `git show --first-parent` does, so it lists what the
+    // merge brought in. files: [{ file, kind, lines, binary }].
+    async function commitDetails(oid) {
+      var c = await gitlib.readCommit(opts({ oid: oid }));
+      var parents = c.commit.parent || [];
+      var mine = await flatTree(oid);
+      var theirs = parents.length ? await flatTree(parents[0]) : {};
+      var paths = {};
+      Object.keys(mine).concat(Object.keys(theirs)).forEach(function (p) { paths[p] = true; });
+      var files = [];
+      var sorted = Object.keys(paths).sort();
+      for (var i = 0; i < sorted.length; i++) {
+        var f = sorted[i];
+        if (mine[f] === theirs[f]) continue;
+        var kind = !theirs[f] ? 'new' : (!mine[f] ? 'deleted' : 'modified');
+        var oldTxt = theirs[f] ? await blobText(theirs[f]) : '';
+        var newTxt = mine[f] ? await blobText(mine[f]) : '';
+        if (oldTxt === null || newTxt === null) { files.push({ file: f, kind: kind, lines: [], binary: true }); continue; }
+        files.push({ file: f, kind: kind, lines: fileDiff(kind, oldTxt, newTxt) });
+      }
+      var a = c.commit.author;
+      return {
+        oid: oid, short: oid.slice(0, 7), parents: parents,
+        author: a.name, email: a.email, timestamp: a.timestamp,
+        message: (c.commit.message || '').replace(/\n+$/, ''),
+        files: files
+      };
     }
 
     function usageGit() {
@@ -1111,7 +1376,7 @@
         '  git add <file> | .            git commit -m "message"',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
-        '  git switch [-c] <branch>      git merge <branch>',
+        '  git switch [-c] <branch>      git merge <branch> | --abort',
         '  git remote add origin <url>   git push [-u origin <branch>]',
         '  git fetch                     git pull',
         '  git config user.name "..."'
@@ -1369,12 +1634,16 @@
       graphModel: graphModel,
       statusModel: statusModel,
       diffModel: diffModel,
+      commitDetails: commitDetails,
       remoteModel: remoteModel,
       pwd: displayCwd,
       // cwd relative to the project folder: '' at its top, 'src/lib' below
       cwdPath: function () { return cwd === dir ? '' : cwd.slice(dir.length + 1); },
       isRepo: isRepo,
       currentBranch: currentBranch,
+      // { from, into, files, unresolved } while a merge is stopped on
+      // conflicts, else null
+      mergeState: mergeState,
       listFiles: listFiles,
       listTree: listTree,
       // The file API below takes paths from the project's top folder, not

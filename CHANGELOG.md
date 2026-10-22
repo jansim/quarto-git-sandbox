@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+- The demo gains a second page, `example-revealjs.qmd`: a reveal.js deck
+  with a box on one slide and another view of the same repository on a
+  later slide. The demo site publishes it next to the guide.
+- Boxes now work inside reveal.js. The panels below the terminal were
+  `<section>` elements, which reveal.js took for slides of their own (and
+  then threw on); they are `<div>`s now. On a slide, the box also resets
+  the list and font styles reveal.js applies, and fills the rest of its
+  slide at a fixed height: the terminal takes up the slack and the views
+  below get a fixed, scrolling area, so `git add` or `git commit` no longer
+  make the box grow, shrink or jump.
+- The guide (`example.qmd`) links to the repository and the deck, and only
+  its first box keeps `hints`, so the rest no longer give the answers away.
+- New `share: <id>` option: a box can be another view of an earlier
+  exercise's repository, with its own title, tasks, terminal and layout but
+  the same files and history. Work in either view shows up in both, so a
+  lesson (or a later reveal.js slide) can come back to a repository without
+  starting over. The shared repository is seeded by the exercise it
+  belongs to; Reset in any view starts it over, and Undo takes back the
+  latest change only from the view that made it. A `share` naming no
+  exercise is reported when rendering.
+- More of the box can be configured per exercise:
+  - `tree-view` now takes `true`, `false` or `toggle`, and `toggle` is the
+    new default: every box gets a small commit-graph button in its header
+    that opens and closes the commit tree. `true` shows it from the start,
+    as before; `false` removes it and its button.
+  - `panels: true | false | toggle` does the same for the views below the
+    terminal. With `toggle` (the default) a chevron at the end of the tab
+    row folds them away, leaving the tabs and their badges; clicking a tab
+    unfolds them. `false` leaves them out.
+  - `panel-tabs: [files, changes, history, remote]` picks which of those
+    views an exercise offers; the first listed opens first.
+  - `editor: false` removes the Editor tab for a terminal-only box.
+- Each commit in the **History** graph has a chevron at the end of its row
+  that opens the commit's contents underneath it, as `git show` would: the
+  full hash, author, date and message, and every file it added, changed or
+  deleted with a line diff. Merge commits are compared with their first
+  parent, so they show what the merge brought in. Several commits can be
+  open at once, they stay open as the learner keeps working, and the
+  chevrons are keyboard buttons. The sandbox API gains `commitDetails(oid)`.
+- `git commit` no longer switches the panels below the terminal to
+  **History**; it stays on **File Status**, where the commit can now be
+  seen happening. The File Status view animates: `git add` glides a file's
+  chip from the working directory into the staging area, `git commit`
+  flies the staged chips into the repository, and other chips slide or
+  fade into their new places. The motion is skipped for readers who ask
+  for reduced motion.
+- Merge conflicts now behave as in real git instead of failing with an
+  error. A conflicting `git merge` or `git pull` writes conflict markers into
+  the files, stages what merged cleanly, and stops with `CONFLICT (content):
+  Merge conflict in …`. `git status` lists the unmerged paths, the prompt
+  reads `(main|MERGING)`, and the File Status view outlines conflicted files.
+  `git add` (or `git rm`) marks a file resolved, `git commit` (with or
+  without `-m`) concludes the merge with a two-parent commit, and `git merge
+  --abort` returns to the last commit. Committing, merging, pulling or
+  switching branches with unresolved files is refused as real git refuses
+  it. Undo takes back a conflicting merge like any other command.
+- New `when:` conditions `merging` and `conflicts`, and seeds may end on a
+  conflicting merge so an exercise can start mid-conflict.
 - `git commit` without `-m` now opens a small vim in the terminal pane, on a
   commit message template like real git's, instead of refusing. It starts in
   normal mode; `i`/`a`/`o` and friends start typing, `Esc` stops, and `:wq`,

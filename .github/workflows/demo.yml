@@ -31,15 +31,20 @@ jobs:
         with:
           version: 1.6.43
 
+      # The guide is the site's front page and is also published under its
+      # own name, which is what the reveal.js deck links back to.
       - name: Render the demo
-        run: quarto render example.qmd --output index.html
+        run: |
+          quarto render example.qmd
+          quarto render example-revealjs.qmd
 
       - uses: actions/configure-pages@v5
 
       - name: Collect the site
         run: |
           mkdir -p _site
-          mv index.html _site/
+          cp example.html _site/index.html
+          mv example.html example-revealjs.html _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:

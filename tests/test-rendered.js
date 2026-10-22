@@ -1,5 +1,5 @@
 /* End-to-end: load the RENDERED example.html (the author's guide) in jsdom,
-   execute its real inlined scripts, and drive all six demo boxes to
+   execute its real inlined scripts, and drive all seven demo boxes to
    completion.
    Run: node test-rendered.js ../example.html */
 const fs = require('fs');
@@ -86,11 +86,13 @@ function outText(win, hostId) {
   check('helpers exported', typeof win.GitSandboxUI.isMerged === 'function');
 
   // whichever ids the page used (hand-written qmd or the extension)
-  const IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
-  check('page has six demo boxes', IDS.length === 6, JSON.stringify(IDS));
+  const ALL_IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
+  check('page has eight demo boxes', ALL_IDS.length === 8, JSON.stringify(ALL_IDS));
+  // later additions are looked up by id; the original six by position
+  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow' && id !== 'tree-flow-view');
   const [ID1, ID2, ID3, ID4, ID5, ID6] = IDS;
 
-  for (const id of IDS) {
+  for (const id of ALL_IDS) {
     await waitFor(() => win.document.querySelector('#' + id + ' .gs-input'), 15000, id + ' to mount');
     check(id + ' mounted', !!win.document.querySelector('#' + id + ' .gs-input'));
     check(id + ' loading placeholder replaced',
@@ -137,7 +139,9 @@ function outText(win, hostId) {
     const type = typer(win, id);
     check('minimal starts with no repo',
       /No commits yet/.test(win.document.querySelector('#' + id + ' .gs-graph').textContent));
-    check('minimal has 4 hint buttons', win.document.querySelectorAll('#' + id + ' .gs-hint').length === 4);
+    check('minimal has no hint buttons', win.document.querySelectorAll('#' + id + ' .gs-hint').length === 0);
+    check('only the tour offers hints',
+      ALL_IDS.filter(b => win.document.querySelectorAll('#' + b + ' .gs-hint').length).join() === ID1);
     check('minimal remote panel hidden', win.document.querySelector('#' + id + ' .gs-remote').hidden === true);
 
     await type('git init');
@@ -222,6 +226,29 @@ function outText(win, hostId) {
     check('merge-flow reset unticks tasks', tasksState(win, id).done === 0, tasksState(win, id).text);
   }
 
+  /* ---------------- merge conflict ---------------- */
+  {
+    const id = 'conflict-flow';
+    const type = typer(win, id);
+    const prompt = () => win.document.querySelector('#' + id + ' .gs-prompt').textContent;
+    check('conflict-flow has 3 tasks', tasksState(win, id).total === 3);
+    await type('git merge title');
+    check('conflict-flow merge stops on a conflict',
+      /CONFLICT \(content\): Merge conflict in README\.md/.test(outText(win, id)), outText(win, id).slice(-250));
+    check('conflict-flow prompt shows MERGING', /\(main\|MERGING\)/.test(prompt()), prompt());
+    check('conflict-flow task 1 ticks', tasksState(win, id).done === 1, tasksState(win, id).text);
+    await type('cat README.md');
+    check('conflict-flow markers in the file', /<<<<<<< main/.test(outText(win, id)) && />>>>>>> title/.test(outText(win, id)),
+      outText(win, id).slice(-200));
+    await type('echo "# Quarterly sales analysis 2026" > README.md');
+    await type('git add README.md');
+    check('conflict-flow task 2 ticks', tasksState(win, id).done === 2, tasksState(win, id).text);
+    await type('git commit -m "Merge the new title"');
+    const st = tasksState(win, id);
+    check('conflict-flow all 3 tasks complete', st.done === 3, st.text);
+    check('conflict-flow prompt back to normal', /\(main\) \$$/.test(prompt()), prompt());
+  }
+
   /* ---------------- box 5: remote flow (pull, work, push) ---------------- */
   {
     const id = ID5;
@@ -276,7 +303,10 @@ function outText(win, hostId) {
 
     check('tree-flow widens into the right margin', host.classList.contains('column-page-right'));
     check('tree-flow has the commit tree pane', !!host.querySelector('.gs-tree .gs-tree-svg'));
-    check('other boxes have no commit tree', win.document.querySelectorAll('.gs-tree').length === 1);
+    check('other boxes keep their commit tree closed',
+      Array.from(win.document.querySelectorAll('.gs-tree')).filter(t => !t.hidden).length === 1);
+    check('other boxes offer the tree from a header button',
+      win.document.querySelectorAll('.gs-tree-btn').length === win.document.querySelectorAll('.git-sandbox').length - 1);
     check('tree-flow seed drawn as C0 and C1', names() === 'C0 C1', names());
 
     await type('git checkout -b report');
@@ -291,6 +321,18 @@ function outText(win, hostId) {
     const st = tasksState(win, id);
     check('tree-flow all 3 tasks complete', st.done === 3, st.text);
     check('tree-flow fast-forward moves main to C2', /main\* at C2/.test(label()), label());
+
+    // the box after it is another view of the same repository
+    const view = 'tree-flow-view';
+    const vtype = typer(win, view);
+    const vgraph = () => win.document.querySelector('#' + view + ' .gs-graph').textContent;
+    check('the shared view shows the work done above', /Start the report/.test(vgraph()), vgraph());
+    check('the shared view offers only History',
+      Array.from(win.document.querySelectorAll('#' + view + ' .gs-tab')).filter(t => !t.hidden).length === 1);
+    await vtype('git branch -d report');
+    check('the shared view\'s task ticks', tasksState(win, view).done === 1, tasksState(win, view).text);
+    await sleep(100);
+    check('a change in the view reaches the box above', !/report\*? at/.test(label()), label());
   }
 
   /* ---------------- isolation between boxes ---------------- */
@@ -304,6 +346,9 @@ function outText(win, hostId) {
 
   /* ---------------- page-level checks ---------------- */
   check('no page script errors', consoleErrors.length === 0, consoleErrors.join('\n     '));
+  check('the guide links to the repository',
+    !!win.document.querySelector('a[href="https://github.com/jansim/quarto-git-sandbox"]'));
+  check('the guide links to the reveal.js deck', !!win.document.querySelector('a[href="example-revealjs.html"]'));
   check('guide title present', /Building interactive Git exercises/.test(win.document.title), win.document.title);
   check('copyable block source is shown on the page',
     /```git-sandbox/.test(win.document.body.textContent));

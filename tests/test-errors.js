@@ -40,9 +40,15 @@ function render(fixture) {
 
     // eight bad blocks, and the duplicate-id pair which should still render
     const errors = (html.match(/gs-config-error/g) || []).length;
-    check('seven config errors reported', errors === 7, 'found ' + errors);
-    check('says tree-view must be true or false',
-      /&quot;tree-view&quot; must be true or false, got &quot;sometimes&quot;|"tree-view" must be true or false, got "sometimes"/.test(html));
+    check('ten config errors reported', errors === 10, 'found ' + errors);
+    check('a view cannot have its own seed',
+      /(&quot;|")seed(&quot;|") cannot be combined with (&quot;|")share(&quot;|")/.test(html));
+    check('says tree-view must be true, false or toggle',
+      /(&quot;|")tree-view(&quot;|") must be true, false or toggle, got (&quot;|")sometimes(&quot;|")/.test(html));
+    check('says editor must be true or false (no toggle)',
+      /(&quot;|")editor(&quot;|") must be true or false, got (&quot;|")toggle(&quot;|")/.test(html));
+    check('names an unknown panel',
+      /(&quot;|")panel-tabs(&quot;|") lists (&quot;|")graph(&quot;|"); the panels are files, changes, history, remote/.test(html));
 
     check('names the unknown option', /unknown option &quot;tittle&quot;/.test(html) ||
       /unknown option "tittle"/.test(html), 'no mention of tittle');

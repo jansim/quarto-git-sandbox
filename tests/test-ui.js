@@ -138,7 +138,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('task 2 ticks', host.querySelectorAll('.gs-task.is-done').length === 2);
   check('a just-ticked task flashes', host.querySelectorAll('.gs-task.is-just-done').length === 1,
     host.querySelector('.gs-tasks').innerHTML);
-  check('git commit auto-switches to the history tab', activeTab() === 'history');
+  check('git commit stays on the files tab', activeTab() === 'files');
   check('history badge counts commits', badge('history').textContent === '1',
     badge('history').outerHTML);
 
@@ -569,8 +569,283 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       bad.querySelector('.gs-out').textContent);
   }
 
+  /* ---------------- commit contents in the History view ---------------- */
+  {
+    const box = win.document.createElement('div');
+    box.id = 'cdbox';
+    win.document.body.appendChild(box);
+    const h = win.GitSandboxUI.mount('#cdbox', {
+      seed: 'git init\necho "hello" > a.txt\ngit add .\ngit commit -m "First"\necho "world" >> a.txt\n' +
+        'echo "<b>" > tag.txt\ngit add .\ngit commit -m "Second line" -m "With a body"'
+    });
+    await h.ready;
+    const toggles = () => box.querySelectorAll('.gs-graph .gs-cd-toggle');
+    check('every history row has a contents toggle', toggles().length === 2, toggles().length);
+    check('toggles are keyboard buttons', Array.from(toggles()).every(t =>
+      t.getAttribute('role') === 'button' && t.getAttribute('tabindex') === '0' &&
+      t.getAttribute('aria-expanded') === 'false' && /Show the contents of commit [0-9a-f]{7}/.test(t.getAttribute('aria-label'))));
+    check('nothing open to begin with', box.querySelectorAll('.gs-cd').length === 0);
+    const svgH = () => Number(box.querySelector('.gs-graph').getAttribute('height'));
+    const closedH = svgH();
+    toggles()[0].dispatchEvent(new win.Event('click'));
+    await sleep(60);
+    const cd = box.querySelector('.gs-cd');
+    check('clicking the toggle opens the commit', !!cd);
+    check('details show the message, files and a diff',
+      !!cd && /Second line/.test(cd.textContent) && /a\.txt/.test(cd.textContent) && /tag\.txt/.test(cd.textContent) &&
+      cd.querySelectorAll('.gs-diff-add').length === 2, cd ? cd.textContent : '');
+    check('file text is escaped', !!cd && !cd.querySelector('b') && /<b>/.test(cd.textContent));
+    check('details show the full hash', !!cd && /[0-9a-f]{40}/.test(cd.querySelector('.gs-cd-oid').textContent));
+    check('the graph makes room for the details', svgH() > closedH, svgH() + ' vs ' + closedH);
+    check('the toggle says it is open', toggles()[0].getAttribute('aria-expanded') === 'true' &&
+      /Hide the contents/.test(toggles()[0].getAttribute('aria-label')));
+    check('details sit below their row', parseFloat(cd.style.top) > 20, cd.style.top);
+
+    toggles()[1].dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(60);
+    check('Enter opens a second commit', box.querySelectorAll('.gs-cd').length === 2);
+    check('the first commit says it is the first', /first commit/.test(box.querySelectorAll('.gs-cd')[1].textContent));
+    await h.run('echo "more" > b.txt');
+    check('open commits stay open across commands', box.querySelectorAll('.gs-cd').length === 2);
+    toggles()[0].dispatchEvent(new win.Event('click'));
+    await sleep(30);
+    check('clicking again closes it', box.querySelectorAll('.gs-cd').length === 1);
+    await h.run('reset');
+    check('reset closes everything', box.querySelectorAll('.gs-cd').length === 0);
+    check('remote graphs have no toggles', box.querySelectorAll('.gs-remote-graph .gs-cd-toggle').length === 0);
+  }
+
+  /* ---------------- multiple views of one repository ---------------- */
+  {
+    const add = (id) => {
+      const b = win.document.createElement('div');
+      b.id = id;
+      win.document.body.appendChild(b);
+      return b;
+    };
+    const ba = add('shared-a'), bb = add('shared-b');
+    const A = win.GitSandboxUI.mount('#shared-a', {
+      title: 'First look', seed: 'git init\necho one > a.txt\ngit add .\ngit commit -m one',
+      tasks: [{ text: 'two commits', check: (c) => c.graph.commits.length >= 2 }]
+    });
+    const B = win.GitSandboxUI.mount('#shared-b', {
+      title: 'Later slide', share: 'shared-a', treeView: true, panelTabs: ['history'],
+      tasks: [{ text: 'a branch', check: (c) => c.graph.branches.length >= 2 },
+              { text: 'two commits', check: (c) => c.graph.commits.length >= 2 }]
+    });
+    await A.ready; await B.ready;
+    await sleep(30);
+    const circles = (b) => b.querySelectorAll('.gs-graph circle').length;
+    check('a view shares the sandbox', A.sandbox === B.sandbox);
+    check('a view shows the origin\'s seeded history', circles(bb) === 1, circles(bb));
+    check('a view keeps its own title', /Later slide/.test(bb.querySelector('.gs-eyebrow').textContent));
+    check('a view keeps its own layout', !!bb.querySelector('.gs-tree:not([hidden])') && !ba.querySelector('.gs-tree:not([hidden])'));
+
+    await A.run('echo two > b.txt');
+    await A.run('git add .');
+    await A.run('git commit -m two');
+    await sleep(30);
+    check('a commit in the origin shows in the view', circles(bb) === 2, circles(bb));
+    check('the view\'s own tasks tick from it', bb.querySelectorAll('.gs-task.is-done').length === 1,
+      bb.querySelector('.gs-tasks').textContent);
+    check('the view\'s terminal stays its own', !/git commit/.test(bb.querySelector('.gs-out').textContent));
+
+    await B.run('git branch feature');
+    await sleep(30);
+    check('a change in the view shows in the origin', /feature/.test(ba.querySelector('.gs-graph').textContent));
+    check('the origin cannot undo past the view\'s change', ba.querySelector('.gs-undo').disabled === true);
+    await A.run('undo');
+    check('and says why', /another view/.test(ba.querySelector('.gs-out').textContent));
+    check('the view can undo its own change', bb.querySelector('.gs-undo').disabled === false);
+    await B.run('undo');
+    await sleep(30);
+    check('undo in the view reaches the origin', !/feature/.test(ba.querySelector('.gs-graph').textContent));
+    check('then the origin can undo again', ba.querySelector('.gs-undo').disabled === false);
+
+    await B.run('reset');
+    await sleep(30);
+    check('reset in a view restarts the shared repository from the origin\'s seed', circles(ba) === 1 && circles(bb) === 1,
+      circles(ba) + ' ' + circles(bb));
+    check('the origin hears about it', /reset from another view/.test(ba.querySelector('.gs-out').textContent));
+
+    // a view that comes first waits for its origin's seed
+    const bc = add('early-view');
+    const C = win.GitSandboxUI.mount('#early-view', { share: 'late-origin' });
+    await C.ready;
+    check('a view before its origin starts empty', /No commits yet/.test(bc.querySelector('.gs-graph').textContent));
+    const bd = add('late-origin');
+    const D = win.GitSandboxUI.mount('#late-origin', { seed: 'git init\necho x > x.txt\ngit add .\ngit commit -m x' });
+    await D.ready;
+    await sleep(30);
+    check('and catches up when the origin seeds it', circles(bc) === 1, circles(bc));
+  }
+
+  /* ---------------- File Status animations ---------------- */
+  {
+    // jsdom has no layout and no Web Animations API, so stand in for both:
+    // a chip's x comes from its column, its y from its place in the column.
+    const proto = win.Element.prototype;
+    const realRect = proto.getBoundingClientRect;
+    const calls = [];
+    const colX = { work: 0, stage: 200, repo: 400 };
+    proto.getBoundingClientRect = function () {
+      if (this.classList.contains('gs-stages')) return { left: 0, top: 0, width: 600, height: 200 };
+      const col = this.getAttribute('data-col');
+      if (col) {
+        const i = Array.prototype.indexOf.call(this.parentNode.children, this);
+        return { left: colX[col], top: 30 * i, width: 120, height: 24 };
+      }
+      return realRect.call(this);
+    };
+    proto.animate = function (frames, opts) {
+      calls.push({ el: this, frames, opts });
+      return { onfinish: null };
+    };
+    const box = win.document.createElement('div');
+    box.id = 'animbox';
+    win.document.body.appendChild(box);
+    const a = win.GitSandboxUI.mount('#animbox', { seed: 'git init\necho a > a.txt' });
+    await a.ready;
+    check('no animation for the first drawing', calls.length === 0, calls.length);
+    await a.run('git add a.txt');
+    const moved = calls.find(c => c.el.getAttribute && c.el.getAttribute('data-col') === 'stage' &&
+      c.el.getAttribute('data-file') === 'a.txt');
+    check('git add glides the chip from the working directory to staging',
+      !!moved && /translate\(-200px/.test(moved.frames[0].transform), JSON.stringify(calls.map(c => c.frames)));
+    calls.length = 0;
+    await a.run('git commit -m one');
+    check('git commit stays on File Status', box.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'files');
+    const ghost = calls.find(c => c.el.classList && c.el.classList.contains('gs-chip-ghost'));
+    check('git commit flies the staged chip into the repository',
+      !!ghost && /translate\(200px/.test(ghost.frames[2].transform) && ghost.frames[2].opacity === 0,
+      JSON.stringify(calls.map(c => c.frames)));
+    check('the ghost is a copy of the staged chip', !!ghost && /a\.txt/.test(ghost.el.textContent));
+    calls.length = 0;
+    await a.run('reset');
+    check('no animation after a reset', calls.length === 0, calls.length);
+    delete proto.animate;
+    proto.getBoundingClientRect = realRect;
+  }
+
+  /* ---------------- merge conflicts ---------------- */
+  {
+    const box = win.document.createElement('div');
+    box.id = 'conflictbox';
+    win.document.body.appendChild(box);
+    // the seed ends on the conflicting merge, as a lesson might
+    const c = win.GitSandboxUI.mount('#conflictbox', {
+      seed: 'git init\necho base > f.txt\ngit add .\ngit commit -m one\ngit checkout -b feat\n' +
+        'echo theirs > f.txt\ngit add .\ngit commit -m feat\ngit checkout main\necho ours > f.txt\n' +
+        'git add .\ngit commit -m mine\ngit merge feat',
+      tasks: [{ text: 'Resolve it', check: (ctx) => win.GitSandboxUI.isMerged(ctx.graph, 'feat', 'main') }]
+    });
+    await c.ready;
+    const prompt = () => box.querySelector('.gs-prompt').textContent;
+    check('a seed may end on a conflict', !/could not be set up/.test(box.querySelector('.gs-out').textContent),
+      box.querySelector('.gs-out').textContent);
+    check('prompt shows MERGING', prompt() === '~/project (main|MERGING) $', prompt());
+    const chip = box.querySelector('.gs-chip-conflict');
+    check('conflicted file chip in the working directory', !!chip && /f\.txt/.test(chip.textContent) &&
+      /conflict: both modified/.test(chip.textContent), box.querySelector('.gs-stages').textContent);
+    check('files badge counts the conflict',
+      box.querySelector('.gs-tab[data-tab="files"] .gs-tab-badge').textContent === '1');
+    check('file browser marks the conflict', !!box.querySelector('.gs-fb-mark-conflict'));
+
+    await c.run('git merge --abort');
+    check('abort clears MERGING from the prompt', prompt() === '~/project (main) $', prompt());
+    await c.run('git merge feat');
+    check('conflicting merge typed by the learner', /CONFLICT/.test(box.querySelector('.gs-out').textContent));
+    await c.run('undo');
+    check('a conflicting merge can be undone', prompt() === '~/project (main) $', prompt());
+    await c.run('git merge feat');
+    await c.run('echo both > f.txt');
+    await c.run('git add f.txt');
+    check('resolved file leaves the conflict list', !box.querySelector('.gs-chip-conflict'));
+    check('still merging until the commit', /MERGING/.test(prompt()), prompt());
+    await c.run('git commit -m "Merge feat"');
+    check('merge concluded', prompt() === '~/project (main) $', prompt());
+    check('resolving counts as merging feat into main', box.querySelectorAll('.gs-task.is-done').length === 1,
+      box.querySelector('.gs-tasks').textContent);
+  }
+
   /* ---------------- commit tree (tree-view option) ---------------- */
-  check('no commit tree unless asked for', !host.querySelector('.gs-tree') && !host.classList.contains('gs-has-tree'));
+  check('by default the commit tree is closed behind a header button',
+    host.querySelector('.gs-tree').hidden === true && !host.classList.contains('gs-has-tree') &&
+    host.querySelector('.gs-head .gs-tree-btn').getAttribute('aria-pressed') === 'false');
+  host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
+  check('the header button opens the tree', host.querySelector('.gs-tree').hidden === false &&
+    host.classList.contains('gs-has-tree') && host.querySelector('.gs-tree-btn').getAttribute('aria-pressed') === 'true');
+  check('an opened tree already shows the history', host.querySelectorAll('.gs-tree-node').length >= 1,
+    host.querySelectorAll('.gs-tree-node').length);
+  host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
+  check('and closes it again', host.querySelector('.gs-tree').hidden === true && !host.classList.contains('gs-has-tree'));
+
+  /* ---------------- configurability ---------------- */
+  {
+    const mk = async (id, cfg) => {
+      const b = win.document.createElement('div');
+      b.id = id;
+      win.document.body.appendChild(b);
+      const inst = win.GitSandboxUI.mount('#' + id, cfg);
+      await inst.ready;
+      return { b, inst };
+    };
+
+    let { b } = await mk('cfg-tree-off', { treeView: false });
+    check('tree-view: false leaves no tree and no button', !b.querySelector('.gs-tree') && !b.querySelector('.gs-tree-btn'));
+    ({ b } = await mk('cfg-tree-on', { treeView: true }));
+    check('tree-view: true shows the tree with no button',
+      b.querySelector('.gs-tree').hidden === false && b.classList.contains('gs-has-tree') && !b.querySelector('.gs-tree-btn'));
+
+    ({ b } = await mk('cfg-no-editor', { editor: false }));
+    check('editor: false removes the workspace tabs', !b.querySelector('.gs-titlebar') && !b.querySelector('.gs-wtab'));
+    check('editor: false keeps the editor out of sight', b.querySelector('.gs-view-editor').hidden === true);
+    check('editor: false keeps the terminal', b.querySelector('.gs-view[data-view="terminal"]').hidden === false);
+    let r = await mk('cfg-no-editor-help', { editor: false });
+    await r.inst.run('help');
+    check('help leaves out the Editor tab when it is off', !/Editor/.test(r.b.querySelector('.gs-out').textContent));
+
+    ({ b } = await mk('cfg-panels-off', { panels: false }));
+    check('panels: false hides the views', b.querySelector('.gs-viz').hidden === true);
+    check('panels: false still shows tasks', !!b.querySelector('.gs-tasks'));
+
+    r = await mk('cfg-panels-on', { panels: true });
+    check('panels: true has no fold button', !r.b.querySelector('.gs-viz-toggle'));
+
+    r = await mk('cfg-panels-toggle', {});
+    const vt = r.b.querySelector('.gs-viz-toggle');
+    const pnl = (n) => r.b.querySelector('.gs-panel[data-panel="' + n + '"]');
+    check('panels default to open with a fold button', !!vt && vt.getAttribute('aria-expanded') === 'true' && pnl('files').hidden === false);
+    vt.dispatchEvent(new win.Event('click'));
+    check('the fold button hides every panel', vt.getAttribute('aria-expanded') === 'false' &&
+      ['files', 'changes', 'history', 'remote'].every(n => pnl(n).hidden) &&
+      r.b.querySelector('.gs-viz').classList.contains('is-folded'));
+    await r.inst.run('git init');
+    await r.inst.run('echo a > a.txt');
+    await r.inst.run('git add .');
+    await r.inst.run('git commit -m one');
+    check('commands do not unfold the panels', pnl('files').hidden === true);
+    check('badges still update while folded',
+      r.b.querySelector('.gs-tab[data-tab="history"] .gs-tab-badge').textContent === '1');
+    r.b.querySelector('.gs-tab[data-tab="history"]').dispatchEvent(new win.Event('click'));
+    check('clicking a tab unfolds onto that panel', pnl('history').hidden === false && vt.getAttribute('aria-expanded') === 'true');
+
+    r = await mk('cfg-tabs', { panelTabs: ['history', 'changes'] });
+    const shown = Array.from(r.b.querySelectorAll('.gs-tab')).filter(t => !t.hidden).map(t => t.getAttribute('data-tab'));
+    check('panel-tabs picks the panels', JSON.stringify(shown) === '["changes","history"]', JSON.stringify(shown));
+    check('the first chosen panel is open', r.b.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'changes' &&
+      r.b.querySelector('.gs-panel[data-panel="changes"]').hidden === false &&
+      r.b.querySelector('.gs-panel[data-panel="files"]').hidden === true);
+    await r.inst.run('git init');
+    await r.inst.run('echo a > a.txt');
+    check('a command cannot open a left-out panel', r.b.querySelector('.gs-panel[data-panel="files"]').hidden === true &&
+      r.b.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'changes');
+    await r.inst.run('git remote add origin https://example.com/x.git');
+    check('Remote stays away when not chosen', r.b.querySelector('.gs-tab[data-tab="remote"]').hidden === true);
+
+    r = await mk('cfg-tabs-none', { panelTabs: [] });
+    check('an empty panel-tabs hides the views', r.b.querySelector('.gs-viz').hidden === true);
+  }
   {
     const box2 = win.document.createElement('div');
     box2.id = 'treebox';

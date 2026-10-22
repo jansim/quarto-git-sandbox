@@ -227,6 +227,30 @@ function evalWhen(expr, ctx) {
     JSON.stringify(W.filesNeeded('file a.txt and repo')) === '[]',
     JSON.stringify(W.filesNeeded('file a.txt and repo')));
 
+  /* ------------------- merging and conflicts ------------------- */
+  {
+    const sb = await build(['git init', 'echo base > f.txt', 'git add .', 'git commit -m one',
+      'git checkout -b feat', 'echo theirs > f.txt', 'git add .', 'git commit -m feat',
+      'git checkout main', 'echo ours > f.txt', 'git add .', 'git commit -m mine']);
+    let ctx = await contextFor(sb);
+    check('merging is false before a merge', evalWhen('merging', ctx) === false);
+    check('conflicts is false before a merge', evalWhen('conflicts', ctx) === false);
+    await sb.run('git merge feat');
+    ctx = await contextFor(sb);
+    check('merging is true mid-conflict', evalWhen('merging', ctx) === true);
+    check('conflicts is true mid-conflict', evalWhen('conflicts', ctx) === true);
+    check('clean is false mid-conflict', evalWhen('clean', ctx) === false);
+    check('markers readable by `file contains`', evalWhen('file f.txt contains "<<<<<<<"', ctx) === true);
+    await sb.run('echo resolved > f.txt');
+    await sb.run('git add f.txt');
+    ctx = await contextFor(sb);
+    check('merging and not conflicts once resolved', evalWhen('merging and not conflicts', ctx) === true);
+    await sb.run('git commit -m "Merge feat"');
+    ctx = await contextFor(sb);
+    check('merging is false after the commit', evalWhen('merging', ctx) === false);
+    check('merged feat into main after resolving', evalWhen('merged feat into main and merge commit', ctx) === true);
+  }
+
   /* ------------------- js: escape hatch ------------------- */
   {
     const sb = await build(['git init', 'echo a > a.txt', 'git add .', 'git commit -m "one"']);
