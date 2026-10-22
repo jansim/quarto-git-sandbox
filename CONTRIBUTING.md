@@ -103,10 +103,9 @@ opening a pull request, and keep a non-colour signal alongside it.
 
 ## Releasing
 
-1. Update `CHANGELOG.md`.
-2. Bump `version` in `_extensions/git-sandbox/_extension.yml`, `package.json`,
+1. Bump `version` in `_extensions/git-sandbox/_extension.yml`, `package.json`,
    and the `version` passed to `addHtmlDependency` in `git-sandbox.lua`.
-3. Tag the release: `git tag v1.0.1 && git push --tags`.
+2. Tag the release: `git tag v1.0.1 && git push --tags`.
 
 `quarto add ryjohnson09/quarto-git-sandbox` installs from the **HEAD of `main`**,
 not from the latest tag, so whatever is on `main` is what people get. Tags are
