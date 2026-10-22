@@ -62,10 +62,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('diff panel prompts for init', /Nothing is tracked yet/.test(host.querySelector('.gs-diff').textContent),
     host.querySelector('.gs-diff').textContent);
   check('remote panel hidden without a remote', host.querySelector('.gs-remote').hidden === true);
-  check('state pill says no repository before init',
-    /no repository/.test(host.querySelector('.gs-state').textContent),
+  check('no state pill before init', host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
   check('tasks render', host.querySelectorAll('.gs-task').length === 3);
+  check('task heading reads Tasks', /^Tasks/.test(host.querySelector('.gs-tasks-h').textContent),
+    host.querySelector('.gs-tasks-h').textContent);
+  check('first tab reads File Status',
+    /^File Status/.test(host.querySelector('.gs-tab[data-tab="files"]').textContent),
+    host.querySelector('.gs-tab[data-tab="files"]').textContent);
   check('0 of 3 to start', /0 of 3/.test(host.querySelector('.gs-tasks').textContent),
     host.querySelector('.gs-tasks').textContent);
 
@@ -97,10 +101,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await run('cd ..');
   check('prompt back at the root', host.querySelector('.gs-prompt').textContent === '~/project (main) $',
     host.querySelector('.gs-prompt').textContent);
-  check('state pill flips to repository after init',
-    /repository/.test(host.querySelector('.gs-state').textContent) &&
-    !/no repository/.test(host.querySelector('.gs-state').textContent) &&
-    !/origin/.test(host.querySelector('.gs-state').textContent),
+  check('no state pill after init without a remote', host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
   check('diff panel clean after init', /clean/.test(host.querySelector('.gs-diff').textContent),
     host.querySelector('.gs-diff').textContent);
@@ -237,8 +238,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('reset unticks tasks', host.querySelectorAll('.gs-task.is-done').length === 0,
     host.querySelector('.gs-tasks').textContent);
   check('reset restores intro', /sandbox/.test(host.querySelector('.gs-out').textContent));
-  check('reset returns state pill to no repository',
-    /no repository/.test(host.querySelector('.gs-state').textContent),
+  check('reset clears the state pill', host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
   check('reset returns to the files tab', activeTab() === 'files');
   check('reset hides the remote tab again',
@@ -268,8 +268,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // undo restores task ticks along with the repo
   check('git init ticks the repo task again', host.querySelectorAll('.gs-task.is-done').length === 1);
   await run('undo');
-  check('undo reverses git init', /no repository/.test(host.querySelector('.gs-state').textContent),
-    host.querySelector('.gs-state').textContent);
+  check('undo reverses git init', !/\(main\)/.test(host.querySelector('.gs-prompt').textContent),
+    host.querySelector('.gs-prompt').textContent);
   check('undo unticks the task git init had ticked',
     host.querySelectorAll('.gs-task.is-done').length === 0,
     host.querySelector('.gs-tasks').textContent);
@@ -284,7 +284,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   await run('git remote add origin https://example.com/demo.git');
   check('state shows origin pill once a remote exists',
-    /repository/.test(host.querySelector('.gs-state').textContent) &&
     /origin/.test(host.querySelector('.gs-state').textContent),
     host.querySelector('.gs-state').innerHTML);
 
