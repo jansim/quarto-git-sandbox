@@ -1014,6 +1014,7 @@
     function fitTree() {
       var w = host.clientWidth;
       host.classList.toggle('gs-tree-below', !!w && w < 760);
+      placeTreeBtn();
       var tw = treeScroll.clientWidth;
       if (tw && tw !== lastTreeW) {
         lastTreeW = tw;
@@ -1029,10 +1030,23 @@
     // `tree-view: toggle`: the header button opens and closes the pane. The
     // tree keeps up with every command while closed, so it opens current.
     var treeBtn = host.querySelector('.gs-tree-btn');
+    // The button sits in the top right corner of the box: in the tree's own
+    // header while the tree is open beside the box, in the box's header
+    // otherwise, so opening and closing the tree never moves it.
+    function placeTreeBtn() {
+      if (!treeBtn) return;
+      var beside = treeShown && !host.classList.contains('gs-tree-below');
+      var bar = host.querySelector(beside ? '.gs-tree-head' : '.gs-head');
+      if (treeBtn.parentNode === bar) return;
+      var focused = host.ownerDocument.activeElement === treeBtn;
+      bar.appendChild(treeBtn);
+      if (focused) treeBtn.focus();
+    }
     function setTreeShown(on) {
       treeShown = on;
       host.classList.toggle('gs-has-tree', on);
       host.querySelector('.gs-tree').hidden = !on;
+      placeTreeBtn();
       treeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
       treeBtn.title = on ? 'Hide the commit tree' : 'Show the commit tree';
       if (on) {
