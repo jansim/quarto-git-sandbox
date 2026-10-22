@@ -361,8 +361,11 @@
     var tasks = normaliseTasks(config.tasks);
     var seed = normaliseSeed(config.seed);
     var intro = normaliseIntro(config.intro);
+    // the learngitbranching-style pane is opt-in: `tree-view: true`
+    var treeOn = !!config.treeView && !!root.GitSandboxTree;
 
     host.classList.add('gs');
+    host.classList.toggle('gs-has-tree', treeOn);
     host.innerHTML =
       '<div class="gs-head">' +
         // The workspace tabs live in the title bar and open onto the dark
@@ -450,7 +453,17 @@
             '</div>' +
           '</section>' +
         '</div>' +
-      '</div>';
+      '</div>' +
+      (treeOn
+        // Beside the whole box rather than in a tab, so learners can keep
+        // an eye on the tree while they type.
+        // A div, not an <aside>: Quarto's page grid sends asides to the margin.
+        ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"><div class="gs-tree-inner">' +
+            '<div class="gs-tree-head"><span class="gs-eyebrow">Commit tree</span></div>' +
+            '<div class="gs-tree-scroll"><svg class="gs-tree-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>' +
+            '<div class="gs-tree-key"><code>C0</code> is the first commit · <code>*</code> marks your branch</div>' +
+          '</div></div>'
+        : '');
 
     var out = host.querySelector('.gs-out');
     var form = host.querySelector('.gs-input-row');
@@ -467,6 +480,10 @@
     var resetBtn = host.querySelector('.gs-reset');
     var undoBtn = host.querySelector('.gs-undo');
     var lastStateHtml = '';
+    var treeScroll = host.querySelector('.gs-tree-scroll');
+    var tree = treeOn ? root.GitSandboxTree.createTreeView(host.querySelector('.gs-tree-svg')) : null;
+    // the first drawing after a reset appears at once; later ones animate
+    var treeInstant = true;
 
     // Undo is full time travel: each entry restores the repo, the task
     // ticks, the command history and the terminal together, so the undone
@@ -482,7 +499,8 @@
         outHtml: out.innerHTML,
         prompt: host.querySelector('.gs-prompt').textContent,
         histLen: history.length,
-        done: tasks.map(function (t) { return !!t._done; })
+        done: tasks.map(function (t) { return !!t._done; }),
+        tree: tree ? tree.snapshot() : null
       };
     }
 
@@ -495,6 +513,9 @@
         return;
       }
       sb.restore(entry.core);
+      // C-names given out since the snapshot are handed back, so the next
+      // commit reuses the undone one's name
+      if (tree) tree.restore(entry.tree);
       out.innerHTML = entry.outHtml;
       history.length = entry.histLen;
       histIdx = history.length;
@@ -576,6 +597,24 @@
       new ResizeObserver(redrawGraph).observe(svg.parentNode);
     } else {
       root.addEventListener('resize', redrawGraph);
+    }
+
+    // The tree pane sits beside the box while there is room for both, and
+    // drops below it when the box gets too narrow to share.
+    var lastTreeW = 0;
+    function fitTree() {
+      var w = host.clientWidth;
+      host.classList.toggle('gs-tree-below', !!w && w < 760);
+      var tw = treeScroll.clientWidth;
+      if (tw && tw !== lastTreeW) {
+        lastTreeW = tw;
+        tree.redraw();
+      }
+    }
+    if (tree) {
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fitTree).observe(host);
+      else root.addEventListener('resize', fitTree);
+      fitTree();
     }
 
     /* ------------------------ workspace views ------------------------- */
@@ -1047,6 +1086,7 @@
       await syncEditor();
       lastGraph = graph;
       lastGraphW = svg.clientWidth;
+      if (tree) drawTree(graph);
 
       var remote = await sb.remoteModel();
       if (remote) {
@@ -1120,6 +1160,20 @@
       // follows `cd`, so the prompt always says which folder paths resolve in
       host.querySelector('.gs-prompt').textContent =
         sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
+    }
+
+    function drawTree(graph) {
+      var lay = tree.update(graph, treeInstant);
+      treeInstant = false;
+      // keep the commit HEAD points at in view as the tree grows downwards
+      var p = graph.headOid && lay.pos[graph.headOid];
+      if (!p || !treeScroll.clientHeight) return;
+      var top = treeScroll.scrollTop, h = treeScroll.clientHeight, py = p.y * lay.scale;
+      if (py - 40 < top || py + 50 > top + h) {
+        var y = Math.max(0, py - h / 2);
+        if (treeScroll.scrollTo) treeScroll.scrollTo({ top: y, behavior: 'smooth' });
+        else treeScroll.scrollTop = y;
+      }
     }
 
     async function submit(line) {
@@ -1210,6 +1264,7 @@
       fbCreate.hidden = true;
       upLevels = 0;
       expanded = {};
+      if (tree) { tree.reset(); treeInstant = true; }
       try {
         await sb.reset(seed);
       } catch (e) {
@@ -1250,7 +1305,7 @@
     renderHints();
     var ready = doReset();
 
-    return { sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks };
+    return { sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks, tree: tree };
   }
 
   /* ------------------- helpers for exercise checks ------------------- */

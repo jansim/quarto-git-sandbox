@@ -29,6 +29,7 @@ _extensions/git-sandbox/
 src/
   sandbox-core.js      in-memory filesystem, git and shell commands, graph model
   sandbox-when.js      the `when:` mini-language
+  sandbox-tree.js      the optional learngitbranching-style commit tree
   sandbox-ui.js        terminal, staging diagram, commit graph, task list
 ```
 

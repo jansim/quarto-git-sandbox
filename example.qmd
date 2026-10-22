@@ -414,6 +414,53 @@ The `remote` and `pushed` conditions pair with this: `remote` is true once
 a remote is configured, and `pushed` once every commit on the current
 branch is on the remote.
 
+## Optional: a commit tree beside the box
+
+Add `tree-view: true` to a block and the box gains a **commit tree** pane
+on its right, drawn in the style of
+[Learn Git Branching](https://learngitbranching.js.org/). Each commit is a
+circle named `C0`, `C1`, … in the order it was made, with its short hash
+underneath, the first commit at the top, and every branch a label
+pointing at its tip; `main*` marks the branch `HEAD` is on. Every command
+animates: a new commit grows out of its parent, branch labels glide to
+their new tips, and commits that `undo` takes back shrink away. The box
+widens into the right margin to make room, and the pane drops below the
+box on narrow screens. It is off by default.
+
+```git-sandbox
+id: tree-flow
+title: Branch, commit, merge
+prompt: "~/sales-analysis $"
+tree-view: true
+intro: |
+  Watch the {y}Commit tree{/} on the right as you go.
+  Each command moves something there: commits, branch labels, or HEAD's {y}*{/}.
+hints: [git checkout -b report, 'echo "# Q3" > report.md', git add ., 'git commit -m "Start the report"', git checkout main, git merge report]
+done-note: That is the shape of every feature branch, drawn one commit at a time.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  echo "sales <- read_csv('sales.csv')" > load.R
+  git add .
+  git commit -m "Load the sales data"
+tasks:
+  - text: Create and switch to a branch called `report`, and watch `main*` hand its star over
+    when: on report
+  - text: Commit on `report` and watch its label move down with the new commit
+    when: commits on report >= 3
+  - text: Go back to `main` and merge `report` into it
+    when: on main and merged report into main
+```
+
+````markdown
+```git-sandbox
+title: Branch, commit, merge
+tree-view: true
+```
+````
+
 ## Where to go from here
 
 - The [README](https://github.com/ryjohnson09/quarto-git-sandbox) has the

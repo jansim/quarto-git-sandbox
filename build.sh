@@ -33,6 +33,8 @@ HDR
   echo; echo
   cat src/sandbox-when.js
   echo; echo
+  cat src/sandbox-tree.js
+  echo; echo
   cat src/sandbox-ui.js
 } > "$OUT"
 

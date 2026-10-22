@@ -50,8 +50,9 @@ filters:
 ```
 
 `example.qmd` in this repository is an author's guide built with the extension itself:
-five working boxes, each paired with the block that produced it, from a tour
-of the panels through branching, merging, and pushing to a remote.
+six working boxes, each paired with the block that produced it, from a tour
+of the panels through branching, merging, pushing to a remote, and the
+optional commit tree.
 Render it to see everything working:
 
 ```bash
@@ -99,6 +100,7 @@ tasks:
 | `seed` | Commands run before the learner arrives, to set up a starting history. |
 | `done-note` | Shown once every task is complete. Markdown allowed. |
 | `tasks` | The checklist. Each needs a `text:` and a `when:`. |
+| `tree-view` | `true` adds a commit tree beside the box, drawn like [Learn Git Branching](https://learngitbranching.js.org/). Off by default. |
 
 Two notes on quoting, because both bite:
 
@@ -138,6 +140,37 @@ seed: |
 
 Pushing when the remote is ahead is rejected with git's real `(fetch first)`
 message, so the push → rejected → pull → push loop can be taught honestly.
+
+### The commit tree
+
+`tree-view: true` adds a pane down the right of the box that draws the
+history the way [Learn Git Branching](https://learngitbranching.js.org/)
+does. It is off by default.
+
+```yaml
+tree-view: true
+```
+
+- Commits are circles named `C0`, `C1`, … in the order they were made, so
+  `C0` is the first commit. Each also shows its short hash, which matches
+  `git log --oneline` because this is a real repository.
+- The first commit is at the top and history grows downwards. Each commit
+  hangs under its first parent, and a merge commit (drawn with a double
+  ring) sits below both of its parents.
+- Branches are labels pointing at their tips. `main*` marks the branch
+  `HEAD` is on; a detached `HEAD` gets a label of its own, and
+  remote-tracking refs such as `origin/main` are dashed.
+- A commit takes the colour of the branch it was made on, and keeps it.
+- Every change animates: a new commit grows out of its parent, labels
+  glide to their new tips, and commits that `undo` takes back shrink away.
+  `undo` also hands back the names it took, so the next commit reuses
+  them. Readers who ask their system for reduced motion get the same
+  changes without the animation.
+
+In Quarto the exercise widens into the right margin (`column-page-right`)
+to make room for the pane. When the box is narrower than 760 px, the pane
+moves below it instead. With `GitSandboxUI.mount()` the option is
+`treeView: true`.
 
 ## Conditions: the `when:` language
 

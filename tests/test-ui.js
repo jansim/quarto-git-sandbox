@@ -18,6 +18,7 @@ global.navigator = win.navigator;
 win.git = git;
 win.Buffer = Buffer; // the shipped bundle provides this in the browser
 win.GitSandboxCore = require('../src/sandbox-core.js');
+win.GitSandboxTree = require('../src/sandbox-tree.js');
 
 // evaluate the UI file in the jsdom window context
 const uiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'sandbox-ui.js'), 'utf8');
@@ -481,6 +482,109 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   click(host.querySelector('.gs-wtab[data-view="terminal"]'));
   check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);
+
+  /* ---------------- commit tree (tree-view option) ---------------- */
+  check('no commit tree unless asked for', !host.querySelector('.gs-tree') && !host.classList.contains('gs-has-tree'));
+  {
+    const box2 = win.document.createElement('div');
+    box2.id = 'treebox';
+    win.document.body.appendChild(box2);
+    const t = win.GitSandboxUI.mount('#treebox', {
+      title: 'Tree', treeView: true,
+      seed: 'git init\necho a > a.txt\ngit add .\ngit commit -m "one"\necho b > b.txt\ngit add .\ngit commit -m "two"'
+    });
+    await t.ready;
+    const tr = (line) => t.run(line).then(() => sleep(30));
+    const nodeText = () => Array.from(box2.querySelectorAll('.gs-tree-node .gs-tree-c')).map(n => n.textContent).sort();
+    const refText = (name) => {
+      const g = box2.querySelector('.gs-tree-ref[data-ref="' + name + '"]');
+      return g ? g.querySelector('text').textContent : null;
+    };
+    const nodeOf = (oid) => box2.querySelector('.gs-tree-node[data-oid="' + oid + '"]');
+    const graph = async () => t.sandbox.graphModel();
+
+    check('tree pane present when tree-view is on',
+      !!box2.querySelector('.gs-tree .gs-tree-svg') && box2.classList.contains('gs-has-tree'));
+    check('tree pane is not an <aside> (Quarto sends those to the margin)',
+      box2.querySelector('.gs-tree').tagName === 'DIV' &&
+      box2.querySelector('.gs-tree').getAttribute('role') === 'complementary');
+    check('seeded commits named C0 and C1', JSON.stringify(nodeText()) === '["C0","C1"]', JSON.stringify(nodeText()));
+    let g = await graph();
+    const [c1, c0] = g.commits;
+    check('C0 is the root commit', t.tree.labelOf(c0.oid) === 'C0' && t.tree.labelOf(c1.oid) === 'C1');
+    check('each commit shows its short hash',
+      nodeOf(c0.oid).querySelector('.gs-tree-sha').textContent === c0.short &&
+      nodeOf(c1.oid).querySelector('.gs-tree-sha').textContent === c1.short);
+    check('checked-out branch is starred', refText('main') === 'main*', refText('main'));
+    check('root sits above its child',
+      /translate\([\d.]+,([\d.]+)\)/.exec(nodeOf(c0.oid).getAttribute('transform'))[1] * 1 <
+      /translate\([\d.]+,([\d.]+)\)/.exec(nodeOf(c1.oid).getAttribute('transform'))[1] * 1);
+    check('tree has an accessible summary',
+      /2 commits: main\* at C1/.test(box2.querySelector('.gs-tree-svg').getAttribute('aria-label')),
+      box2.querySelector('.gs-tree-svg').getAttribute('aria-label'));
+
+    await tr('git checkout -b report');
+    check('star moves to the new branch', refText('report') === 'report*' && refText('main') === 'main',
+      refText('report') + ' / ' + refText('main'));
+    await tr('echo r > r.txt');
+    await tr('git add .');
+    await tr('git commit -m "three"');
+    g = await graph();
+    const c2 = g.commits[0];
+    check('a new commit takes the next name', t.tree.labelOf(c2.oid) === 'C2', t.tree.labelOf(c2.oid));
+    check('the branch label follows its new tip',
+      box2.querySelector('.gs-tree-ref[data-ref="report"]') && t.tree.labelOf(c2.oid) === 'C2' &&
+      /report\* at C2/.test(box2.querySelector('.gs-tree-svg').getAttribute('aria-label')),
+      box2.querySelector('.gs-tree-svg').getAttribute('aria-label'));
+    check('a chain of three commits has two edges', box2.querySelectorAll('.gs-tree-edge').length === 2);
+
+    await tr('undo');
+    await sleep(800); // let the undone commit shrink away
+    check('undo takes the commit out of the tree', !nodeOf(c2.oid) && nodeText().length === 2, JSON.stringify(nodeText()));
+    await tr('git checkout main');
+    await tr('echo m > m.txt');
+    await tr('git add .');
+    await tr('git commit -m "on main"');
+    g = await graph();
+    check('the name an undone commit had is handed out again', t.tree.labelOf(g.commits[0].oid) === 'C2',
+      t.tree.labelOf(g.commits[0].oid));
+
+    await tr('git checkout report');
+    await tr('echo r2 > r2.txt');
+    await tr('git add .');
+    await tr('git commit -m "report work"');
+    await tr('git checkout main');
+    await tr('git merge report');
+    g = await graph();
+    const merge = g.commits[0];
+    check('a merge commit is drawn with both edges', merge.parents.length === 2 &&
+      box2.querySelectorAll('.gs-tree-edge').length === 5, String(box2.querySelectorAll('.gs-tree-edge').length));
+    check('merge commit is C4', t.tree.labelOf(merge.oid) === 'C4', t.tree.labelOf(merge.oid));
+    check('merge commit gets the double ring', nodeOf(merge.oid).querySelectorAll('circle').length === 2);
+
+    box2.querySelector('.gs-reset').dispatchEvent(new win.Event('click'));
+    await t.ready; await sleep(400);
+    check('reset starts naming again from C0', JSON.stringify(nodeText()) === '["C0","C1"]', JSON.stringify(nodeText()));
+  }
+
+  // detached HEAD gets its own label; the sandbox has no command for it yet,
+  // so draw a hand-made graph
+  {
+    const svgD = win.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    win.document.body.appendChild(svgD);
+    const tv = win.GitSandboxTree.createTreeView(svgD);
+    tv.update({
+      head: null, headOid: 'b'.repeat(40), detached: true,
+      commits: [
+        { oid: 'b'.repeat(40), short: 'bbbbbbb', message: 'two', parents: ['a'.repeat(40)], refs: [] },
+        { oid: 'a'.repeat(40), short: 'aaaaaaa', message: 'one', parents: [], refs: [{ name: 'main', isHead: false }] }
+      ]
+    }, true);
+    check('detached HEAD has its own label',
+      !!svgD.querySelector('.gs-tree-ref[data-ref="HEAD"]') &&
+      svgD.querySelector('.gs-tree-ref[data-ref="main"] text').textContent === 'main',
+      svgD.innerHTML.slice(0, 200));
+  }
 
   const svg = host.querySelector('.gs-graph');
   const style = `<style>

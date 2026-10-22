@@ -52,6 +52,13 @@ title: Tasks not a list
 tasks: commits >= 1
 ```
 
+## A tree-view that is not true or false
+
+```git-sandbox
+title: Bad tree-view
+tree-view: sometimes
+```
+
 ## Options that are not key/value at all
 
 ```git-sandbox
