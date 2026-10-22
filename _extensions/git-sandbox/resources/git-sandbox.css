@@ -39,6 +39,17 @@
   overflow: hidden;
 }
 
+/* Buttons and inputs take their type from the box, as Bootstrap's reboot
+   makes them do on an ordinary Quarto page. reveal.js has no such reset, so
+   without this a slide sizes every tab, button and the prompt differently.
+   :where() keeps it at zero specificity, so every rule below still wins. */
+:where(.gs) :where(button, input, select, textarea) {
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 /* ------------------------------- header ------------------------------ */
 
 .gs-head {
@@ -406,6 +417,8 @@
 /* `git commit` without -m swaps the transcript and prompt for this. The
    display rules above would otherwise beat the hidden attribute. */
 .gs-out[hidden], .gs-input-row[hidden], .gs-hints[hidden], .gs-vim[hidden] { display: none; }
+/* no hints: no strip of padding under the prompt either */
+.gs-hints:empty { display: none; }
 
 .gs-vim {
   flex: 1 1 auto;
@@ -1130,7 +1143,11 @@
   100% { background: transparent; }
 }
 .gs-task.is-done .gs-task-txt { color: var(--gs-gray-body); }
-.gs-task code {
+.gs .gs-task code {
+  /* doubled up to beat the host's own code styling (Bootstrap's on a page,
+     reveal.js's on a slide), which would otherwise recolour it */
+  color: var(--gs-blue-500);
+  white-space: nowrap;
   font-family: var(--gs-mono);
   font-size: 0.92em;
   background: var(--gs-off-white);
@@ -1181,6 +1198,10 @@
    slide. */
 .reveal .gs { margin: 12px 0; font-size: 16px; line-height: 1.5; text-align: left; }
 .reveal .gs ul.gs-task-list, .reveal .gs ul.gs-fb-list { display: block; margin: 0; padding: 0; }
+/* reveal.js spaces out list items and zeroes their first child's top
+   margin, which pulls the task rows apart and lifts the checkboxes */
+.reveal .slide .gs li { margin: 0; }
+.reveal .slide .gs li > .gs-task-mark { margin-top: 2px; }
 .reveal .gs .gs-term-wrap { height: 230px; }
 .reveal .gs .gs-panel { max-height: 200px; }
 .reveal .gs .gs-tree-below .gs-tree-scroll { height: 200px; }
@@ -1198,13 +1219,14 @@
 }
 .reveal .gs-fill > .gs-body { display: flex; flex-direction: column; min-height: 0; }
 /* The terminal or editor is what the slide is for, so it gets most of the
-   room; the tasks and the views below make do with a compact strip. */
+   room. The tasks and the views below keep the spacing they have on a page
+   but take a fixed share of the height. */
 .reveal .gs-fill .gs-term-wrap { flex: 1 1 0; height: auto; min-height: 180px; }
 .reveal .gs-fill .gs-tasks { flex: 0 0 auto; max-height: 22%; overflow-y: auto; }
-.reveal .gs-fill .gs-tasks:not(:empty) { padding-top: 8px; padding-bottom: 8px; }
-.reveal .gs-fill .gs-viz { flex: 0 0 auto; padding-top: 6px; padding-bottom: 6px; }
-.reveal .gs-fill .gs-tabs { margin-bottom: 6px; }
+.reveal .gs-fill .gs-viz { flex: 0 0 auto; }
 .reveal .gs-fill .gs-panel { height: 112px; max-height: none; }
+/* the stages fill that area rather than leaving a band of white under them */
+.reveal .gs-fill .gs-panel > .gs-stages { min-height: 100%; }
 .reveal .gs-fill .gs-graph-scroll, .reveal .gs-fill .gs-diff { overflow: visible; }
 
 @media print {
