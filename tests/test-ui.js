@@ -715,11 +715,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     calls.length = 0;
     await a.run('git commit -m one');
     check('git commit stays on File Status', box.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'files');
-    const ghost = calls.find(c => c.el.classList && c.el.classList.contains('gs-chip-ghost'));
-    check('git commit flies the staged chip into the repository',
-      !!ghost && /translate\(200px/.test(ghost.frames[2].transform) && ghost.frames[2].opacity === 0,
-      JSON.stringify(calls.map(c => c.frames)));
-    check('the ghost is a copy of the staged chip', !!ghost && /a\.txt/.test(ghost.el.textContent));
+    const shape = calls.find(c => c.el.classList && c.el.classList.contains('gs-commit-node'));
+    const frames = shape ? shape.frames : [];
+    const centre = f => parseFloat(f.left) + parseFloat(f.width) / 2;
+    const formed = frames.find(f => f.borderRadius === '50%');
+    check('git commit morphs the staged chips into a commit node',
+      !!shape && frames[0].borderRadius === '4px' && centre(frames[0]) === 260 &&
+      !!formed && formed.width === formed.height && /2\.5px #447099/.test(formed.boxShadow),
+      JSON.stringify(frames));
+    check('which starts out as a copy of the staged chips', !!shape && /a\.txt/.test(shape.el.textContent));
+    check('the copies are not counted as chips', !!shape && !shape.el.querySelector('[data-file]'));
+    check('and moves into the repository', !!shape && centre(frames.at(-1)) === 460 && frames.at(-1).opacity === 0,
+      JSON.stringify(frames));
     calls.length = 0;
     await a.run('reset');
     check('no animation after a reset', calls.length === 0, calls.length);
