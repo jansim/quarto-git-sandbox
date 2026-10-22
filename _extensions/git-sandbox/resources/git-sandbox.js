@@ -633,6 +633,38 @@
       await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
     }
 
+    // The "Your branch is ahead of 'origin/main' by 2 commits" lines of
+    // `git status`. Like real git it compares against the tracking ref,
+    // so a remote that moved on shows only after a fetch. Empty when the
+    // branch has no tracking ref.
+    async function trackingLines(branch) {
+      if (!remoteUrl || !branch) return [];
+      var tracked, local;
+      try {
+        tracked = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + branch }));
+        local = await gitlib.resolveRef(opts({ ref: branch }));
+      } catch (e) { return []; }
+      var name = "'origin/" + branch + "'";
+      var localSet = await reachableFrom(local, opts);
+      var trackedSet = await reachableFrom(tracked, opts);
+      var ahead = 0, behind = 0;
+      Object.keys(localSet).forEach(function (o) { if (!trackedSet[o]) ahead++; });
+      Object.keys(trackedSet).forEach(function (o) { if (!localSet[o]) behind++; });
+      var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
+      if (!ahead && !behind) return ['Your branch is up to date with ' + name + '.'];
+      if (ahead && behind) {
+        return ['Your branch and ' + name + ' have diverged,',
+          'and have ' + ahead + ' and ' + behind + ' different commits each, respectively.',
+          '  (use "git pull" if you want to integrate the remote branch with yours)'];
+      }
+      if (behind) {
+        return ['Your branch is behind ' + name + ' by ' + n(behind) + ', and can be fast-forwarded.',
+          '  (use "git pull" to update your local branch)'];
+      }
+      return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
+        '  (use "git push" to publish your local commits)'];
+    }
+
     /* ------------------------- merge conflicts ---------------------- */
 
     // A merge that stops on conflicts leaves MERGE_HEAD and MERGE_MSG in
@@ -902,9 +934,12 @@
 
     // What the mock remote looks like "on GitHub": its own commit graph plus
     // how the learner's current branch compares to it. Null until
-    // `git remote add origin <url>` has run.
-    async function remoteModel() {
+    // `git remote add origin <url>` has run. `remotes` lists every remote's
+    // name; there is only ever `origin` for now, so `name` picks it.
+    async function remoteModel(name) {
       if (!remoteUrl) return null;
+      var remotes = ['origin'];
+      name = remotes.indexOf(name) !== -1 ? name : remotes[0];
       var names = await listRemoteBranchNames();
       var refEntries = [];
       for (var i = 0; i < names.length; i++) {
@@ -927,6 +962,7 @@
         }
       }
       return {
+        name: name, remotes: remotes,
         url: remoteUrl,
         graph: { commits: commits, branches: names, head: null, detached: false },
         branch: branch, tracked: tracked, ahead: ahead, behind: behind
@@ -1114,6 +1150,7 @@
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
           if (!anyCommit) lines.push('', 'No commits yet');
+          else lines = lines.concat(await trackingLines(await currentBranch()));
           if (st.conflicted.length) {
             lines.push('You have unmerged paths.',
               '  (fix conflicts and run "git commit")',
@@ -3114,66 +3151,15 @@
     var x = function (lane) { return padLeft + lane * laneW; };
     var cyOf = function (i) { return tops[i] + 16; };
 
-    // edges first so nodes sit on top
-    model.commits.forEach(function (c, i) {
-      (c.parents || []).forEach(function (p, pi) {
-        if (!(p in index)) return;
-        var j = index[p];
-        var x1 = x(c.lane), y1 = cyOf(i), x2 = x(model.commits[j].lane), y2 = cyOf(j);
-        var path = document.createElementNS(NS, 'path');
-        var d;
-        if (x1 === x2) {
-          d = 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2;
-        } else {
-          var mid = y1 + (y2 - y1) * 0.55;
-          d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + mid + ' ' + x2 + ',' + (y2 - (y2 - y1) * 0.45) + ' ' + x2 + ',' + y2;
-        }
-        path.setAttribute('d', d);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', LANE_COLORS[(pi === 0 ? c.lane : model.commits[j].lane) % LANE_COLORS.length]);
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('opacity', '0.55');
-        svg.appendChild(path);
-      });
-    });
+    drawEdges(svg, model, index, x, cyOf);
 
     model.commits.forEach(function (c, i) {
       var cx = x(c.lane), cy = cyOf(i), row = rows[i];
-      var isMerge = (c.parents || []).length > 1;
-
-      // Outlined in the lane colour over a pale tint of it, as in the commit
-      // tree; merge commits stay hollow.
       var color = LANE_COLORS[c.lane % LANE_COLORS.length];
-      var circle = document.createElementNS(NS, 'circle');
-      circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
-      circle.setAttribute('r', 7);
-      circle.setAttribute('fill', isMerge ? '#FFFFFF' : tint(color, 0.8));
-      circle.setAttribute('stroke', color);
-      circle.setAttribute('stroke-width', '2.5');
-      svg.appendChild(circle);
+      drawNode(svg, c, cx, cy, 7);
 
-      // ref labels, styled like the commit tree's: a tinted box outlined in
-      // the branch colour, bolder for HEAD, dashed grey for remote refs
       row.refLayouts.forEach(function (rl) {
-        var rect = document.createElementNS(NS, 'rect');
-        rect.setAttribute('x', rl.x); rect.setAttribute('y', cy - 10);
-        rect.setAttribute('width', rl.w); rect.setAttribute('height', 20);
-        rect.setAttribute('rx', 5);
-        if (rl.remote) {
-          rect.setAttribute('fill', '#FFFFFF');
-          rect.setAttribute('stroke', '#717171');
-          rect.setAttribute('stroke-dasharray', '3 2');
-        } else {
-          rect.setAttribute('fill', tint(color, rl.isHead ? 0.62 : 0.85));
-          rect.setAttribute('stroke', color);
-        }
-        rect.setAttribute('stroke-width', rl.isHead ? '2' : '1.2');
-        svg.appendChild(rect);
-        var lt = document.createElementNS(NS, 'text');
-        lt.setAttribute('x', rl.x + 7); lt.setAttribute('y', cy + 4);
-        lt.setAttribute('class', rl.isHead ? 'gs-ref gs-ref-head' : (rl.remote ? 'gs-ref gs-ref-remote' : 'gs-ref'));
-        lt.textContent = rl.label;
-        svg.appendChild(lt);
+        drawRef(svg, rl, rl.x, cy, 20, 7, color);
       });
 
       var sha = document.createElementNS(NS, 'text');
@@ -3200,6 +3186,166 @@
       }
     });
     return layout;
+  }
+
+  // parent links, drawn before the nodes so the nodes sit on top
+  function drawEdges(svg, model, index, x, cyOf) {
+    var NS = 'http://www.w3.org/2000/svg';
+    model.commits.forEach(function (c, i) {
+      (c.parents || []).forEach(function (p, pi) {
+        if (!(p in index)) return;
+        var j = index[p];
+        var x1 = x(c.lane), y1 = cyOf(i), x2 = x(model.commits[j].lane), y2 = cyOf(j);
+        var path = document.createElementNS(NS, 'path');
+        var d;
+        if (x1 === x2) {
+          d = 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2;
+        } else {
+          var mid = y1 + (y2 - y1) * 0.55;
+          d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + mid + ' ' + x2 + ',' + (y2 - (y2 - y1) * 0.45) + ' ' + x2 + ',' + y2;
+        }
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', LANE_COLORS[(pi === 0 ? c.lane : model.commits[j].lane) % LANE_COLORS.length]);
+        path.setAttribute('stroke-width', '2');
+        path.setAttribute('opacity', '0.55');
+        svg.appendChild(path);
+      });
+    });
+  }
+
+  // Outlined in the lane colour over a pale tint of it, as in the commit
+  // tree; merge commits stay hollow.
+  function drawNode(svg, c, cx, cy, r) {
+    var color = LANE_COLORS[c.lane % LANE_COLORS.length];
+    var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+    circle.setAttribute('r', r);
+    circle.setAttribute('fill', (c.parents || []).length > 1 ? '#FFFFFF' : tint(color, 0.8));
+    circle.setAttribute('stroke', color);
+    circle.setAttribute('stroke-width', r > 5 ? '2.5' : '2');
+    svg.appendChild(circle);
+  }
+
+  // A ref label centred on y, styled like the commit tree's: a tinted box
+  // outlined in the branch colour, bolder for HEAD, grey for remote refs:
+  // dashed for the local repo's remote-tracking copies, solid for the
+  // remote's own branches. `rl` is { label, w, isHead, remote, onRemote }.
+  function drawRef(svg, rl, x, y, h, padX, color) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y - h / 2);
+    rect.setAttribute('width', rl.w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', h / 4);
+    if (rl.remote) {
+      rect.setAttribute('fill', '#FFFFFF');
+      rect.setAttribute('stroke', '#717171');
+      if (!rl.onRemote) rect.setAttribute('stroke-dasharray', '3 2');
+    } else {
+      rect.setAttribute('fill', tint(color, rl.isHead ? 0.62 : 0.85));
+      rect.setAttribute('stroke', color);
+    }
+    rect.setAttribute('stroke-width', rl.isHead ? '2' : '1.2');
+    svg.appendChild(rect);
+    var lt = document.createElementNS(NS, 'text');
+    lt.setAttribute('x', x + padX); lt.setAttribute('y', y + h / 5);
+    lt.setAttribute('class', rl.isHead ? 'gs-ref gs-ref-head' : (rl.remote ? 'gs-ref gs-ref-remote' : 'gs-ref'));
+    lt.textContent = rl.label;
+    svg.appendChild(lt);
+  }
+
+  // The commit graph squeezed into half a panel, for the side-by-side
+  // local/remote view. Narrower lanes and smaller type; ref labels get a
+  // line of their own above the sha and message (wrapping onto more lines
+  // when they don't fit), and the message is cut to one line, with the
+  // full text on hover. `onRemote` marks the remote's own graph, whose
+  // labels are its branches rather than tracking copies of them.
+  function renderCompactGraph(svg, model, onRemote) {
+    var NS = 'http://www.w3.org/2000/svg';
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var W = svg.clientWidth || 320;
+
+    if (!model.commits.length) {
+      svg.setAttribute('viewBox', '0 0 ' + W + ' 44');
+      svg.setAttribute('height', '44');
+      var t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', String(W / 2)); t.setAttribute('y', '26');
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('class', 'gs-empty-text');
+      t.textContent = 'No commits yet.';
+      svg.appendChild(t);
+      return;
+    }
+
+    var laneW = 14, padLeft = 12, padTop = 10, refH = 16, refGap = 4, textH = 18, rowGap = 8;
+    var maxLane = 0;
+    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
+    var textX = padLeft + maxLane * laneW + 14;
+    var avail = W - textX - 6;
+
+    var rows = model.commits.map(function (c) {
+      // ref labels flow left to right, onto a new line when one won't fit
+      var refLines = [], line = [], lx = textX;
+      (c.refs || []).forEach(function (r) {
+        var label = (r.isHead ? 'HEAD → ' : '') + r.name;
+        var w = label.length * (r.isHead ? 6.5 : 6.1) + 10;
+        if (line.length && lx + w > W - 6) { refLines.push(line); line = []; lx = textX; }
+        line.push({ label: label, x: lx, w: w, isHead: r.isHead, remote: r.remote, onRemote: !!onRemote });
+        lx += w + 4;
+      });
+      if (line.length) refLines.push(line);
+      var msgX = textX + 52;
+      var maxChars = Math.max(4, Math.floor((W - msgX - 6) / 6.3));
+      var msg = String(c.message).split('\n')[0];
+      var cut = msg.length > maxChars;
+      return {
+        refLines: refLines, msgX: msgX, msg: cut ? msg.slice(0, maxChars - 1) + '…' : msg, cut: cut,
+        h: refLines.length * (refH + refGap) + textH + rowGap
+      };
+    });
+
+    var tops = [], acc = padTop;
+    rows.forEach(function (r) { tops.push(acc); acc += r.h; });
+    var height = acc - rowGap + padTop;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + height);
+    svg.setAttribute('height', String(height));
+    svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+
+    var index = {};
+    model.commits.forEach(function (c, i) { index[c.oid] = i; });
+    var x = function (lane) { return padLeft + lane * laneW; };
+    // the node sits level with the first line of its row
+    var cyOf = function (i) {
+      return tops[i] + (rows[i].refLines.length ? refH / 2 : textH / 2);
+    };
+
+    drawEdges(svg, model, index, x, cyOf);
+
+    model.commits.forEach(function (c, i) {
+      var row = rows[i], top = tops[i];
+      var color = LANE_COLORS[c.lane % LANE_COLORS.length];
+      drawNode(svg, c, x(c.lane), cyOf(i), 5);
+      row.refLines.forEach(function (l, li) {
+        var cy = top + li * (refH + refGap) + refH / 2;
+        l.forEach(function (rl) { drawRef(svg, rl, rl.x, cy, refH, 5, color); });
+      });
+      var ty = top + row.refLines.length * (refH + refGap) + textH / 2 + 4;
+      var sha = document.createElementNS(NS, 'text');
+      sha.setAttribute('x', textX); sha.setAttribute('y', ty);
+      sha.setAttribute('class', 'gs-sha');
+      sha.textContent = c.short;
+      svg.appendChild(sha);
+      var msg = document.createElementNS(NS, 'text');
+      msg.setAttribute('x', row.msgX); msg.setAttribute('y', ty);
+      msg.setAttribute('class', 'gs-msg');
+      msg.textContent = row.msg;
+      if (row.cut) {
+        var title = document.createElementNS(NS, 'title');
+        title.textContent = c.message;
+        msg.appendChild(title);
+      }
+      svg.appendChild(msg);
+    });
   }
 
   // The chevron at the end of a history row: a keyboard-reachable SVG
@@ -3599,7 +3745,7 @@
             '</div>'
           : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
-        '<span class="gs-state" role="status"></span>' +
+        '<span class="gs-state"></span>' +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
         (treeMode === 'toggle'
@@ -3684,8 +3830,19 @@
           '</div>' +
           '<div class="gs-panel" role="tabpanel" data-panel="remote" hidden>' +
             '<div class="gs-remote" hidden>' +
-              '<div class="gs-graph-scroll"><svg class="gs-remote-graph" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
-              '<div class="gs-remote-sync"></div>' +
+              // the learner's repository and the remote side by side, so a
+              // push or pull can be watched moving commits across
+              '<div class="gs-split">' +
+                '<div class="gs-side gs-side-local">' +
+                  '<div class="gs-side-head"><span class="gs-side-label">Local</span></div>' +
+                  '<div class="gs-graph-scroll"><svg class="gs-local-graph gs-graph-compact" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
+                '</div>' +
+                '<div class="gs-side gs-side-remote">' +
+                  '<div class="gs-side-head"><span class="gs-side-label">Remote</span>' +
+                    '<span class="gs-remote-name"></span></div>' +
+                  '<div class="gs-graph-scroll"><svg class="gs-remote-graph gs-graph-compact" xmlns="http://www.w3.org/2000/svg"></svg></div>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -3719,9 +3876,11 @@
     var commitInfo = {};
     var remoteWrap = host.querySelector('.gs-remote');
     var remoteSvg = host.querySelector('.gs-remote-graph');
-    var remoteSync = host.querySelector('.gs-remote-sync');
+    var localSvg = host.querySelector('.gs-local-graph');
+    var remoteNameNode = host.querySelector('.gs-remote-name');
+    // the remote shown on the right; with more than one, a dropdown picks it
+    var remoteName = null;
     var tasksNode = host.querySelector('.gs-tasks');
-    var stateNode = host.querySelector('.gs-state');
     var resetBtn = host.querySelector('.gs-reset');
     var undoBtn = host.querySelector('.gs-undo');
     var vimNode = host.querySelector('.gs-vim');
@@ -3729,7 +3888,6 @@
     var vimStatus = host.querySelector('.gs-vim-status');
     // the open vim session, if any: { abandon() }
     var vim = null;
-    var lastStateHtml = '';
     var treeScroll = host.querySelector('.gs-tree-scroll');
     var tree = treeOn ? root.GitSandboxTree.createTreeView(host.querySelector('.gs-tree-svg')) : null;
     // the first drawing after a reset appears at once; later ones animate
@@ -3857,21 +4015,11 @@
       badge.classList.toggle('gs-tab-badge-ok', text === '✓');
     }
 
-    // Which tab would a learner look at after this command? Mirrors the
-    // glance they'd make anyway; a manual tab click holds until the next
-    // command that has an opinion.
+    // Which tab would a learner look at after this command? Only a shell
+    // edit has an opinion (the file it touched); git commands leave the
+    // learner's chosen view alone.
     function tabFor(line) {
-      var t = line.trim().split(/\s+/);
-      var c = t[0], s = t[1] || '';
-      if (c === 'git') {
-        // a commit stays on File Status, where the staged files can be
-        // seen moving into the repository
-        if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
-        if (s === 'diff') return 'changes';
-        if (/^(merge|log|branch|checkout|switch)$/.test(s)) return 'history';
-        if (/^(push|pull|fetch|remote)$/.test(s)) return 'remote';
-        return null;
-      }
+      var c = line.trim().split(/\s+/)[0];
       if (/^(echo|touch|rm|mkdir)$/.test(c)) return 'files';
       return null;
     }
@@ -3885,6 +4033,7 @@
     var stagesInstant = true;
     var lastRemoteGraph = null;
     var lastRemoteGraphW = 0;
+    var lastLocalGraphW = 0;
     function redrawGraph() {
       var w = svg.clientWidth;
       if (lastGraph && w && w !== lastGraphW) {
@@ -3894,11 +4043,19 @@
       var rw = remoteSvg.clientWidth;
       if (lastRemoteGraph && rw && rw !== lastRemoteGraphW) {
         lastRemoteGraphW = rw;
-        renderGraph(remoteSvg, lastRemoteGraph);
+        renderCompactGraph(remoteSvg, lastRemoteGraph, true);
+      }
+      var lw = localSvg.clientWidth;
+      if (lastRemoteGraph && lastGraph && lw && lw !== lastLocalGraphW) {
+        lastLocalGraphW = lw;
+        renderCompactGraph(localSvg, lastGraph);
       }
     }
     if (typeof ResizeObserver !== 'undefined') {
-      new ResizeObserver(redrawGraph).observe(svg.parentNode);
+      var graphObserver = new ResizeObserver(redrawGraph);
+      graphObserver.observe(svg.parentNode);
+      graphObserver.observe(localSvg.parentNode);
+      graphObserver.observe(remoteSvg.parentNode);
     } else {
       root.addEventListener('resize', redrawGraph);
     }
@@ -4456,17 +4613,19 @@
       lastGraphW = svg.clientWidth;
       if (tree) drawTree(graph);
 
-      var remote = await sb.remoteModel();
+      var remote = await sb.remoteModel(remoteName);
       if (remote) {
         remoteWrap.hidden = false;
-        renderGraph(remoteSvg, remote.graph);
+        remoteName = remote.name;
+        drawRemoteName(remote);
+        renderCompactGraph(localSvg, graph);
+        renderCompactGraph(remoteSvg, remote.graph, true);
         lastRemoteGraph = remote.graph;
         lastRemoteGraphW = remoteSvg.clientWidth;
-        remoteSync.innerHTML = remoteSyncText(remote);
+        lastLocalGraphW = localSvg.clientWidth;
       } else {
         remoteWrap.hidden = true;
         lastRemoteGraph = null;
-        remoteSync.innerHTML = '';
       }
 
       // Tab badges: enough signal that folded panels lose nothing you would
@@ -4486,13 +4645,6 @@
              (remote.behind ? '⇣' + remote.behind : '')));
       } else if (activeTab === 'remote') {
         selectTab(defaultTab);
-      }
-
-      var stateHtml = remote ? '<span class="gs-state-pill gs-state-remote">⇄ origin</span>' : '';
-      // role="status" announces DOM changes, so only touch it on a real change.
-      if (stateHtml !== lastStateHtml) {
-        stateNode.innerHTML = stateHtml;
-        lastStateHtml = stateHtml;
       }
 
       // `file x contains "y"` needs file contents; read them up front so the
@@ -4806,16 +4958,28 @@
       input.focus();
     }
 
-    // one-line summary under the remote graph: how the learner's current
-    // branch compares to its counterpart on the remote
-    function remoteSyncText(r) {
-      if (!r.branch || !r.tracked) return '';
-      var b = esc(r.branch);
-      var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
-      if (!r.ahead && !r.behind) return '✓ in sync with your <code>' + b + '</code>';
-      if (r.ahead && r.behind) return '<code>origin/' + b + '</code> and your <code>' + b + '</code> have diverged — <code>git pull</code>, then <code>git push</code>';
-      if (r.behind) return '<code>origin/' + b + '</code> is ' + n(r.behind) + ' ahead of your <code>' + b + '</code> — <code>git pull</code> to update';
-      return 'your <code>' + b + '</code> is ' + n(r.ahead) + ' ahead — <code>git push</code> to publish';
+    // The remote half's heading names the remote shown; with several it is
+    // a dropdown. Only rebuilt when the names change, so an open dropdown
+    // keeps its focus across refreshes.
+    var lastRemoteNames = '';
+    function drawRemoteName(r) {
+      var names = r.remotes || [r.name];
+      var key = names.join('\n');
+      if (key !== lastRemoteNames) {
+        lastRemoteNames = key;
+        if (names.length > 1) {
+          remoteNameNode.innerHTML = '<select class="gs-remote-select" aria-label="Remote">' +
+            names.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('') +
+            '</select>';
+          remoteNameNode.firstChild.addEventListener('change', function (e) {
+            remoteName = e.target.value;
+            refresh();
+          });
+        } else {
+          remoteNameNode.textContent = r.name;
+        }
+      }
+      if (names.length > 1) remoteNameNode.firstChild.value = r.name;
     }
 
     function helpText() {
