@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+- New `cd` command for moving between folders inside the project. The prompt
+  shows the current folder, relative paths in shell and git commands resolve
+  from it, and `git add .` stages only that folder and below. `cd`, `cd ~`
+  and `cd ~/path` start from the project's top folder, and `cd -` goes back
+  to the previous one. Leaving the project is refused with a message saying
+  why.
+- `ls` accepts a folder to list, e.g. `ls src`.
+- The exercise title bar now carries two tabs, **Terminal** and **Editor**,
+  that open onto the dark pane below; the title moves aside to make room
+  (and onto its own row above the tabs on narrow screens). The Editor tab is a file browser plus a text editor over
+  the same working directory the terminal sees, so learners can edit a file
+  properly instead of only through `echo "…" > file`.
+- The tabs are part of the title bar's chrome: full bar height, flush left,
+  in the same uppercase mono as the title and the Undo/Reset buttons.
+- The file browser is a tree headed by the working directory's name. Folders
+  (empty ones too) collapse and expand with a chevron; a dot marks folders
+  with changes inside, and files carry their git status letter (`U`
+  untracked, `M` modified, `A` staged).
+- The browser is rooted at the working directory and follows `cd`. An up
+  arrow walks to its parent folders, through the project and then the
+  folders of the prompt path above it (e.g. `~/demo-project` to `~`); the
+  working directory stays in view labelled `WD`, and a home button comes
+  back.
+- A "Show hidden files" switch at the foot of the sidebar reveals dotfiles
+  and `.git`. Files inside `.git` open read-only, and binary ones (git's
+  compressed objects) say so instead of showing noise.
+- The `+` button creates files named from the working directory, as
+  `touch` would, also in new folders (`data/notes.md`).
+- The sandbox's file API (`readFile`, `writeFile`, `readBytes`) takes paths
+  from the project's top folder rather than the shell's current folder, so
+  the editor and `file x contains "y"` conditions mean the same file after a
+  `cd`. `cwdPath()` reports the current folder relative to the project.
+- Edits are drafts until saved (Save button or Ctrl/Cmd+S), so nothing shows
+  up in `git status` before the learner means it to. Drafts survive switching
+  files, and an unsaved dot on the file and on the Editor tab says so.
+- A save is a state change like any command: it re-runs the task checks and
+  can be taken back with Undo. Changes made from the terminal (an `echo`, a
+  `git checkout`) reload in the editor unless it holds an unsaved draft.
+
 ## 1.1.0
 
 A layout rework so complex exercises stay one screen tall instead of a long

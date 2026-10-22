@@ -1,9 +1,19 @@
 /* ------------------------------------------------------------------
-   git sandbox UI: terminal + staging diagram + commit graph.
+   git sandbox UI: terminal + file editor + staging diagram + commit graph.
    Depends on window.GitSandboxCore and window.git (isomorphic-git UMD).
    ------------------------------------------------------------------ */
 (function (root) {
   'use strict';
+
+  // Small stroke icons for the file browser; currentColor keeps them on theme.
+  function icon(d) {
+    return '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+      '<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+  var ICON_CHEVRON = icon('M6 4l4 4-4 4');
+  var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
+  var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
+  var ICON_PLUS = icon('M8 3v10M3 8h10');
 
   var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
 
@@ -355,6 +365,16 @@
     host.classList.add('gs');
     host.innerHTML =
       '<div class="gs-head">' +
+        // The workspace tabs live in the title bar and open onto the dark
+        // pane below it: the terminal and the file editor share that pane,
+        // one at a time, like tabs in a code editor.
+        '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
+          '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
+            '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
+          '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+            '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+            '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+        '</div>' +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state" role="status"></span>' +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
@@ -362,14 +382,47 @@
       '</div>' +
       '<div class="gs-body">' +
         '<div class="gs-term-wrap">' +
-          '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
-          '<form class="gs-input-row" autocomplete="off">' +
-            '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
-            '<input class="gs-input" id="' + (host.id || 'gs') + '-in" type="text" spellcheck="false"' +
-            ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
-            ' placeholder="type a command and press Enter">' +
-          '</form>' +
-          '<div class="gs-hints"></div>' +
+          '<div class="gs-view" role="tabpanel" data-view="terminal">' +
+            '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
+            '<form class="gs-input-row" autocomplete="off">' +
+              '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
+              '<input class="gs-input" id="' + (host.id || 'gs') + '-in" type="text" spellcheck="false"' +
+              ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
+              ' placeholder="type a command and press Enter">' +
+            '</form>' +
+            '<div class="gs-hints"></div>' +
+          '</div>' +
+          '<div class="gs-view gs-view-editor" role="tabpanel" data-view="editor" hidden>' +
+            '<div class="gs-fb">' +
+              '<div class="gs-fb-head">' +
+                '<button type="button" class="gs-fb-btn gs-fb-up" aria-label="Up one folder" title="Up one folder">' + ICON_UP + '</button>' +
+                '<span class="gs-fb-title"></span>' +
+                '<button type="button" class="gs-fb-btn gs-fb-home" aria-label="Back to the working directory" title="Back to the working directory" hidden>' + ICON_HOME + '</button>' +
+                '<button type="button" class="gs-fb-btn gs-fb-new" aria-label="New file" title="New file">' + ICON_PLUS + '</button>' +
+              '</div>' +
+              '<form class="gs-fb-create" autocomplete="off" hidden>' +
+                '<input class="gs-fb-name" type="text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
+                ' aria-label="New file name" placeholder="name, e.g. notes.md">' +
+                '<div class="gs-fb-err" role="alert"></div>' +
+              '</form>' +
+              '<ul class="gs-fb-list" aria-label="Files"></ul>' +
+              '<label class="gs-fb-foot">' +
+                '<input type="checkbox" class="gs-fb-hidden" role="switch">' +
+                '<span class="gs-switch" aria-hidden="true"></span>Show hidden files' +
+              '</label>' +
+            '</div>' +
+            '<div class="gs-ed">' +
+              '<div class="gs-ed-head">' +
+                '<span class="gs-ed-name"></span>' +
+                '<span class="gs-ed-status" role="status"></span>' +
+                '<button type="button" class="gs-ed-btn gs-ed-revert" disabled>Revert</button>' +
+                '<button type="button" class="gs-ed-btn gs-ed-save" disabled>Save</button>' +
+              '</div>' +
+              '<textarea class="gs-ed-text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
+              ' aria-label="File contents" hidden></textarea>' +
+              '<div class="gs-ed-empty"></div>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
         '<div class="gs-tasks"></div>' +
         '<div class="gs-viz">' +
@@ -525,6 +578,407 @@
       root.addEventListener('resize', redrawGraph);
     }
 
+    /* ------------------------ workspace views ------------------------- */
+
+    var viewButtons = {};
+    var viewPanes = {};
+    host.querySelectorAll('.gs-wtab').forEach(function (b) { viewButtons[b.getAttribute('data-view')] = b; });
+    host.querySelectorAll('.gs-view').forEach(function (p) { viewPanes[p.getAttribute('data-view')] = p; });
+    var activeView = 'terminal';
+
+    function selectView(name, focus) {
+      if (!viewButtons[name]) return;
+      activeView = name;
+      Object.keys(viewButtons).forEach(function (k) {
+        var on = k === name;
+        viewButtons[k].classList.toggle('is-active', on);
+        viewButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
+        viewPanes[k].hidden = !on;
+      });
+      // lets narrow screens give the stacked file tree + editor more room
+      host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
+      if (!focus) return;
+      if (name === 'terminal') input.focus();
+      else if (openFile) edText.focus();
+    }
+
+    Object.keys(viewButtons).forEach(function (k) {
+      viewButtons[k].addEventListener('click', function () { selectView(k, true); });
+    });
+
+    /* ------------------------- file editor ---------------------------- */
+
+    var fbList = host.querySelector('.gs-fb-list');
+    var fbTitle = host.querySelector('.gs-fb-title');
+    var fbUp = host.querySelector('.gs-fb-up');
+    var fbHome = host.querySelector('.gs-fb-home');
+    var fbHidden = host.querySelector('.gs-fb-hidden');
+    var fbNewBtn = host.querySelector('.gs-fb-new');
+    var fbCreate = host.querySelector('.gs-fb-create');
+    var fbName = host.querySelector('.gs-fb-name');
+    var fbErr = host.querySelector('.gs-fb-err');
+    var edName = host.querySelector('.gs-ed-name');
+    var edStatus = host.querySelector('.gs-ed-status');
+    var edText = host.querySelector('.gs-ed-text');
+    var edEmpty = host.querySelector('.gs-ed-empty');
+    var edSave = host.querySelector('.gs-ed-save');
+    var edRevert = host.querySelector('.gs-ed-revert');
+    var dirtyDot = host.querySelector('.gs-wtab-dirty');
+
+    var openFile = null;   // path of the file shown in the editor
+    var openKind = 'text'; // 'text', 'readonly' (inside .git) or 'binary'
+    var savedText = '';    // that file's contents on disk
+    // Unsaved edits per file, so hopping between files never loses work and
+    // nothing reaches the working directory (or git status) until Save.
+    var drafts = {};
+    var lastTree = [];     // [{ path, type }] under the working directory
+    var fileSet = {};      // path -> true for every file in lastTree
+    var lastStatus = null;
+    var edNote = '';
+
+    // The browser opens on the working directory and follows `cd`. "Up"
+    // walks real folders while inside the project, then the folders of the
+    // prompt's path above it (~/demo-project -> ~); those hold nothing but
+    // the way back down, which is the truth as far as this page's
+    // filesystem goes. Tree keys stay project-relative throughout, so drafts
+    // and git status line up wherever the view is rooted.
+    var pathSegs = (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/');
+    if (pathSegs[0] === '') pathSegs[0] = '/';
+    pathSegs = pathSegs.filter(function (x) { return x !== ''; });
+    var projIdx = pathSegs.length - 1;   // index of the project folder
+    var wdPath = '';       // sb.cwdPath() as of the last refresh
+    var upLevels = 0;      // how far above the working directory the view is
+    var expanded = {};     // folder key -> true; real folders use their path
+    var showHidden = false;
+
+    function fullSegs() { return pathSegs.concat(wdPath ? wdPath.split('/') : []); }
+    function wdKey() { return wdPath || '../' + projIdx; }
+
+    // Hidden means a dot-named segment below the working directory or off
+    // its path; a learner who has `cd .git` still sees where they are.
+    function isHidden(path) {
+      if (wdPath && (path === wdPath || wdPath.indexOf(path + '/') === 0)) return false;
+      if (wdPath && path.indexOf(wdPath + '/') === 0) path = path.slice(wdPath.length + 1);
+      return path.split('/').some(function (seg) { return seg.charAt(0) === '.'; });
+    }
+
+    function fileMark(f, status) {
+      if (!status) return null;
+      if (status.untracked.indexOf(f) !== -1) return { k: 'U', label: 'untracked', cls: 'new' };
+      if (status.modified.indexOf(f) !== -1) return { k: 'M', label: 'modified', cls: 'mod' };
+      if (status.staged.some(function (s) { return s.file === f; })) return { k: 'A', label: 'staged', cls: 'new' };
+      return null;
+    }
+
+    function buildTree() {
+      var top = { children: {} };
+      lastTree.forEach(function (e) {
+        if (!showHidden && isHidden(e.path)) return;
+        var parts = e.path.split('/'), node = top;
+        parts.forEach(function (part, i) {
+          if (!node.children[part]) {
+            node.children[part] = {
+              name: part, key: parts.slice(0, i + 1).join('/'),
+              type: i === parts.length - 1 ? e.type : 'dir', children: {}
+            };
+          }
+          node = node.children[part];
+        });
+      });
+      var viewIdx = fullSegs().length - 1 - upLevels;
+      if (viewIdx >= projIdx) {
+        // inside the project: root the view at that real folder
+        fullSegs().slice(projIdx + 1, viewIdx + 1).forEach(function (part) {
+          top = top.children[part] || { children: {} };
+        });
+        return top;
+      }
+      // above it: wrap the project in the prompt path's folders
+      for (var seg = projIdx; seg > viewIdx; seg--) {
+        var wrap = { children: {} };
+        wrap.children[pathSegs[seg]] = {
+          name: pathSegs[seg], key: '../' + seg, type: 'dir', children: top.children
+        };
+        top = wrap;
+      }
+      return top;
+    }
+
+    function changedUnder(node) {
+      if (node.type === 'file') return !!fileMark(node.key, lastStatus);
+      return Object.keys(node.children).some(function (k) { return changedUnder(node.children[k]); });
+    }
+
+    function treeRows(node, depth) {
+      var kids = Object.keys(node.children).map(function (k) { return node.children[k]; });
+      kids.sort(function (x, y) {
+        if (x.type !== y.type) return x.type === 'dir' ? -1 : 1;
+        return x.name < y.name ? -1 : x.name > y.name ? 1 : 0;
+      });
+      return kids.map(function (n) {
+        if (n.type === 'dir') {
+          var open = !!expanded[n.key];
+          var wd = n.key === wdKey();
+          var inner = Object.keys(n.children).length
+            ? treeRows(n, depth + 1)
+            : '<li class="gs-fb-none" data-depth="' + (depth + 1) + '">empty</li>';
+          return '<li><button type="button" class="gs-fb-row gs-fb-folder' + (wd ? ' is-wd' : '') + '"' +
+            ' aria-expanded="' + open + '" data-dir="' + esc(n.key) + '" data-depth="' + depth + '">' +
+            '<span class="gs-fb-chev">' + ICON_CHEVRON + '</span>' +
+            '<span class="gs-fb-fname">' + esc(n.name) + '/</span>' +
+            (wd ? '<span class="gs-fb-wd" title="working directory">WD</span>' : '') +
+            (changedUnder(n) ? '<span class="gs-fb-changed" title="contains changes">●<span class="gs-sr"> (contains changes)</span></span>' : '') +
+            '</button>' + (open ? '<ul role="group">' + inner + '</ul>' : '') + '</li>';
+        }
+        var mark = fileMark(n.key, lastStatus);
+        var on = n.key === openFile;
+        return '<li><button type="button" class="gs-fb-row gs-fb-file' + (on ? ' is-open' : '') + '"' +
+          (on ? ' aria-current="true"' : '') + ' data-file="' + esc(n.key) + '" data-depth="' + depth + '">' +
+          '<span class="gs-fb-fname">' + esc(n.name) + '</span>' +
+          (n.key in drafts ? '<span class="gs-fb-dirty" title="Unsaved changes">●<span class="gs-sr"> (unsaved)</span></span>' : '') +
+          (mark ? '<span class="gs-fb-mark gs-fb-mark-' + mark.cls + '" title="' + mark.label + '">' + mark.k +
+            '<span class="gs-sr"> (' + mark.label + ')</span></span>' : '') +
+          '</button></li>';
+      }).join('');
+    }
+
+    function renderFileBrowser() {
+      var segs = fullSegs();
+      fbTitle.textContent = segs[segs.length - 1 - upLevels] || '';
+      fbTitle.title = segs.slice(0, segs.length - upLevels).join('/').replace(/^\/\//, '/');
+      fbUp.disabled = upLevels >= segs.length - 1;
+      fbHome.hidden = upLevels === 0;
+      fbName.placeholder = 'new file in ' + (segs[segs.length - 1] || '');
+      var html = treeRows(buildTree(), 0);
+      fbList.innerHTML = html || '<li class="gs-fb-none" data-depth="0">No files yet.</li>';
+      // Indent through the CSSOM rather than style="" attributes, which a
+      // strict Content Security Policy would block.
+      fbList.querySelectorAll('[data-depth]').forEach(function (n) {
+        n.style.paddingLeft = (10 + Number(n.getAttribute('data-depth')) * 14 +
+          (n.classList.contains('gs-fb-folder') ? 0 : 16)) + 'px';
+      });
+    }
+
+    function revealInTree(f) {
+      var parts = f.split('/');
+      for (var i = 1; i < parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
+    }
+
+    function renderEditor() {
+      var dirty = !!openFile && openKind === 'text' && edText.value !== savedText;
+      var showText = !!openFile && openKind !== 'binary';
+      edText.hidden = !showText;
+      edText.readOnly = openKind !== 'text';
+      edEmpty.hidden = showText;
+      edEmpty.textContent = openFile
+        ? 'This file is binary (git stores objects compressed), so there is nothing readable to show.'
+        : (Object.keys(fileSet).length ? 'Pick a file on the left to open it here.'
+          : 'No files yet. Use + to create one.');
+      edName.textContent = openFile || '';
+      edSave.disabled = !dirty;
+      edRevert.disabled = !dirty;
+      edStatus.textContent = dirty ? 'unsaved'
+        : openFile && openKind !== 'text' ? 'read-only' + (openKind === 'readonly' ? ', managed by git' : '')
+        : edNote;
+      dirtyDot.hidden = !Object.keys(drafts).length;
+    }
+
+    // Read the open file and decide how it can be shown. Anything under
+    // .git is git's own bookkeeping: viewable, but editing it by hand is how
+    // repositories get broken, so it is read-only.
+    async function loadOpenFile() {
+      var bytes;
+      try { bytes = await sb.readBytes(openFile); } catch (e) { bytes = new Uint8Array(0); }
+      var text = null;
+      if (bytes.indexOf(0) === -1) {
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { text = null; }
+      }
+      openKind = text === null ? 'binary' : (/^\.git(\/|$)/.test(openFile) ? 'readonly' : 'text');
+      savedText = text || '';
+    }
+
+    async function openInEditor(f) {
+      openFile = f;
+      edNote = '';
+      revealInTree(f);
+      await loadOpenFile();
+      edText.value = f in drafts ? drafts[f] : savedText;
+      renderFileBrowser();
+      renderEditor();
+    }
+
+    // After any command, undo or reset, pick up what changed on disk. A file
+    // with an unsaved draft keeps the draft: the learner's typing wins.
+    async function syncEditor() {
+      var wdNow = sb.cwdPath();
+      if (wdNow !== wdPath) {
+        // a `cd` moves the browser along with the shell
+        wdPath = wdNow;
+        upLevels = 0;
+      }
+      if (openFile && !fileSet[openFile] && !(openFile in drafts)) {
+        openFile = null;
+        openKind = 'text';
+        edText.value = '';
+        savedText = '';
+      }
+      if (openFile) {
+        await loadOpenFile();
+        if (!(openFile in drafts) && edText.value !== savedText) edText.value = savedText;
+      }
+      renderFileBrowser();
+      renderEditor();
+    }
+
+    // Writing a file from the editor is a state change like any command:
+    // it gets an undo entry and re-runs the task checks.
+    async function editorWrite(name, text, label) {
+      if (busy) return false;
+      busy = true;
+      input.disabled = true;
+      var snap = captureUndo(label);
+      try {
+        await sb.writeFile(name, text);
+      } catch (e) {
+        edNote = 'could not save: ' + e.message;
+        busy = false;
+        input.disabled = false;
+        renderEditor();
+        return false;
+      }
+      if (sb.changedSince(snap.core)) {
+        undoStack.push(snap);
+        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+      }
+      await refresh();
+      input.disabled = false;
+      busy = false;
+      return true;
+    }
+
+    async function saveFile() {
+      if (!openFile || edText.value === savedText) return;
+      var name = openFile, text = edText.value;
+      delete drafts[name];
+      if (await editorWrite(name, text, 'save ' + name)) {
+        edNote = 'saved';
+        renderEditor();
+      } else {
+        drafts[name] = text;
+      }
+    }
+
+    function revertFile() {
+      if (!openFile) return;
+      delete drafts[openFile];
+      edText.value = savedText;
+      edNote = '';
+      renderFileBrowser();
+      renderEditor();
+      edText.focus();
+    }
+
+    // New files are named from the working directory, as `touch` would be,
+    // and must land inside the project and outside .git; a lesson never
+    // needs anything else, and git would refuse most of the rest.
+    function fromWd(name) {
+      var out = wdPath ? wdPath.split('/') : [];
+      var parts = name.split('/');
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] === '' || parts[i] === '.') continue;
+        if (parts[i] === '..') { if (!out.length) return null; out.pop(); }
+        else out.push(parts[i]);
+      }
+      return out.join('/');
+    }
+
+    function badFileName(raw, name) {
+      if (!raw) return 'Type a file name.';
+      if (/\s/.test(raw)) return 'Leave spaces out of file names; they make commands harder to type.';
+      if (/\/$/.test(raw)) return 'That is a folder name. Add a file name after the slash.';
+      if (/^\//.test(raw) || !name) return 'Use a name inside the project, like notes.md or data/notes.md.';
+      if (/^\.git(\/|$)/.test(name)) return 'Files inside .git belong to git. Pick another name.';
+      if (lastTree.some(function (e) { return e.path === name && e.type === 'dir'; })) return 'A folder already has that name.';
+      return null;
+    }
+
+    async function createFile(raw) {
+      raw = raw.trim();
+      var name = fromWd(raw);
+      var problem = badFileName(raw, name);
+      if (problem) { fbErr.textContent = problem; return; }
+      fbErr.textContent = '';
+      fbCreate.hidden = true;
+      fbName.value = '';
+      if (!fileSet[name]) {
+        if (!(await editorWrite(name, '', 'create ' + name))) return;
+      }
+      await openInEditor(name);
+      edText.focus();
+    }
+
+    fbList.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('.gs-fb-row') : null;
+      if (!b) return;
+      if (b.hasAttribute('data-dir')) {
+        var k = b.getAttribute('data-dir');
+        expanded[k] = !expanded[k];
+        renderFileBrowser();
+        var again = fbList.querySelector('[data-dir="' + k.replace(/["\\]/g, '\\$&') + '"]');
+        if (again) again.focus();
+        return;
+      }
+      openInEditor(b.getAttribute('data-file')).then(function () { if (!edText.hidden) edText.focus(); });
+    });
+    fbUp.addEventListener('click', function () {
+      var segs = fullSegs();
+      if (upLevels >= segs.length - 1) return;
+      upLevels++;
+      // open the way back down so the working directory stays in view
+      for (var seg = segs.length - 1 - upLevels + 1; seg <= projIdx; seg++) expanded['../' + seg] = true;
+      var parts = wdPath ? wdPath.split('/') : [];
+      for (var i = 1; i <= parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
+      renderFileBrowser();
+    });
+    fbHome.addEventListener('click', function () {
+      upLevels = 0;
+      renderFileBrowser();
+      fbUp.focus();
+    });
+    fbHidden.addEventListener('change', function () {
+      showHidden = fbHidden.checked;
+      renderFileBrowser();
+    });
+    edText.addEventListener('input', function () {
+      if (!openFile) return;
+      var was = openFile in drafts;
+      if (edText.value === savedText) delete drafts[openFile];
+      else drafts[openFile] = edText.value;
+      edNote = '';
+      if (was !== (openFile in drafts)) renderFileBrowser();
+      renderEditor();
+    });
+    edText.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveFile();
+      }
+    });
+    edSave.addEventListener('click', function () { saveFile(); });
+    edRevert.addEventListener('click', revertFile);
+    fbNewBtn.addEventListener('click', function () {
+      fbCreate.hidden = !fbCreate.hidden;
+      fbErr.textContent = '';
+      if (!fbCreate.hidden) fbName.focus();
+    });
+    fbCreate.addEventListener('submit', function (e) {
+      e.preventDefault();
+      createFile(fbName.value);
+    });
+    fbName.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { fbCreate.hidden = true; fbName.value = ''; fbErr.textContent = ''; fbNewBtn.focus(); }
+    });
+
     function write(html, cls) {
       var line = el('div', 'gs-line' + (cls ? ' ' + cls : ''), html);
       out.appendChild(line);
@@ -586,6 +1040,11 @@
       renderStages(stagesNode, status, graph, files, isRepo);
       renderDiff(diffNode, diff);
       renderGraph(svg, graph);
+      lastTree = await sb.listTree();
+      fileSet = {};
+      lastTree.forEach(function (e) { if (e.type === 'file') fileSet[e.path] = true; });
+      lastStatus = isRepo ? status : null;
+      await syncEditor();
       lastGraph = graph;
       lastGraphW = svg.clientWidth;
 
@@ -658,9 +1117,9 @@
       undoBtn.disabled = !undoStack.length;
 
       var br = graph.head;
-      var promptText = (config.prompt || '~/project') .replace(/\s*\$\s*$/, '');
+      // follows `cd`, so the prompt always says which folder paths resolve in
       host.querySelector('.gs-prompt').textContent =
-        promptText + (br ? ' (' + br + ')' : '') + ' $';
+        sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
     }
 
     async function submit(line) {
@@ -719,11 +1178,15 @@
         '{y}git{/}    init, status, add, commit -m, log [--oneline], diff,',
         '       branch [-d], checkout [-b], switch [-c], merge, config,',
         '       remote add origin, push [-u], pull, fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm, mkdir, pwd',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '       mkdir, cd, pwd',
         '{y}other{/}  help, clear, reset, undo',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
-        'nicety, not a git command — real git has no undo).'
+        'nicety, not a git command — real git has no undo).',
+        '',
+        'The {y}Editor{/} tab above the terminal opens files for editing.',
+        'Saved edits land in the working directory, ready for git add.'
       ].join('\n');
     }
 
@@ -737,6 +1200,16 @@
       undoStack.length = 0;
       tasks.forEach(function (t) { t._done = false; t._wasDone = false; });
       selectTab('files');
+      // unsaved drafts belong to the run being thrown away
+      drafts = {};
+      openFile = null;
+      openKind = 'text';
+      edText.value = '';
+      savedText = '';
+      edNote = '';
+      fbCreate.hidden = true;
+      upLevels = 0;
+      expanded = {};
       try {
         await sb.reset(seed);
       } catch (e) {
