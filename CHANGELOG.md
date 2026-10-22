@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `git checkout` and `git switch` between two branches on the same commit
+  keep staged and modified files, as real git does. They used to reset the
+  working tree and the staging area to the commit, so `git switch -c x`
+  followed by `git checkout main` silently threw away work in progress.
+
 - The File Status animations are paced to be followed. `git add` eases files
   across instead of snapping them over, and the files left behind close the
   gap afterwards. On `git commit` the staged files morph together into one

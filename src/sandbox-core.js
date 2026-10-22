@@ -1075,7 +1075,18 @@
             return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git checkout -b " + name + "` to create it", ok: false };
           }
           if (midMerge.merging) await clearMergeState();
-          await gitlib.checkout(opts({ ref: name }));
+          // isomorphic-git's checkout rewrites the index and working tree
+          // even when the target is the commit we are already on, dropping
+          // staged and modified files; real git carries them over, so when
+          // nothing differs only HEAD moves
+          var hereOid = null, thereOid = null;
+          try { hereOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          try { thereOid = await gitlib.resolveRef(opts({ ref: name })); } catch (e) {}
+          if (hereOid && hereOid === thereOid) {
+            await gitlib.writeRef(opts({ ref: 'HEAD', value: 'refs/heads/' + name, symbolic: true, force: true }));
+          } else {
+            await gitlib.checkout(opts({ ref: name }));
+          }
           return { out: "Switched to branch '" + name + "'", ok: true };
         }
 
