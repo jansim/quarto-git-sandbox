@@ -65,7 +65,9 @@ async function waitFor(fn, ms, label) {
     win.document.querySelectorAll('.gs section').length === 0);
   check('boxes on slides switch to the fill-the-slide layout',
     $('#deck-repo').classList.contains('gs-fill') && $('#deck-branch').classList.contains('gs-fill'));
-  check('the slide box leaves out the editor', !$('#deck-repo .gs-wtab'));
+  check('the slide box offers the editor', !!$('#deck-repo .gs-wtab[data-view="editor"]'));
+  check('the slide box has a button for the commit tree, closed to start',
+    !!$('#deck-repo .gs-tree-btn') && $('#deck-repo .gs-tree').hidden);
   check('the slide box offers two views',
     Array.from(win.document.querySelectorAll('#deck-repo .gs-tab')).filter(t => !t.hidden).length === 2);
   check('the later slide shows the tree', $('#deck-branch .gs-tree') && !$('#deck-branch .gs-tree').hidden);

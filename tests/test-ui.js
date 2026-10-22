@@ -143,20 +143,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     badge('history').outerHTML);
 
   const workCol = () => host.querySelectorAll('.gs-col')[0];
-  check('committed file shows as unchanged chip in working dir',
-    /README\.md/.test(workCol().textContent) &&
-    workCol().querySelectorAll('.gs-chip-clean').length === 1,
+  check('a committed, unchanged file is left out of the working dir',
+    !/README\.md/.test(workCol().textContent) &&
+    workCol().querySelectorAll('.gs-chip[data-file]').length === 0,
     workCol().innerHTML);
 
   await run('echo "edited" > README.md');
-  check('editing swaps unchanged chip for modified',
-    /modified/.test(workCol().textContent) &&
-    workCol().querySelectorAll('.gs-chip-clean').length === 0,
+  check('editing a committed file shows it as modified',
+    /README\.md/.test(workCol().textContent) && /modified/.test(workCol().textContent),
     workCol().innerHTML);
 
   await run('echo "# Project" > README.md');
-  check('restoring committed content brings the unchanged chip back',
-    workCol().querySelectorAll('.gs-chip-clean').length === 1,
+  check('restoring committed content takes it out again',
+    workCol().querySelectorAll('.gs-chip[data-file]').length === 0,
     workCol().innerHTML);
 
   await run('git checkout -b feature');
