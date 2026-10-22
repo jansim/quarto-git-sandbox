@@ -129,9 +129,9 @@ async function scenario(name, steps) {
     { cmd: 'git init' },
     { cmd: 'git status', exact: true },
     { cmd: 'echo "# Project" > README.md', setup: true },
-    'git status',
+    { cmd: 'git status', exact: true },
     'git add README.md',
-    'git status',
+    { cmd: 'git status', exact: true },
     'git commit -m "First commit"',
     { cmd: 'git status', exact: true },
     { cmd: 'git commit -m "Nothing"' },
@@ -144,15 +144,15 @@ async function scenario(name, steps) {
     { cmd: 'echo hello > a.txt', setup: true },
     { cmd: 'git add . && git commit -q -m one', setup: true },
     { cmd: 'echo world >> a.txt', setup: true },
-    'git status',
+    { cmd: 'git status', exact: true },
     'git diff',
     'git add .',
-    'git status',
+    { cmd: 'git status', exact: true },
     'git commit -m two',
     { cmd: 'rm a.txt', setup: true },
-    'git status',
+    { cmd: 'git status', exact: true },
     'git rm a.txt',
-    'git status'
+    { cmd: 'git status', exact: true }
   ]);
 
   await scenario('branches and merging', [
@@ -178,7 +178,7 @@ async function scenario(name, steps) {
     { cmd: 'git checkout -q -b side && echo theirs > f.txt && git add . && git commit -q -m side', setup: true },
     { cmd: 'git checkout -q main && echo ours > f.txt && git add . && git commit -q -m ours', setup: true },
     'git merge side',
-    'git status',
+    { cmd: 'git status', exact: true },
     'git commit -m oops',
     'git merge --abort',
     { cmd: 'git status', exact: true }
@@ -190,7 +190,7 @@ async function scenario(name, steps) {
     { cmd: 'echo b > a.txt && git add . && git commit -q -m two', setup: true },
     // the sandbox has no `git switch -`, so it names the branch instead
     { cmd: 'git checkout HEAD~1', ignore: [/^Or go back to where you were with:$/, /^git switch main$/] },
-    'git status',
+    { cmd: 'git status', exact: true },
     'git checkout main'
   ]);
 
@@ -214,18 +214,18 @@ async function scenario(name, steps) {
     { cmd: 'echo *.txt', exact: true },
     { cmd: 'echo *.pdf', exact: true },
     'git add *.txt',
-    'git status',
+    { cmd: 'git status', exact: true },
     'git add "*.pdf"',
     'git add "*.txt"',
-    'git status'
+    { cmd: 'git status', exact: true }
   ]);
 
   await scenario('gitignore', [
     { cmd: 'git init', setup: true },
     { cmd: 'echo n > notes.txt && echo p > cheatsheet.pdf && mkdir build && echo b > build/out.pdf', setup: true },
     { cmd: 'echo "*.pdf" > .gitignore', setup: true },
-    'git status',
-    'git status --ignored',
+    { cmd: 'git status', exact: true },
+    { cmd: 'git status --ignored', exact: true },
     'git add cheatsheet.pdf',
     'git add notes.txt cheatsheet.pdf',
     'git add "*.pdf"',
@@ -235,12 +235,54 @@ async function scenario(name, steps) {
     'git add .',
     { cmd: 'git commit -q -m "All of it"', setup: true },
     { cmd: 'git rm --cached cheatsheet.pdf', exact: true },
-    'git status',
+    { cmd: 'git status', exact: true },
     { cmd: 'git rm --cached nope.txt', exact: true },
     { cmd: 'mkdir docs && echo a > docs/a.md && git add docs && git commit -q -m docs', setup: true },
     { cmd: 'git rm docs', exact: true },
     { cmd: 'git rm -r docs', exact: true },
-    'git status'
+    { cmd: 'git status', exact: true }
+  ]);
+
+  await scenario('undoing changes', [
+    { cmd: 'git init', setup: true },
+    { cmd: 'echo hello > example.txt && echo keep > other.txt', setup: true },
+    'git add .',
+    { cmd: 'git reset', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git add . && git commit -q -m one', setup: true },
+    { cmd: 'echo world >> example.txt && echo more >> other.txt', setup: true },
+    'git add .',
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset example.txt', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset', exact: true },
+    { cmd: 'git restore example.txt', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git add . && git commit -q -m two', setup: true },
+    { cmd: 'rm example.txt', setup: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git restore example.txt', exact: true },
+    { cmd: 'cat example.txt', exact: true },
+    { cmd: 'git restore nope.txt', exact: true },
+    { cmd: 'echo x > new.txt && git add new.txt', setup: true },
+    { cmd: 'git restore --staged new.txt', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'echo three >> example.txt', setup: true },
+    { cmd: 'git commit -am "three"', ignore: [/insertion|create mode/] },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset --soft HEAD~1', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset HEAD~1', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset --hard', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git reset --hard HEAD~1', exact: true },
+    { cmd: 'echo four >> example.txt && echo gone > extra.txt && git add . && git commit -q -m four', setup: true },
+    { cmd: 'git reset --hard HEAD~1', exact: true },
+    { cmd: 'cat extra.txt', exact: true },
+    { cmd: 'git log --oneline', exact: true },
+    { cmd: 'git reset --hard example.txt', exact: true },
+    { cmd: 'git reset nope.txt', exact: true }
   ]);
 
   console.log('\n===== real git comparison =====');

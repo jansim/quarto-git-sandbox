@@ -976,6 +976,8 @@
         // seen moving into the repository
         if (/^(init|add|rm|status|restore|mv|commit)$/.test(s)) return 'files';
         if (s === 'diff') return 'changes';
+        // unstaging is about files; moving the branch back is about history
+        if (s === 'reset') return /\s--(soft|hard)\b|\sHEAD[~^]/.test(line) ? 'history' : 'files';
         if (/^(merge|log|branch|checkout|switch)$/.test(s)) return 'history';
         if (/^(push|pull|fetch|remote)$/.test(s)) return 'remote';
         return null;
@@ -1934,7 +1936,8 @@
       return [
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
-        '{y}git{/}    init, status, add [-f], rm [--cached], commit [-m], log [--oneline], diff,',
+        '{y}git{/}    init, status, add [-f], rm [--cached], commit [-a] [-m], log [--oneline], diff,',
+        '       restore [--staged], reset [--soft|--hard] [<commit>|<file>],',
         '       branch [-d], checkout [-b] <branch|commit>, switch [-c|--detach],',
         '       merge [--abort], config,',
         '       remote add origin, push [-u], pull, fetch',

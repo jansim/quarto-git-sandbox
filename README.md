@@ -263,7 +263,8 @@ Policy. `when:` does not, which is another reason to prefer it.
 ## What the sandbox supports
 
 **Git:** `init`, `status [--ignored]`, `add [-f]`, `rm [--cached] [-r]`,
-`check-ignore`, `commit [-m]`, `log [--oneline]`,
+`check-ignore`, `commit [-a] [-m]`, `restore [--staged] [--source=<commit>]
+<file>`, `reset [<file>]`, `reset [--soft|--mixed|--hard] [<commit>]`, `log [--oneline]`,
 `diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
 `switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
@@ -339,7 +340,7 @@ exercise to its seeded state and clears the undo history.
   the files (in the Editor tab, or with `echo`), marks them resolved with
   `git add`, and concludes with `git commit`; `git merge --abort` gives up.
   What it does not offer is a side-by-side merge editor.
-- **No `rebase`, `stash`, `reset --hard`, `cherry-pick` or `revert`.** These
+- **No `rebase`, `stash`, `cherry-pick` or `revert`.** These
   could be added to the engine in `src/sandbox-core.js`.
 
 ## Using it outside Quarto

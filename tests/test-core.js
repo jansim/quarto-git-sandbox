@@ -928,7 +928,7 @@ async function scenario(name, fn) {
     let st = await sb.statusModel();
     check('statusModel lists ignored files', st.ignored.join() === 'build/out.pdf,cheatsheet.pdf', JSON.stringify(st.ignored));
     r = await run('git status --ignored');
-    check('status --ignored shows them, folders collapsed', /Ignored files:\n\s+build\/\n\s+cheatsheet\.pdf/.test(r.out), r.out);
+    check('status --ignored shows them, folders collapsed', /Ignored files:\n.*git add -f.*\n\s+build\/\n\s+cheatsheet\.pdf/.test(r.out), r.out);
     r = await run('git add .');
     st = await sb.statusModel();
     check('git add . skips ignored files', r.ok && st.staged.map(x => x.file).join() === '.gitignore,notes.txt', JSON.stringify(st.staged));
@@ -980,6 +980,106 @@ async function scenario(name, fn) {
     check('the emptied folder is gone too', (await sb.listTree()).every(e => e.path.indexOf('docs') !== 0), JSON.stringify(await sb.listTree()));
     const st = await sb.statusModel();
     check('the deletions are staged', st.stagedDeleted.join() === 'c.txt,docs/a.md,docs/b.md', JSON.stringify(st));
+  });
+
+  /* ---------------- undoing changes ---------------- */
+  await scenario('undo', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo hello > example.txt');
+    await run('git add .');
+    let r = await run('git reset');
+    let st = await sb.statusModel();
+    check('reset before the first commit empties the staging area', r.ok && !st.staged.length && st.untracked.join() === 'example.txt', JSON.stringify(st));
+    await run('git add .');
+    await run('git commit -m "Hello"');
+
+    await run('echo world >> example.txt');
+    await run('git add .');
+    r = await run('git reset example.txt');
+    st = await sb.statusModel();
+    check('reset <file> unstages it and reports what is left', r.ok && r.out === 'Unstaged changes after reset:\nM\texample.txt' &&
+      !st.staged.length && st.modified.join() === 'example.txt', r.out + JSON.stringify(st));
+    check('reset <file> keeps the edit on disk', (await sb.readFile('example.txt')) === 'hello\nworld\n');
+
+    r = await run('git restore example.txt');
+    check('restore throws the edit away', r.ok && (await sb.readFile('example.txt')) === 'hello\n');
+    check('...and the tree is clean', /working tree clean/.test((await run('git status')).out));
+
+    await run('rm example.txt');
+    r = await run('git restore example.txt');
+    check('restore brings back a deleted file', r.ok && (await sb.readFile('example.txt')) === 'hello\n');
+    r = await run('git restore nope.txt');
+    check('restore of an unknown path fails', !r.ok && /pathspec 'nope\.txt' did not match/.test(r.out), r.out);
+    r = await run('git restore');
+    check('restore needs a path', !r.ok && /must specify path/.test(r.out), r.out);
+
+    await run('echo staged > example.txt');
+    await run('git add example.txt');
+    await run('echo unstaged > example.txt');
+    r = await run('git restore example.txt');
+    check('restore takes the staged copy, not the committed one', (await sb.readFile('example.txt')) === 'staged\n');
+    r = await run('git restore --staged example.txt');
+    st = await sb.statusModel();
+    check('restore --staged unstages but keeps the file', r.ok && !st.staged.length && st.modified.join() === 'example.txt' &&
+      (await sb.readFile('example.txt')) === 'staged\n', JSON.stringify(st));
+    await run('git add example.txt');
+    r = await run('git restore --staged --worktree example.txt');
+    check('restore --staged --worktree goes back to the commit', r.ok && (await sb.readFile('example.txt')) === 'hello\n' &&
+      /working tree clean/.test((await run('git status')).out));
+
+    // commit -a
+    await run('echo more >> example.txt');
+    await run('echo new > untracked.txt');
+    r = await run('git commit -am "More"');
+    st = await sb.statusModel();
+    check('commit -am stages tracked edits and commits', r.ok && /\] More/.test(r.out) && !st.modified.length, r.out);
+    check('commit -a leaves untracked files alone', st.untracked.join() === 'untracked.txt', JSON.stringify(st));
+    await run('rm untracked.txt');
+    await run('echo again >> example.txt');
+    r = await run('git commit -a -m "Again" -m "With a body"');
+    const head = (await sb.graphModel()).commits[0];
+    check('commit -a -m with two paragraphs', r.ok && head.message === 'Again', head.message);
+    check('commit -a with nothing to commit', !(await run('git commit -am "Nothing"')).ok);
+
+    // reset to a commit
+    r = await run('git reset --soft HEAD~1');
+    st = await sb.statusModel();
+    check('reset --soft keeps the change staged', r.ok && r.out === '' && st.staged.map(x => x.file).join() === 'example.txt', JSON.stringify(st));
+    r = await run('git reset HEAD');
+    st = await sb.statusModel();
+    check('reset HEAD unstages', r.ok && st.modified.join() === 'example.txt' && !st.staged.length, JSON.stringify(st));
+    r = await run('git reset --hard');
+    check('reset --hard throws away the edit', r.ok && /^HEAD is now at [0-9a-f]{7} More$/.test(r.out) &&
+      /working tree clean/.test((await run('git status')).out), r.out);
+    await run('echo extra > extra.txt');
+    await run('git add .');
+    await run('git commit -m "Extra"');
+    r = await run('git reset --hard HEAD~1');
+    check('reset --hard to an older commit removes files it lacks', r.ok && /HEAD is now at [0-9a-f]{7} More/.test(r.out) &&
+      (await sb.listFiles()).join() === 'example.txt', r.out + (await sb.listFiles()).join());
+    check('the branch moved back', (await sb.graphModel()).commits.length === 2);
+    r = await run('git reset --hard HEAD~5');
+    check('an unknown revision is ambiguous', !r.ok && /ambiguous argument 'HEAD~5'/.test(r.out), r.out);
+    r = await run('git reset --hard example.txt');
+    check('--hard with a path is refused', !r.ok && /Cannot do hard reset with paths/.test(r.out), r.out);
+  });
+
+  /* ---------------- reset during a merge ---------------- */
+  await scenario('reset aborts a merge', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo base > f.txt');
+    await run('git add .');
+    await run('git commit -m base');
+    await run('git checkout -b side');
+    await run('echo theirs > f.txt');
+    await run('git commit -am side');
+    await run('git checkout main');
+    await run('echo ours > f.txt');
+    await run('git commit -am ours');
+    await run('git merge side');
+    check('merge stopped', !!(await sb.mergeState()));
+    const r = await run('git reset --hard');
+    check('reset --hard ends the merge', r.ok && !(await sb.mergeState()) && (await sb.readFile('f.txt')) === 'ours\n');
   });
 
   /* ---------------- report ---------------- */

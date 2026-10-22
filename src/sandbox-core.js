@@ -1015,6 +1015,104 @@
       }
     }
 
+    // path -> blob oid for everything in the staging area
+    async function indexEntries() {
+      var out = {};
+      await gitlib.walk(opts({
+        trees: [gitlib.STAGE()],
+        map: async function (fp, entries) {
+          if (!entries[0]) return null;
+          if (fp !== '.' && (await entries[0].type()) === 'blob') out[fp] = await entries[0].oid();
+          return true;
+        }
+      }));
+      return out;
+    }
+
+    function ambiguous(word) {
+      return {
+        out: "fatal: ambiguous argument '" + word + "': unknown revision or path not in the working tree.\n" +
+          "Use '--' to separate paths from revisions, like this:\n" +
+          "'git <command> [<revision>...] -- [<file>...]'",
+        ok: false
+      };
+    }
+
+    // Is `spec` a path git could mean: on disk, staged, or in the last commit?
+    async function knownPath(spec) {
+      var match = pathspec(spec);
+      if (!match) return false;
+      try { await fs.promises.stat(abs(spec)); return true; } catch (e) {}
+      var pool = await gitlib.listFiles(opts());
+      try { pool = pool.concat(Object.keys(await flatTree(await gitlib.resolveRef(opts({ ref: 'HEAD' }))))); } catch (e) {}
+      return pool.some(match);
+    }
+
+    // What `git reset` prints after it has unstaged things: every tracked
+    // file whose working copy now differs from the staging area.
+    async function unstagedSummary() {
+      var st = await statusModel();
+      var rows = st.modified.map(function (f) { return 'M\t' + f; })
+        .concat(st.deleted.map(function (f) { return 'D\t' + f; }));
+      rows.sort(function (a, b) { return a.slice(2) < b.slice(2) ? -1 : 1; });
+      return rows.length ? 'Unstaged changes after reset:\n' + rows.join('\n') : '';
+    }
+
+    // Put the staged copy of each matching path back to how commit `oid`
+    // has it (or take it out of the staging area, if `oid` lacks it or
+    // there is no commit yet). Shared by `git reset <path>` and
+    // `git restore --staged <path>`; the working files are not touched.
+    async function unstagePaths(specs, oid, verb) {
+      var pool = {};
+      (await gitlib.listFiles(opts())).forEach(function (f) { pool[f] = true; });
+      if (oid) Object.keys(await flatTree(oid)).forEach(function (f) { pool[f] = true; });
+      var hits = [];
+      for (var i = 0; i < specs.length; i++) {
+        var match = pathspec(specs[i]);
+        var h = match ? Object.keys(pool).filter(match) : [];
+        if (!h.length) {
+          return verb === 'reset'
+            ? ambiguous(specs[i])
+            : { out: "error: pathspec '" + specs[i] + "' did not match any file(s) known to git", ok: false };
+        }
+        h.forEach(function (f) { if (hits.indexOf(f) === -1) hits.push(f); });
+      }
+      for (var j = 0; j < hits.length; j++) {
+        if (oid) await gitlib.resetIndex(opts({ filepath: hits[j], ref: oid }));
+        else await gitlib.remove(opts({ filepath: hits[j] }));
+      }
+      await markResolved(hits);
+      return { out: verb === 'reset' ? await unstagedSummary() : '', ok: true };
+    }
+
+    // `git reset [--soft|--mixed|--hard] <commit>`: move the current branch
+    // (or a detached HEAD) to `oid`; --mixed also resets the staging area
+    // to it, --hard the working files too. Any merge in progress is
+    // dropped, as in git.
+    async function resetTo2(oid, mode) {
+      var branch = await currentBranch();
+      var tracked = await gitlib.listFiles(opts());
+      await gitlib.writeRef(opts(branch
+        ? { ref: 'refs/heads/' + branch, value: oid, force: true }
+        : { ref: 'HEAD', value: oid, force: true }));
+      await clearMergeState();
+      if (mode === 'soft') return { out: '', ok: true };
+      var target = await flatTree(oid);
+      if (mode === 'hard') {
+        await gitlib.checkout(opts({ ref: branch || oid, force: true }));
+        // files git tracked that the commit does not have go away
+        for (var i = 0; i < tracked.length; i++) {
+          if (!target[tracked[i]]) await removeFileAndEmptyParents(dir + '/' + tracked[i]);
+        }
+        return { out: 'HEAD is now at ' + oid.slice(0, 7) + ' ' + await subjectOf(oid), ok: true };
+      }
+      var all = {};
+      tracked.concat(Object.keys(target)).forEach(function (f) { all[f] = true; });
+      var paths = Object.keys(all);
+      for (var j = 0; j < paths.length; j++) await gitlib.resetIndex(opts({ filepath: paths[j], ref: oid }));
+      return { out: await unstagedSummary(), ok: true };
+    }
+
     /* ---------------------------- commits --------------------------- */
 
     async function makeCommit(msg, st) {
@@ -1141,7 +1239,8 @@
           }
 
           if (st.staged.length || st.stagedDeleted.length) {
-            lines.push('', 'Changes to be committed:');
+            lines.push('', 'Changes to be committed:',
+              anyCommit ? '  (use "git restore --staged <file>..." to unstage)' : '  (use "git rm --cached <file>..." to unstage)');
             st.staged.forEach(function (s) { lines.push('  {g}' + s.kind + ':   ' + s.file + '{/}'); });
             st.stagedDeleted.forEach(function (f) { lines.push('  {g}deleted:    ' + f + '{/}'); });
           }
@@ -1150,21 +1249,23 @@
             st.conflicted.forEach(function (c) { lines.push('  {r}' + c.kind + ':   ' + c.file + '{/}'); });
           }
           if (st.modified.length || st.deleted.length) {
-            lines.push('', 'Changes not staged for commit:');
+            lines.push('', 'Changes not staged for commit:',
+              '  (use "git ' + (st.deleted.length ? 'add/rm' : 'add') + ' <file>..." to update what will be committed)',
+              '  (use "git restore <file>..." to discard changes in working directory)');
             st.modified.forEach(function (f) { lines.push('  {r}modified:   ' + f + '{/}'); });
             st.deleted.forEach(function (f) { lines.push('  {r}deleted:    ' + f + '{/}'); });
           }
           if (st.untracked.length) {
-            lines.push('', 'Untracked files:');
+            lines.push('', 'Untracked files:', '  (use "git add <file>..." to include in what will be committed)');
             (await untrackedShown(st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
           if (rest.indexOf('--ignored') !== -1 && st.ignored.length) {
-            lines.push('', 'Ignored files:');
+            lines.push('', 'Ignored files:', '  (use "git add -f <file>..." to include in what will be committed)');
             (await untrackedShown(st.ignored, st.untracked)).forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
           var anyStaged = st.staged.length || st.stagedDeleted.length;
-          if (!anyStaged && !st.conflicted.length) {
-            if (st.modified.length || st.deleted.length) {
+          if (!anyStaged) {
+            if (st.modified.length || st.deleted.length || st.conflicted.length) {
               lines.push('', 'no changes added to commit (use "git add" and/or "git commit -a")');
             } else if (st.untracked.length) {
               lines.push('', 'nothing added to commit but untracked files present (use "git add" to track)');
@@ -1278,13 +1379,40 @@
         }
 
         case 'commit': {
-          var msg = null;
+          // each -m is a paragraph of the message, as in git
+          var msgs = [];
+          var stageAll = false;
           for (var k = 0; k < rest.length; k++) {
-            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1] || ''; break; }
-            if (rest[k].indexOf('-m') === 0 && rest[k].length > 2) { msg = rest[k].slice(2); break; }
+            var ca = rest[k];
+            if (ca === '-m' || ca === '--message') { msgs.push(rest[++k] || ''); continue; }
+            if (ca.indexOf('--message=') === 0) { msgs.push(ca.slice(10)); continue; }
+            if (ca === '-a' || ca === '--all') { stageAll = true; continue; }
+            // bundled short options, as in `-am "message"` or `-mText`
+            if (/^-[a-zA-Z]/.test(ca)) {
+              for (var ck = 1; ck < ca.length; ck++) {
+                if (ca.charAt(ck) === 'a') stageAll = true;
+                else if (ca.charAt(ck) === 'm') {
+                  msgs.push(ck + 1 < ca.length ? ca.slice(ck + 1) : (rest[++k] || ''));
+                  break;
+                }
+              }
+            }
           }
+          var msg = msgs.length ? msgs.filter(Boolean).join('\n\n') : null;
           if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
+          if (st2.conflicted.length) return unmergedError('Committing');
+          if (stageAll) {
+            // -a stages every change to a file git already tracks, never
+            // an untracked one
+            var cm = await gitlib.statusMatrix(opts());
+            for (var cr = 0; cr < cm.length; cr++) {
+              if (cm[cr][1] === 0 && cm[cr][3] === 0) continue;
+              if (cm[cr][2] === 0) await gitlib.remove(opts({ filepath: cm[cr][0] }));
+              else await gitlib.add(opts({ filepath: cm[cr][0] }));
+            }
+            st2 = await statusModel();
+          }
           var blocked = await commitBlocker(st2);
           if (blocked) return blocked;
           if (msg === null) {
@@ -1609,6 +1737,101 @@
           return { out: chunks.join('\n'), ok: true };
         }
 
+        case 'reset': {
+          var mode = null;
+          var before = [], after = [], seenDashes = false;
+          for (var ra = 0; ra < rest.length; ra++) {
+            var a1 = rest[ra];
+            if (seenDashes) { after.push(a1); continue; }
+            if (a1 === '--') { seenDashes = true; continue; }
+            if (a1 === '--soft' || a1 === '--mixed' || a1 === '--hard') { mode = a1.slice(2); continue; }
+            if (a1 === '--merge' || a1 === '--keep') { mode = 'hard'; continue; }
+            if (a1.charAt(0) === '-') continue;
+            before.push(a1);
+          }
+          // the first word may name a commit; everything else is a path
+          var resetTo = null;
+          if (before.length) {
+            resetTo = await resolveCommit(before[0]);
+            if (resetTo) before.shift();
+          }
+          var resetPaths = before.concat(after);
+          var headNow = null;
+          try { headNow = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          if (resetPaths.length) {
+            // a word before `--` that is neither a commit nor a known path
+            if (!seenDashes && !(await knownPath(before[0] || resetPaths[0]))) return ambiguous(before[0] || resetPaths[0]);
+            if (mode === 'soft' || mode === 'hard') {
+              return { out: 'fatal: Cannot do ' + mode + ' reset with paths.', ok: false };
+            }
+            return unstagePaths(resetPaths, resetTo || headNow, 'reset');
+          }
+          if (!headNow) {
+            // nothing committed yet: emptying the staging area is all a reset can do
+            var staged0 = await gitlib.listFiles(opts());
+            for (var s0 = 0; s0 < staged0.length; s0++) await gitlib.remove(opts({ filepath: staged0[s0] }));
+            return { out: '', ok: true };
+          }
+          return resetTo2(resetTo || headNow, mode || 'mixed');
+        }
+
+        case 'restore': {
+          var staged = false, worktree = false, source = null, rPaths = [], dashes2 = false;
+          for (var rs = 0; rs < rest.length; rs++) {
+            var a2 = rest[rs];
+            if (dashes2) { rPaths.push(a2); continue; }
+            if (a2 === '--') { dashes2 = true; continue; }
+            if (a2 === '--staged' || a2 === '-S') staged = true;
+            else if (a2 === '--worktree' || a2 === '-W') worktree = true;
+            else if (a2 === '-SW' || a2 === '-WS') { staged = true; worktree = true; }
+            else if (a2 === '-s' || a2 === '--source') source = rest[++rs];
+            else if (a2.indexOf('--source=') === 0) source = a2.slice(9);
+            else if (a2.indexOf('-s') === 0 && a2.length > 2) source = a2.slice(2);
+            else if (a2.charAt(0) !== '-') rPaths.push(a2);
+          }
+          if (!staged) worktree = true;
+          if (!rPaths.length) return { out: 'fatal: you must specify path(s) to restore', ok: false };
+          var sourceOid = null;
+          if (source) {
+            sourceOid = await resolveCommit(source);
+            if (!sourceOid) return { out: 'fatal: could not resolve ' + source, ok: false };
+          }
+          var unresolved = (await statusModel()).conflicted.map(function (c) { return c.file; });
+          var headOid2 = null;
+          try { headOid2 = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          if (staged) {
+            // before the first commit, unstaging takes the file out of the index
+            var unstaged = await unstagePaths(rPaths, sourceOid || headOid2, 'restore');
+            if (!unstaged.ok || !worktree) return unstaged.ok ? { out: '', ok: true } : unstaged;
+          }
+          // the working copy comes back from the source commit if one was
+          // given (or with --staged, from HEAD), else from the staging area
+          var fromCommit = sourceOid || (staged ? headOid2 : null);
+          var known = fromCommit ? await flatTree(fromCommit) : await indexEntries();
+          var inIndexNow = await indexEntries();
+          var targets = [];
+          for (var rp = 0; rp < rPaths.length; rp++) {
+            var rm2 = pathspec(rPaths[rp]);
+            var pool = Object.keys(known);
+            // with a source, files the source lacks are removed again
+            if (fromCommit) Object.keys(inIndexNow).forEach(function (f) { if (pool.indexOf(f) === -1) pool.push(f); });
+            var rh = rm2 ? pool.filter(rm2) : [];
+            if (!rh.length) return { out: "error: pathspec '" + rPaths[rp] + "' did not match any file(s) known to git", ok: false };
+            for (var u = 0; u < rh.length; u++) {
+              if (unresolved.indexOf(rh[u]) !== -1) return { out: "error: path '" + rh[u] + "' is unmerged", ok: false };
+              if (targets.indexOf(rh[u]) === -1) targets.push(rh[u]);
+            }
+          }
+          for (var t = 0; t < targets.length; t++) {
+            var where = dir + '/' + targets[t];
+            if (!known[targets[t]]) { await removeFileAndEmptyParents(where); continue; }
+            var bytes = (await gitlib.readBlob(opts({ oid: known[targets[t]] }))).blob;
+            await fs.promises.mkdir(fs._dirname(where), { recursive: true });
+            await fs.promises.writeFile(where, bytes);
+          }
+          return { out: '', ok: true };
+        }
+
         case 'help':
           return { out: usageGit(), ok: true };
 
@@ -1748,7 +1971,9 @@
       return [
         'Supported git commands in this sandbox:',
         '  git init                      git status',
-        '  git add <file> | .            git commit -m "message"',
+        '  git add <file> | .            git commit [-a] -m "message"',
+        '  git restore [--staged] <file> git reset [<file>]',
+        '  git reset [--hard] <commit>',
         '  git rm [--cached] <file>      git check-ignore <file>',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
