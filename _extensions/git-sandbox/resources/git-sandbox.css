@@ -427,7 +427,7 @@
 .gs-fb-folder[aria-expanded="true"] .gs-fb-chev { transform: rotate(90deg); }
 .gs-fb-folder .gs-fb-fname { color: var(--gs-t-blue); }
 .gs-fb-fname { flex: 1 1 auto; min-width: 0; word-break: break-all; }
-.gs-fb-cwd {
+.gs-fb-wd {
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;

@@ -307,6 +307,11 @@
       if (!p) return cwd;
       return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(cwd + '/' + p);
     }
+    // like abs(), but relative paths start at the project's top, not cwd
+    function fromRoot(p) {
+      if (!p) return dir;
+      return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(dir + '/' + p);
+    }
     function rel(p) {
       var a = abs(p);
       return a.indexOf(dir + '/') === 0 ? a.slice(dir.length + 1) : a.replace(/^\//, '');
@@ -1318,16 +1323,22 @@
       diffModel: diffModel,
       remoteModel: remoteModel,
       pwd: displayCwd,
+      // cwd relative to the project folder: '' at its top, 'src/lib' below
+      cwdPath: function () { return cwd === dir ? '' : cwd.slice(dir.length + 1); },
       isRepo: isRepo,
       currentBranch: currentBranch,
       listFiles: listFiles,
       listTree: listTree,
-      readFile: function (p) { return fs.promises.readFile(abs(p), 'utf8'); },
-      readBytes: function (p) { return fs.promises.readFile(abs(p)); },
+      // The file API below takes paths from the project's top folder, not
+      // from the shell's cwd: callers (the editor, `file x` conditions) hold
+      // project-relative paths, just as git status reports them, and must
+      // not change meaning when the learner runs `cd`.
+      readFile: function (p) { return fs.promises.readFile(fromRoot(p), 'utf8'); },
+      readBytes: function (p) { return fs.promises.readFile(fromRoot(p)); },
       // Creates missing parent folders, so the editor can make `data/notes.md`
       // without a separate mkdir.
       writeFile: function (p, c) {
-        var target = abs(p);
+        var target = fromRoot(p);
         return ensureWorkdir()
           .then(function () { return fs.promises.mkdir(fs._dirname(target), { recursive: true }); })
           .then(function () { return fs.promises.writeFile(target, c); });

@@ -499,6 +499,13 @@ async function scenario(name, fn) {
     r = await run('pwd');
     check('pwd follows cd', r.out === '~/project/src', r.out);
     check('api pwd follows cd', sb.pwd() === '~/project/src', sb.pwd());
+    check('api cwdPath is project-relative', sb.cwdPath() === 'src', sb.cwdPath());
+    // the file API is anchored at the project, so the editor and `file x`
+    // conditions mean the same file wherever the shell is
+    await sb.writeFile('top.txt', 'top, via the api\n');
+    check('api writeFile ignores cd', (await sb.listTree()).some((e) => e.path === 'top.txt') &&
+      !(await sb.listTree()).some((e) => e.path === 'src/top.txt'));
+    check('api readFile ignores cd', (await sb.readFile('top.txt')) === 'top, via the api\n');
 
     await run('echo "x" > app.js');
     check('relative write lands in cwd', (await sb.listFiles()).indexOf('src/app.js') !== -1,

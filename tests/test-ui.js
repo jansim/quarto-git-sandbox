@@ -435,12 +435,49 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('home button hidden at the working directory', host.querySelector('.gs-fb-home').hidden === true);
   click(host.querySelector('.gs-fb-up'));
   check('up shows the parent folder by name', fbTitle() === '~', fbTitle());
-  check('the working directory shows inside it, open and marked',
+  check('the working directory shows inside it, open and labelled WD',
     folder('../1') && folder('../1').getAttribute('aria-expanded') === 'true' &&
-    !!folder('../1').querySelector('.gs-fb-cwd') && !!fileBtn('a.txt'));
+    !!folder('../1').querySelector('.gs-fb-wd') &&
+    folder('../1').querySelector('.gs-fb-wd').textContent === 'WD' && !!fileBtn('a.txt'));
   check('cannot go above the top of the prompt path', host.querySelector('.gs-fb-up').disabled === true);
   click(host.querySelector('.gs-fb-home'));
   check('home returns to the working directory', fbTitle() === 'project' && !folder('../1'));
+
+  // the browser follows `cd`; paths stay project-relative underneath
+  click(fileBtn('a.txt')); await sleep(30);
+  await run('cd data');
+  check('cd re-roots the browser at the new working directory', fbTitle() === 'data' &&
+    !!folder('data/raw') && !fileBtn('a.txt') && host.querySelector('.gs-fb-home').hidden === true,
+    fbTitle() + ' ' + host.querySelector('.gs-fb-list').innerHTML.slice(0, 200));
+  type('a\nfrom data\n');
+  click(host.querySelector('.gs-ed-save')); await sleep(60);
+  check('saving after cd writes the file it opened, not one relative to cwd',
+    (await inst.sandbox.readFile('a.txt')) === 'a\nfrom data\n' &&
+    !(await inst.sandbox.listTree()).some((e) => e.path === 'data/a.txt'));
+  click(host.querySelector('.gs-fb-up'));
+  check('up from a subfolder shows the real parent, with WD on the subfolder',
+    fbTitle() === 'project' && !!fileBtn('a.txt') &&
+    !!folder('data').querySelector('.gs-fb-wd') && folder('data').getAttribute('aria-expanded') === 'true');
+  click(host.querySelector('.gs-fb-up'));
+  check('then on above the project', fbTitle() === '~' && !!folder('../1') && !!folder('data').querySelector('.gs-fb-wd'));
+  click(host.querySelector('.gs-fb-home'));
+  check('home returns to the subfolder', fbTitle() === 'data');
+  click(host.querySelector('.gs-fb-new'));
+  nameIn.value = 'q4.csv';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(60);
+  check('new files are named from the working directory, like touch',
+    host.querySelector('.gs-ed-name').textContent === 'data/q4.csv' && !!fileBtn('data/q4.csv'),
+    host.querySelector('.gs-ed-name').textContent);
+  click(host.querySelector('.gs-fb-new'));
+  nameIn.value = '../../out.txt';
+  host.querySelector('.gs-fb-create').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await sleep(30);
+  check('..-paths that leave the project are refused',
+    /inside the project/.test(host.querySelector('.gs-fb-err').textContent));
+  host.querySelector('.gs-fb-name').dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape' }));
+  await run('cd ..');
+  check('cd .. follows back to the top', fbTitle() === 'project' && !!folder('data').querySelector('.gs-fb-wd') === false);
 
   click(host.querySelector('.gs-wtab[data-view="terminal"]'));
   check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);

@@ -20,13 +20,20 @@
   (empty ones too) collapse and expand with a chevron; a dot marks folders
   with changes inside, and files carry their git status letter (`U`
   untracked, `M` modified, `A` staged).
-- An up arrow walks to the folders above the working directory (taken from
-  the prompt path, e.g. `~/demo-project` to `~`), where the working
-  directory shows marked `cwd`; a home button comes back.
+- The browser is rooted at the working directory and follows `cd`. An up
+  arrow walks to its parent folders, through the project and then the
+  folders of the prompt path above it (e.g. `~/demo-project` to `~`); the
+  working directory stays in view labelled `WD`, and a home button comes
+  back.
 - A "Show hidden files" switch at the foot of the sidebar reveals dotfiles
   and `.git`. Files inside `.git` open read-only, and binary ones (git's
   compressed objects) say so instead of showing noise.
-- The `+` button creates files, also in new folders (`data/notes.md`).
+- The `+` button creates files named from the working directory, as
+  `touch` would, also in new folders (`data/notes.md`).
+- The sandbox's file API (`readFile`, `writeFile`, `readBytes`) takes paths
+  from the project's top folder rather than the shell's current folder, so
+  the editor and `file x contains "y"` conditions mean the same file after a
+  `cd`. `cwdPath()` reports the current folder relative to the project.
 - Edits are drafts until saved (Save button or Ctrl/Cmd+S), so nothing shows
   up in `git status` before the learner means it to. Drafts survive switching
   files, and an unsaved dot on the file and on the Editor tab says so.

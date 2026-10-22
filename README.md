@@ -233,8 +233,9 @@ rejected with `(fetch first)`.
 
 **Editor:** tabs in the exercise's title bar switch between the
 **Terminal** and an **Editor** tab. The editor's file browser is a
-collapsible tree of the working directory (with `U`/`M`/`A` git status
-letters), can step up to the folders above it, and has a switch to show
+collapsible tree of the working directory that follows `cd` (with
+`U`/`M`/`A` git status letters), can step up to the folders above it with
+the working directory labelled `WD`, and has a switch to show
 hidden files, `.git` included (read-only). It opens any file, creates new
 ones with `+`, and saves with the Save button or Ctrl/Cmd+S. Edits stay unsaved
 drafts until then, so they reach `git status` only once saved; each save can

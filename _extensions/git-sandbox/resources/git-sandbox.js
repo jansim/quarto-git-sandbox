@@ -317,6 +317,11 @@
       if (!p) return cwd;
       return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(cwd + '/' + p);
     }
+    // like abs(), but relative paths start at the project's top, not cwd
+    function fromRoot(p) {
+      if (!p) return dir;
+      return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(dir + '/' + p);
+    }
     function rel(p) {
       var a = abs(p);
       return a.indexOf(dir + '/') === 0 ? a.slice(dir.length + 1) : a.replace(/^\//, '');
@@ -1328,16 +1333,22 @@
       diffModel: diffModel,
       remoteModel: remoteModel,
       pwd: displayCwd,
+      // cwd relative to the project folder: '' at its top, 'src/lib' below
+      cwdPath: function () { return cwd === dir ? '' : cwd.slice(dir.length + 1); },
       isRepo: isRepo,
       currentBranch: currentBranch,
       listFiles: listFiles,
       listTree: listTree,
-      readFile: function (p) { return fs.promises.readFile(abs(p), 'utf8'); },
-      readBytes: function (p) { return fs.promises.readFile(abs(p)); },
+      // The file API below takes paths from the project's top folder, not
+      // from the shell's cwd: callers (the editor, `file x` conditions) hold
+      // project-relative paths, just as git status reports them, and must
+      // not change meaning when the learner runs `cd`.
+      readFile: function (p) { return fs.promises.readFile(fromRoot(p), 'utf8'); },
+      readBytes: function (p) { return fs.promises.readFile(fromRoot(p)); },
       // Creates missing parent folders, so the editor can make `data/notes.md`
       // without a separate mkdir.
       writeFile: function (p, c) {
-        var target = abs(p);
+        var target = fromRoot(p);
         return ensureWorkdir()
           .then(function () { return fs.promises.mkdir(fs._dirname(target), { recursive: true }); })
           .then(function () { return fs.promises.writeFile(target, c); });
@@ -2392,18 +2403,29 @@
     var lastStatus = null;
     var edNote = '';
 
-    // The sandbox has no `cd`, so the working directory is always the
-    // project. "Up" walks the folders of the prompt's path (~/demo-project
-    // -> ~); they hold nothing but the way back down, which is the truth as
-    // far as this page's filesystem goes.
+    // The browser opens on the working directory and follows `cd`. "Up"
+    // walks real folders while inside the project, then the folders of the
+    // prompt's path above it (~/demo-project -> ~); those hold nothing but
+    // the way back down, which is the truth as far as this page's
+    // filesystem goes. Tree keys stay project-relative throughout, so drafts
+    // and git status line up wherever the view is rooted.
     var pathSegs = (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/');
     if (pathSegs[0] === '') pathSegs[0] = '/';
     pathSegs = pathSegs.filter(function (x) { return x !== ''; });
-    var upLevels = 0;
+    var projIdx = pathSegs.length - 1;   // index of the project folder
+    var wdPath = '';       // sb.cwdPath() as of the last refresh
+    var upLevels = 0;      // how far above the working directory the view is
     var expanded = {};     // folder key -> true; real folders use their path
     var showHidden = false;
 
+    function fullSegs() { return pathSegs.concat(wdPath ? wdPath.split('/') : []); }
+    function wdKey() { return wdPath || '../' + projIdx; }
+
+    // Hidden means a dot-named segment below the working directory or off
+    // its path; a learner who has `cd .git` still sees where they are.
     function isHidden(path) {
+      if (wdPath && (path === wdPath || wdPath.indexOf(path + '/') === 0)) return false;
+      if (wdPath && path.indexOf(wdPath + '/') === 0) path = path.slice(wdPath.length + 1);
       return path.split('/').some(function (seg) { return seg.charAt(0) === '.'; });
     }
 
@@ -2430,13 +2452,19 @@
           node = node.children[part];
         });
       });
-      // Above the working directory, wrap it in the prompt path's folders.
-      for (var i = 0; i < upLevels; i++) {
-        var seg = pathSegs.length - 1 - i;
+      var viewIdx = fullSegs().length - 1 - upLevels;
+      if (viewIdx >= projIdx) {
+        // inside the project: root the view at that real folder
+        fullSegs().slice(projIdx + 1, viewIdx + 1).forEach(function (part) {
+          top = top.children[part] || { children: {} };
+        });
+        return top;
+      }
+      // above it: wrap the project in the prompt path's folders
+      for (var seg = projIdx; seg > viewIdx; seg--) {
         var wrap = { children: {} };
         wrap.children[pathSegs[seg]] = {
-          name: pathSegs[seg], key: '../' + seg, type: 'dir', virtual: true,
-          cwd: i === 0, children: top.children
+          name: pathSegs[seg], key: '../' + seg, type: 'dir', children: top.children
         };
         top = wrap;
       }
@@ -2457,14 +2485,15 @@
       return kids.map(function (n) {
         if (n.type === 'dir') {
           var open = !!expanded[n.key];
+          var wd = n.key === wdKey();
           var inner = Object.keys(n.children).length
             ? treeRows(n, depth + 1)
             : '<li class="gs-fb-none" data-depth="' + (depth + 1) + '">empty</li>';
-          return '<li><button type="button" class="gs-fb-row gs-fb-folder' + (n.cwd ? ' is-cwd' : '') + '"' +
+          return '<li><button type="button" class="gs-fb-row gs-fb-folder' + (wd ? ' is-wd' : '') + '"' +
             ' aria-expanded="' + open + '" data-dir="' + esc(n.key) + '" data-depth="' + depth + '">' +
             '<span class="gs-fb-chev">' + ICON_CHEVRON + '</span>' +
             '<span class="gs-fb-fname">' + esc(n.name) + '/</span>' +
-            (n.cwd ? '<span class="gs-fb-cwd" title="working directory">cwd</span>' : '') +
+            (wd ? '<span class="gs-fb-wd" title="working directory">WD</span>' : '') +
             (changedUnder(n) ? '<span class="gs-fb-changed" title="contains changes">●<span class="gs-sr"> (contains changes)</span></span>' : '') +
             '</button>' + (open ? '<ul role="group">' + inner + '</ul>' : '') + '</li>';
         }
@@ -2481,11 +2510,12 @@
     }
 
     function renderFileBrowser() {
-      var here = pathSegs[pathSegs.length - 1 - upLevels] || '';
-      fbTitle.textContent = here;
-      fbTitle.title = pathSegs.slice(0, pathSegs.length - upLevels).join('/').replace(/^\/\//, '/');
-      fbUp.disabled = upLevels >= pathSegs.length - 1;
+      var segs = fullSegs();
+      fbTitle.textContent = segs[segs.length - 1 - upLevels] || '';
+      fbTitle.title = segs.slice(0, segs.length - upLevels).join('/').replace(/^\/\//, '/');
+      fbUp.disabled = upLevels >= segs.length - 1;
       fbHome.hidden = upLevels === 0;
+      fbName.placeholder = 'new file in ' + (segs[segs.length - 1] || '');
       var html = treeRows(buildTree(), 0);
       fbList.innerHTML = html || '<li class="gs-fb-none" data-depth="0">No files yet.</li>';
       // Indent through the CSSOM rather than style="" attributes, which a
@@ -2547,6 +2577,12 @@
     // After any command, undo or reset, pick up what changed on disk. A file
     // with an unsaved draft keeps the draft: the learner's typing wins.
     async function syncEditor() {
+      var wdNow = sb.cwdPath();
+      if (wdNow !== wdPath) {
+        // a `cd` moves the browser along with the shell
+        wdPath = wdNow;
+        upLevels = 0;
+      }
       if (openFile && !fileSet[openFile] && !(openFile in drafts)) {
         openFile = null;
         openKind = 'text';
@@ -2609,20 +2645,34 @@
       edText.focus();
     }
 
-    // Names stay inside the working directory and out of .git; a lesson
-    // never needs anything else, and git would refuse most of the rest.
-    function badFileName(name) {
-      if (!name) return 'Type a file name.';
-      if (/^\//.test(name) || /(^|\/)\.\.?(\/|$)/.test(name)) return 'Use a name inside the project, like notes.md or data/notes.md.';
-      if (/\/$/.test(name)) return 'That is a folder name. Add a file name after the slash.';
+    // New files are named from the working directory, as `touch` would be,
+    // and must land inside the project and outside .git; a lesson never
+    // needs anything else, and git would refuse most of the rest.
+    function fromWd(name) {
+      var out = wdPath ? wdPath.split('/') : [];
+      var parts = name.split('/');
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] === '' || parts[i] === '.') continue;
+        if (parts[i] === '..') { if (!out.length) return null; out.pop(); }
+        else out.push(parts[i]);
+      }
+      return out.join('/');
+    }
+
+    function badFileName(raw, name) {
+      if (!raw) return 'Type a file name.';
+      if (/\s/.test(raw)) return 'Leave spaces out of file names; they make commands harder to type.';
+      if (/\/$/.test(raw)) return 'That is a folder name. Add a file name after the slash.';
+      if (/^\//.test(raw) || !name) return 'Use a name inside the project, like notes.md or data/notes.md.';
       if (/^\.git(\/|$)/.test(name)) return 'Files inside .git belong to git. Pick another name.';
-      if (/\s/.test(name)) return 'Leave spaces out of file names; they make commands harder to type.';
+      if (lastTree.some(function (e) { return e.path === name && e.type === 'dir'; })) return 'A folder already has that name.';
       return null;
     }
 
     async function createFile(raw) {
-      var name = raw.trim().replace(/^\.\//, '');
-      var problem = badFileName(name);
+      raw = raw.trim();
+      var name = fromWd(raw);
+      var problem = badFileName(raw, name);
       if (problem) { fbErr.textContent = problem; return; }
       fbErr.textContent = '';
       fbCreate.hidden = true;
@@ -2648,10 +2698,13 @@
       openInEditor(b.getAttribute('data-file')).then(function () { if (!edText.hidden) edText.focus(); });
     });
     fbUp.addEventListener('click', function () {
-      if (upLevels >= pathSegs.length - 1) return;
+      var segs = fullSegs();
+      if (upLevels >= segs.length - 1) return;
       upLevels++;
       // open the way back down so the working directory stays in view
-      for (var i = 0; i < upLevels; i++) expanded['../' + (pathSegs.length - 1 - i)] = true;
+      for (var seg = segs.length - 1 - upLevels + 1; seg <= projIdx; seg++) expanded['../' + seg] = true;
+      var parts = wdPath ? wdPath.split('/') : [];
+      for (var i = 1; i <= parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
       renderFileBrowser();
     });
     fbHome.addEventListener('click', function () {
