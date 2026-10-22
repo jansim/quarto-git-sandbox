@@ -117,7 +117,7 @@ local BLOCK_KEYS = {
   seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
   donenote = true, ['tree-view'] = true, ['tree_view'] = true,
   editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true,
-  share = true
+  share = true, script = true
 }
 local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
@@ -142,6 +142,21 @@ local function build_config(cfg, problems)
   for _, h in ipairs(as_array(cfg.hints)) do out.hints[#out.hints + 1] = tostring(h) end
 
   if cfg.seed ~= nil and cfg.seed ~= '' then out.seed = tostring(cfg.seed) end
+
+  -- commands to play back one at a time, e.g. fragment by fragment on a
+  -- reveal.js slide: a list, or a literal block with one per line
+  if cfg.script ~= nil and cfg.script ~= '' then
+    out.script = {}
+    local items = is_array(cfg.script) and cfg.script or text_lines(cfg.script)
+    for i, c in ipairs(items) do
+      if type(c) == 'table' then
+        problems[#problems + 1] = ('"script" line %d must be a command, like git status'):format(i)
+      else
+        local line = tostring(c):gsub('^%s+', ''):gsub('%s+$', '')
+        if line ~= '' and line:sub(1, 1) ~= '#' then out.script[#out.script + 1] = line end
+      end
+    end
+  end
 
   -- another view of an exercise's repository: same files and history, its
   -- own title, tasks and layout
@@ -310,10 +325,22 @@ function CodeBlock(el)
   -- into the right margin, as Quarto's own wide figures do.
   -- (A tree that opens on demand drops below the box when there is no room.)
   local classes = config.treeView == true and 'git-sandbox column-page-right' or 'git-sandbox'
+  -- On a slide each scripted command gets two reveal.js fragments: the
+  -- first types it into the prompt, the second runs it. They sit outside
+  -- the box, whose contents the browser replaces when it mounts, and are
+  -- never seen; the box only watches which of them are visible.
+  local steps = ''
+  if config.script and #config.script > 0 and quarto.doc.isFormat('revealjs') then
+    local spans = {}
+    for i = 1, #config.script * 2 do
+      spans[#spans + 1] = '<span class="fragment gs-step" data-gs-for="' .. id .. '"></span>'
+    end
+    steps = '<div class="gs-steps" hidden aria-hidden="true">' .. table.concat(spans) .. '</div>'
+  end
   return pandoc.Blocks({
     pandoc.RawBlock('html',
       '<div class="' .. classes .. '" id="' .. id .. '">' ..
-      '<div class="gs-loading">Loading the Git sandbox…</div></div>'),
+      '<div class="gs-loading">Loading the Git sandbox…</div></div>' .. steps),
     pandoc.RawBlock('html',
       '<script>(window.__gsPending=window.__gsPending||[]).push(["#' .. id .. '",' .. json .. ']);</script>')
   })

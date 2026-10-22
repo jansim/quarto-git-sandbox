@@ -106,3 +106,12 @@ tasks:
   - text: Make a commit
     when: commits >= 1
 ```
+
+## A script line that is not a command
+
+```git-sandbox
+title: Script with a mapping in it
+script:
+  - git init
+  - run: git status
+```
