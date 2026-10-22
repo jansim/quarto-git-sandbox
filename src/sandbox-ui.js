@@ -376,7 +376,7 @@
           // One panel at a time; each tab carries a live badge so the folded
           // panels still tell you what they hold at a glance.
           '<div class="gs-tabs" role="tablist" aria-label="Repository views">' +
-            '<button type="button" class="gs-tab is-active" role="tab" aria-selected="true" data-tab="files">Files<span class="gs-tab-badge" hidden></span></button>' +
+            '<button type="button" class="gs-tab is-active" role="tab" aria-selected="true" data-tab="files">File Status<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="changes">Changes<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="history">History<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="remote" hidden>Remote<span class="gs-tab-badge" hidden></span></button>' +
@@ -621,10 +621,7 @@
         selectTab('files');
       }
 
-      var stateHtml = !isRepo
-        ? '<span class="gs-state-pill gs-state-none">○ no repository</span>'
-        : '<span class="gs-state-pill gs-state-repo">● repository</span>' +
-          (remote ? '<span class="gs-state-pill gs-state-remote">⇄ origin</span>' : '');
+      var stateHtml = remote ? '<span class="gs-state-pill gs-state-remote">⇄ origin</span>' : '';
       // role="status" announces DOM changes, so only touch it on a real change.
       if (stateHtml !== lastStateHtml) {
         stateNode.innerHTML = stateHtml;

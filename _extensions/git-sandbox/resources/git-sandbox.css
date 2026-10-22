@@ -71,8 +71,6 @@
   padding: 3px 10px;
   white-space: nowrap;
 }
-.gs-state-none  { color: var(--gs-gray-body); border: 1px dashed var(--gs-blue-100); }
-.gs-state-repo  { background: var(--gs-blue-50); color: var(--gs-blue-500); }
 .gs-state-remote { background: #DBE6D3; color: #394D27; }
 
 .gs-reset, .gs-undo {
