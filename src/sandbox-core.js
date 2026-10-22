@@ -351,6 +351,110 @@
       catch (e) { return null; }
     }
 
+    // Where HEAD was detached, so `git status` can say "detached at" until
+    // a commit moves HEAD on, and "detached from" after, as real git does.
+    var detachPoint = null;
+
+    // The first line of `git status`: "On branch main", or the detached form.
+    async function headLine() {
+      var br = await currentBranch();
+      if (br) return 'On branch ' + br;
+      var oid = null;
+      try { oid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+      if (!oid) return 'On branch ' + defaultBranch;
+      if (!detachPoint) detachPoint = oid;
+      return 'HEAD detached ' + (oid === detachPoint ? 'at ' : 'from ') + detachPoint.slice(0, 7);
+    }
+
+    // A commit named the ways a learner is likely to type it: a full or
+    // abbreviated hash, HEAD, a branch, or any of those followed by ~n or ^.
+    // Returns the full oid, or null if nothing matches.
+    async function resolveCommit(spec) {
+      var m = /^(.+?)((?:[~^]\d*)*)$/.exec(spec);
+      if (!m) return null;
+      var oid = null;
+      try { oid = await gitlib.resolveRef(opts({ ref: m[1] })); } catch (e) {}
+      if (!oid && /^[0-9a-f]{4,40}$/i.test(m[1])) {
+        try { oid = await gitlib.expandOid(opts({ oid: m[1].toLowerCase() })); } catch (e) {}
+      }
+      if (!oid) return null;
+      try { if ((await gitlib.readObject(opts({ oid: oid }))).type !== 'commit') return null; }
+      catch (e) { return null; }
+      var steps = m[2].match(/[~^]\d*/g) || [];
+      for (var i = 0; i < steps.length; i++) {
+        var n = steps[i].length > 1 ? parseInt(steps[i].slice(1), 10) : 1;
+        // ~n walks n first parents; ^n picks the nth parent
+        var walk = steps[i].charAt(0) === '~' ? n : (n ? 1 : 0);
+        var pick = steps[i].charAt(0) === '^' ? n - 1 : 0;
+        for (var w = 0; w < walk; w++) {
+          var ps = (await gitlib.readCommit(opts({ oid: oid }))).commit.parent || [];
+          oid = ps[w === walk - 1 ? pick : 0];
+          if (!oid) return null;
+        }
+      }
+      return oid;
+    }
+
+    // Files with uncommitted changes that moving HEAD to `oid` would
+    // replace, because the two commits hold different versions of them.
+    // isomorphic-git's checkout overwrites these without a word; git refuses.
+    async function overwrittenBy(oid, st) {
+      var headOid = null;
+      try { headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) { return []; }
+      var changed = st.staged.map(function (x) { return x.file; })
+        .concat(st.modified, st.deleted, st.stagedDeleted);
+      async function blobAt(commit, f) {
+        try { return (await gitlib.readBlob(opts({ oid: commit, filepath: f }))).oid; }
+        catch (e) { return null; }
+      }
+      var out = [];
+      for (var i = 0; i < changed.length; i++) {
+        if (out.indexOf(changed[i]) !== -1) continue;
+        if ((await blobAt(headOid, changed[i])) !== (await blobAt(oid, changed[i]))) out.push(changed[i]);
+      }
+      return out.sort();
+    }
+
+    async function subjectOf(oid) {
+      return ((await gitlib.readCommit(opts({ oid: oid }))).commit.message || '').split('\n')[0];
+    }
+
+    // Commits reachable from `oid` but from no branch: what leaving a
+    // detached HEAD would abandon. Newest first.
+    async function orphanedFrom(oid) {
+      var kept = {};
+      var names = await gitlib.listBranches(opts());
+      for (var i = 0; i < names.length; i++) {
+        var tip = null;
+        try { tip = await gitlib.resolveRef(opts({ ref: names[i] })); } catch (e) { continue; }
+        var r = await reachableFrom(tip, opts);
+        for (var k in r) kept[k] = true;
+      }
+      var out = [];
+      var o = oid;
+      while (o && !kept[o]) {
+        var c = await gitlib.readCommit(opts({ oid: o }));
+        out.push({ oid: o, message: (c.commit.message || '').split('\n')[0] });
+        o = (c.commit.parent || [])[0];
+      }
+      return out;
+    }
+
+    // What git prints when HEAD leaves a detached commit: either where it
+    // was, or a warning naming the commits nothing points at any more.
+    async function leavingDetached(oldOid) {
+      var lost = await orphanedFrom(oldOid);
+      if (!lost.length) return 'Previous HEAD position was ' + oldOid.slice(0, 7) + ' ' + await subjectOf(oldOid) + '\n';
+      var n = lost.length;
+      return '{y}Warning: you are leaving ' + n + ' commit' + (n === 1 ? '' : 's') + ' behind, not connected to\n' +
+        'any of your branches:{/}\n\n' +
+        lost.slice(0, 5).map(function (c) { return '  ' + c.oid.slice(0, 7) + ' ' + c.message; }).join('\n') +
+        (n > 5 ? '\n ... and ' + (n - 5) + ' more.' : '') + '\n\n' +
+        'If you want to keep ' + (n === 1 ? 'it' : 'them') + ' by creating a new branch, this may be a good time\n' +
+        'to do so with:\n\n' +
+        ' git branch <new-branch-name> ' + oldOid.slice(0, 7) + '\n\n';
+    }
+
     // list tracked+untracked files in the workdir (excluding .git)
     async function listFiles() {
       var out = [];
@@ -794,7 +898,7 @@
       }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
-        out: '[' + branch + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        out: '[' + (branch || 'detached HEAD') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
         ok: true
       };
     }
@@ -807,7 +911,7 @@
       if (st.merging || st.staged.length || st.stagedDeleted.length) return null;
       var extra = st.untracked.length || st.modified.length
         ? '\nUse `git add <file>` to stage changes first.' : '';
-      return { out: 'On branch ' + (await currentBranch()) + '\nnothing to commit, working tree clean' + extra, ok: false };
+      return { out: (await headLine()) + '\nnothing to commit, working tree clean' + extra, ok: false };
     }
 
     // what `git commit` without -m puts in the editor, as real git does
@@ -823,7 +927,7 @@
         '# Please enter the commit message for your changes. Lines starting',
         "# with '#' will be ignored, and an empty message aborts the commit.",
         '#',
-        '# On branch ' + (await currentBranch())
+        '# ' + (await headLine())
       ]);
       if (merge) lines.push('# All conflicts fixed but you are still merging.');
       lines = lines.concat([
@@ -888,8 +992,7 @@
 
         case 'status': {
           var st = await statusModel();
-          var br = await currentBranch();
-          var lines = ['On branch ' + (br || 'HEAD (detached)')];
+          var lines = [await headLine()];
           var anyCommit = true;
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
@@ -1008,6 +1111,8 @@
           var g = await graphModel();
           var refsByOid = {};
           g.commits.forEach(function (c) { if (c.refs.length) refsByOid[c.oid] = c.refs; });
+          // a detached HEAD points at a commit, not a branch: `(HEAD, main)`
+          if (g.detached) refsByOid[g.headOid] = [{ name: 'HEAD' }].concat(refsByOid[g.headOid] || []);
           var outLines = [];
           commits.forEach(function (c) {
             var decor = refsByOid[c.oid]
@@ -1039,8 +1144,9 @@
             return { out: "Deleted branch " + names[0], ok: true };
           }
           if (!names.length) {
-            if (!all.length) return { out: '', ok: true };
-            return { out: all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; }).join('\n'), ok: true };
+            var listed = all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
+            if (!cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
+            return { out: listed.join('\n'), ok: true };
           }
           if (all.indexOf(names[0]) !== -1) return { out: "fatal: a branch named '" + names[0] + "' already exists", ok: false };
           try { await gitlib.branch(opts({ ref: names[0] })); }
@@ -1071,12 +1177,47 @@
             await gitlib.branch(opts({ ref: name, checkout: true }));
             return { out: "Switched to a new branch '" + name + "'", ok: true };
           }
-          if (all2.indexOf(name) === -1) {
-            return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git checkout -b " + name + "` to create it", ok: false };
+          var detach = rest.indexOf('--detach') !== -1 || rest.indexOf('-d') !== -1;
+          var target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
+          if (all2.indexOf(name) === -1 && !target2) {
+            return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git " + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + "` to create it", ok: false };
+          }
+          // `git switch` only moves between branches unless told to detach
+          if (target2 && sub === 'switch' && !detach) {
+            return { out: "fatal: a branch is expected, got commit '" + name + "'\n" +
+              'hint: If you want to detach HEAD at the commit, try again with the --detach option.', ok: false };
+          }
+          var wasBranch = await currentBranch();
+          var wasOid = null;
+          try { wasOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          var clobbered = midMerge.merging ? [] :
+            await overwrittenBy(target2 || await gitlib.resolveRef(opts({ ref: name })), midMerge);
+          if (clobbered.length) {
+            return { out: 'error: Your local changes to the following files would be overwritten by checkout:\n' +
+              clobbered.map(function (f) { return '\t' + f; }).join('\n') + '\n' +
+              'Please commit your changes or stash them before you switch branches.\nAborting', ok: false };
           }
           if (midMerge.merging) await clearMergeState();
-          await gitlib.checkout(opts({ ref: name }));
-          return { out: "Switched to branch '" + name + "'", ok: true };
+          try { await gitlib.checkout(opts({ ref: target2 || name })); }
+          catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
+          var leaving = !wasBranch && wasOid && wasOid !== target2 ? await leavingDetached(wasOid) : '';
+          if (!target2) return { out: leaving + "Switched to branch '" + name + "'", ok: true };
+          detachPoint = target2;
+          var landed = 'HEAD is now at ' + target2.slice(0, 7) + ' ' + await subjectOf(target2);
+          if (!wasBranch) return { out: leaving + landed, ok: true };
+          return {
+            out: "Note: switching to '" + name + "'.\n\n" +
+              "{y}You are in 'detached HEAD' state.{/} You can look around, make experimental\n" +
+              'changes and commit them, and you can discard any commits you make in this\n' +
+              'state without impacting any branches by switching back to a branch.\n\n' +
+              'If you want to create a new branch to retain commits you create, you may\n' +
+              'do so (now or later) by using -c with the switch command. Example:\n\n' +
+              '  git switch -c <new-branch-name>\n\n' +
+              'Or go back to where you were with:\n\n' +
+              '  git switch ' + wasBranch + '\n\n' +
+              landed,
+            ok: true
+          };
         }
 
         case 'merge': {
@@ -1101,6 +1242,10 @@
           var theirs = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
           if (!theirs) return { out: 'usage: git merge <branch>', ok: false };
           var ours = await currentBranch();
+          if (!ours) {
+            return { out: 'fatal: this sandbox can only merge into a branch, and HEAD is detached.\n' +
+              'Switch to a branch first, or create one here with `git switch -c <name>`.', ok: false };
+          }
           var known = await gitlib.listBranches(opts());
           if (known.indexOf(theirs) === -1) return { out: "merge: " + theirs + " - not something we can merge", ok: false };
           if (theirs === ours) return { out: 'Already up to date.', ok: true };
@@ -1376,6 +1521,7 @@
         '  git add <file> | .            git commit -m "message"',
         '  git log [--oneline]           git diff',
         '  git branch [name] [-d name]   git checkout [-b] <branch>',
+        '  git checkout <commit>         git switch --detach <commit>',
         '  git switch [-c] <branch>      git merge <branch> | --abort',
         '  git remote add origin <url>   git push [-u origin <branch>]',
         '  git fetch                     git pull',

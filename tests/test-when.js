@@ -87,6 +87,7 @@ function evalWhen(expr, ctx) {
     check('branch main', evalWhen('branch main', ctx) === true);
     check('on main', evalWhen('on main', ctx) === true);
     check('on report is false', evalWhen('on report', ctx) === false);
+    check('detached is false on a branch', evalWhen('detached', ctx) === false);
     check('merge commit is false', evalWhen('merge commit', ctx) === false);
     check('file README.md', evalWhen('file README.md', ctx) === true);
     check('file missing.txt is false', evalWhen('file missing.txt', ctx) === false);
@@ -130,6 +131,19 @@ function evalWhen(expr, ctx) {
     const ctx2 = await contextFor(sb2);
     check('staged after add', evalWhen('staged', ctx2) === true);
     check('clean is false with staged change', evalWhen('clean', ctx2) === false);
+  }
+
+  /* ------------------- detached HEAD ------------------- */
+  {
+    const sb = await build([
+      'git init', 'echo one > a.txt', 'git add .', 'git commit -m "one"',
+      'echo two >> a.txt', 'git add .', 'git commit -m "two"',
+      'git checkout HEAD~1'
+    ]);
+    const ctx = await contextFor(sb);
+    check('detached after checking out a commit', evalWhen('detached', ctx) === true);
+    check('on main is false when detached', evalWhen('on main', ctx) === false);
+    check('not detached is false', evalWhen('not detached', ctx) === false);
   }
 
   /* ------------------- fast-forward merge ------------------- */
