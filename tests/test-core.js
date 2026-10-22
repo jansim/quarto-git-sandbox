@@ -819,6 +819,30 @@ async function scenario(name, fn) {
     check('and drops the merge', !(await sb.statusModel()).merging);
   });
 
+  await scenario('switching between branches on the same commit keeps changes', async ({ sb, run, check }) => {
+    for (const l of ['git init', 'echo a > a.txt', 'git add .', 'git commit -m one',
+      'echo zzzz > a.txt', 'git add .', 'echo bbbbbb > b.txt']) await run(l);
+    let r = await run('git switch -c x');
+    check('switch -c works', r.ok, r.out);
+    r = await run('git checkout main');
+    check('checkout back works', r.ok && /Switched to branch 'main'/.test(r.out), r.out);
+    check('on main again', (await run('git branch')).out.indexOf('* main') !== -1);
+    r = await run('cat a.txt');
+    check('staged edit survives', r.out === 'zzzz', JSON.stringify(r.out));
+    r = await run('cat b.txt');
+    check('untracked file survives', r.out === 'bbbbbb', JSON.stringify(r.out));
+    const st = await sb.statusModel();
+    check('change still staged', st.staged.some(f => f.file === 'a.txt' && f.kind === 'modified'), JSON.stringify(st));
+    await run('echo yyyyyyy > a.txt');
+    r = await run('git switch x');
+    check('switch to x works', r.ok, r.out);
+    check('unstaged edit survives', (await run('cat a.txt')).out === 'yyyyyyy');
+    r = await run('git switch --detach main');
+    check('detaching at the same commit works', r.ok && /HEAD is now at/.test(r.out), r.out);
+    check('and keeps the edit', (await run('cat a.txt')).out === 'yyyyyyy');
+    check('and the staged change', (await sb.statusModel()).staged.some(f => f.file === 'a.txt'));
+  });
+
   await scenario('pull conflict', async ({ sb, run, check }) => {
     for (const l of ['git init', 'git remote add origin https://example.com/r.git', 'echo "base" > f.txt',
       'git add .', 'git commit -m one', 'git push -u origin main', 'echo "remote" > f.txt', 'git add .',

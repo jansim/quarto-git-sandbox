@@ -1190,16 +1190,25 @@
           var wasBranch = await currentBranch();
           var wasOid = null;
           try { wasOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
-          var clobbered = midMerge.merging ? [] :
-            await overwrittenBy(target2 || await gitlib.resolveRef(opts({ ref: name })), midMerge);
+          var newOid = target2 || await gitlib.resolveRef(opts({ ref: name }));
+          var clobbered = midMerge.merging ? [] : await overwrittenBy(newOid, midMerge);
           if (clobbered.length) {
             return { out: 'error: Your local changes to the following files would be overwritten by checkout:\n' +
               clobbered.map(function (f) { return '\t' + f; }).join('\n') + '\n' +
               'Please commit your changes or stash them before you switch branches.\nAborting', ok: false };
           }
           if (midMerge.merging) await clearMergeState();
-          try { await gitlib.checkout(opts({ ref: target2 || name })); }
-          catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
+          // isomorphic-git's checkout rewrites the index and working tree
+          // even when the target is the commit we are already on, dropping
+          // staged and modified files; real git carries them over, so when
+          // nothing differs only HEAD moves
+          if (wasOid && wasOid === newOid) {
+            await gitlib.writeRef(opts(target2 ? { ref: 'HEAD', value: target2, force: true }
+              : { ref: 'HEAD', value: 'refs/heads/' + name, symbolic: true, force: true }));
+          } else {
+            try { await gitlib.checkout(opts({ ref: target2 || name })); }
+            catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
+          }
           var leaving = !wasBranch && wasOid && wasOid !== target2 ? await leavingDetached(wasOid) : '';
           if (!target2) return { out: leaving + "Switched to branch '" + name + "'", ok: true };
           detachPoint = target2;
