@@ -445,7 +445,9 @@
     // and refs between it and the local repo — nothing leaves the page.
     var remoteGitdir = '/origin';
     var remoteUrl = null;
-    var upstreams = {};   // branch name -> true once `push -u` recorded it
+    // where HEAD was before the last checkout or switch (a branch name or
+    // a commit), for `git switch -`
+    var prevHead = null;
     // Merges that actually moved a ref ({ from, into }), via `git merge` or
     // `git pull`. The graph alone cannot distinguish "freshly branched off Y"
     // from "fast-forward merged into Y" — both leave X's tip an ancestor of
@@ -752,6 +754,90 @@
       }
       return seen;
     }
+
+    // origin/x (or remotes/origin/x, refs/remotes/origin/x) -> x, else null
+    function trackingName(spec) {
+      var m = /^(?:refs\/)?(?:remotes\/)?origin\/(.+)$/.exec(spec || '');
+      return m ? m[1] : null;
+    }
+
+    async function trackingOid(name) {
+      try { return await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + name })); }
+      catch (e) { return null; }
+    }
+
+    // the branches `git fetch` has recorded from origin, sorted
+    async function trackingNames() {
+      var out = [];
+      async function walk(sub) {
+        var names = [];
+        try { names = await fs.promises.readdir(dir + '/.git/refs/remotes/origin' + sub); } catch (e) { return; }
+        for (var i = 0; i < names.length; i++) {
+          var p = dir + '/.git/refs/remotes/origin' + sub + '/' + names[i];
+          if ((await fs.promises.stat(p)).isDirectory()) await walk(sub + '/' + names[i]);
+          else out.push((sub + '/' + names[i]).slice(1));
+        }
+      }
+      await walk('');
+      return out.sort();
+    }
+
+    // A branch's upstream lives in .git/config, as in git, so it survives
+    // undo and is what `git pull` and `git status` consult. Returns the
+    // remote branch's name, or null.
+    async function upstreamOf(branch) {
+      var merge = null;
+      try { merge = await gitlib.getConfig(opts({ path: 'branch.' + branch + '.merge' })); } catch (e) {}
+      return merge ? String(merge).replace(/^refs\/heads\//, '') : null;
+    }
+
+    // remoteBranch null removes the upstream
+    async function setUpstream(branch, remoteBranch) {
+      await gitlib.setConfig(opts({ path: 'branch.' + branch + '.remote', value: remoteBranch ? 'origin' : undefined }));
+      await gitlib.setConfig(opts({ path: 'branch.' + branch + '.merge', value: remoteBranch ? 'refs/heads/' + remoteBranch : undefined }));
+    }
+
+    // Where a new branch starts: { oid, tracks } where tracks names the
+    // remote branch when the start point is origin/x, as git then sets it
+    // as the upstream. Null if `spec` names nothing.
+    async function startPoint(spec) {
+      var t = trackingName(spec);
+      if (t) {
+        var toid = await trackingOid(t);
+        if (toid) return { oid: toid, tracks: t };
+      }
+      var oid = await resolveCommit(spec);
+      return oid ? { oid: oid, tracks: null } : null;
+    }
+
+    // What `git status` and `git checkout` say about a branch and its
+    // upstream: "Your branch is ahead of 'origin/main' by 1 commit." and the
+    // like. Compares with the remote-tracking branch, so news on the remote
+    // shows only after `git fetch`, as in git. Empty without an upstream.
+    async function trackingLines(branch) {
+      var up = await upstreamOf(branch);
+      if (!up) return [];
+      var name = "'origin/" + up + "'";
+      var theirs = await trackingOid(up);
+      if (!theirs) return ['Your branch is based on ' + name + ', but the upstream is gone.',
+        '  (use "git branch --unset-upstream" to fixup)'];
+      var mine;
+      try { mine = await gitlib.resolveRef(opts({ ref: branch })); } catch (e) { return []; }
+      var a = await reachableFrom(mine, opts), b = await reachableFrom(theirs, opts);
+      var ahead = Object.keys(a).filter(function (o) { return !b[o]; }).length;
+      var behind = Object.keys(b).filter(function (o) { return !a[o]; }).length;
+      var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
+      if (!ahead && !behind) return ['Your branch is up to date with ' + name + '.'];
+      if (!behind) return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
+        '  (use "git push" to publish your local commits)'];
+      if (!ahead) return ['Your branch is behind ' + name + ' by ' + n(behind) + ', and can be fast-forwarded.',
+        '  (use "git pull" to update your local branch)'];
+      return ['Your branch and ' + name + ' have diverged,',
+        'and have ' + ahead + ' and ' + behind + ' different commits each, respectively.',
+        '  (use "git pull" if you want to integrate the remote branch with yours)'];
+    }
+
+    function prefixLines(lines) { return lines.length ? '\n' + lines.join('\n') : ''; }
 
     async function setTrackingRef(branch, oid) {
       await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/' + branch, value: oid, force: true }));
@@ -1432,6 +1518,8 @@
         case 'status': {
           var st = await statusModel();
           var lines = [await headLine()];
+          var stBranch = await currentBranch();
+          if (stBranch) lines = lines.concat(await trackingLines(stBranch));
           var anyCommit = true;
           try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
           catch (e) { anyCommit = false; }
@@ -1671,23 +1759,86 @@
         }
 
         case 'branch': {
-          var del = rest.indexOf('-d') !== -1 || rest.indexOf('-D') !== -1;
-          var names = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          var del = false, listAll = false, listRemote = false, upTo = null, unsetUp = false;
+          var names = [];
+          for (var bi = 0; bi < rest.length; bi++) {
+            var ba = rest[bi];
+            if (ba === '-d' || ba === '-D' || ba === '--delete') del = true;
+            else if (ba === '-a' || ba === '--all') listAll = true;
+            else if (ba === '-r' || ba === '--remotes') listRemote = true;
+            else if (ba === '-u' || ba === '--set-upstream-to') upTo = rest[++bi] || '';
+            else if (ba.indexOf('--set-upstream-to=') === 0) upTo = ba.slice(18);
+            else if (ba === '--unset-upstream') unsetUp = true;
+            else if (ba.charAt(0) !== '-') names.push(ba);
+          }
           var all = await gitlib.listBranches(opts());
           var cur = await currentBranch();
+          if (del && listRemote) {
+            // `git branch -d -r origin/x` forgets a remote-tracking branch
+            var gone = trackingName(names[0] || '');
+            var goneOid = gone ? await trackingOid(gone) : null;
+            if (!goneOid) return { out: "error: remote-tracking branch '" + (names[0] || '') + "' not found.", ok: false };
+            await gitlib.deleteRef(opts({ ref: 'refs/remotes/origin/' + gone }));
+            return { out: 'Deleted remote-tracking branch origin/' + gone + ' (was ' + goneOid.slice(0, 7) + ').', ok: true };
+          }
           if (del) {
             if (!names.length) return { out: 'fatal: branch name required', ok: false };
             if (names[0] === cur) return { out: "error: cannot delete branch '" + names[0] + "' checked out at '" + displayDir + "'", ok: false };
             if (all.indexOf(names[0]) === -1) return { out: "error: branch '" + names[0] + "' not found.", ok: false };
+            var delOid = await gitlib.resolveRef(opts({ ref: names[0] }));
             await gitlib.deleteBranch(opts({ ref: names[0] }));
-            return { out: "Deleted branch " + names[0], ok: true };
+            await setUpstream(names[0], null);
+            return { out: 'Deleted branch ' + names[0] + ' (was ' + delOid.slice(0, 7) + ').', ok: true };
+          }
+          if (upTo !== null || unsetUp) {
+            var forBranch = names[0] || cur;
+            if (!forBranch) return { out: 'fatal: could not set upstream of HEAD when it does not point to any branch.', ok: false };
+            if (all.indexOf(forBranch) === -1) return { out: "fatal: branch '" + forBranch + "' does not exist", ok: false };
+            if (unsetUp) {
+              if (!(await upstreamOf(forBranch))) return { out: "fatal: branch '" + forBranch + "' has no upstream information", ok: false };
+              await setUpstream(forBranch, null);
+              return { out: '', ok: true };
+            }
+            var upName = trackingName(upTo);
+            if (!upName || !(await trackingOid(upName))) {
+              return {
+                out: "fatal: the requested upstream branch '" + upTo + "' does not exist\n" +
+                  'hint:\n' +
+                  'hint: If you are planning on basing your work on an upstream\n' +
+                  'hint: branch that already exists at the remote, you may need to\n' +
+                  'hint: run "git fetch" to retrieve it.\n' +
+                  'hint:\n' +
+                  'hint: If you are planning to push out a new local branch that\n' +
+                  'hint: will track its remote counterpart, you may want to use\n' +
+                  'hint: "git push -u" to set the upstream config as you push.',
+                ok: false
+              };
+            }
+            await setUpstream(forBranch, upName);
+            return { out: "branch '" + forBranch + "' set up to track 'origin/" + upName + "'.", ok: true };
           }
           if (!names.length) {
-            var listed = all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
-            if (!cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
+            var listed = listRemote ? [] : all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
+            if (!listRemote && !cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
+            if (listAll || listRemote) {
+              (await trackingNames()).forEach(function (t) {
+                listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/' + t + '{/}');
+              });
+            }
             return { out: listed.join('\n'), ok: true };
           }
           if (all.indexOf(names[0]) !== -1) return { out: "fatal: a branch named '" + names[0] + "' already exists", ok: false };
+          if (names[1]) {
+            // `git branch <name> <start-point>`; starting from origin/x tracks it
+            var start = await startPoint(names[1]);
+            if (!start) return { out: "fatal: not a valid object name: '" + names[1] + "'", ok: false };
+            await gitlib.writeRef(opts({ ref: 'refs/heads/' + names[0], value: start.oid }));
+            if (start.tracks) {
+              await setUpstream(names[0], start.tracks);
+              return { out: "branch '" + names[0] + "' set up to track 'origin/" + start.tracks + "'.", ok: true };
+            }
+            return { out: '', ok: true, silentNote: 'created branch ' + names[0] };
+          }
           try { await gitlib.branch(opts({ ref: names[0] })); }
           catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
           return { out: '', ok: true, silentNote: 'created branch ' + names[0] };
@@ -1695,10 +1846,33 @@
 
         case 'switch':
         case 'checkout': {
-          var create = rest.indexOf('-b') !== -1 || rest.indexOf('-c') !== -1;
-          var names2 = rest.filter(function (a) { return a.charAt(0) !== '-'; });
-          if (!names2.length) return { out: 'fatal: missing branch name', ok: false };
+          var create = null, track = false, detach = false, names2 = [];
+          for (var si = 0; si < rest.length; si++) {
+            var sa = rest[si];
+            if (sa === '-b' || sa === '-c' || sa === '--create') {
+              create = rest[++si];
+              if (!create) return { out: "error: switch `" + sa.replace(/^-+/, '') + "' requires a value", ok: false };
+            }
+            else if (sa === '-t' || sa === '--track') track = true;
+            else if (sa === '--detach' || sa === '-d') detach = true;
+            else if (sa === '-' || sa.charAt(0) !== '-') names2.push(sa);
+          }
+          // `--track origin/x` names the new branch after the remote one
+          if (track && !create) {
+            if (!names2[0] || !trackingName(names2[0])) {
+              return { out: 'fatal: missing branch name; try -' + (sub === 'switch' ? 'c' : 'b'), ok: false };
+            }
+            create = trackingName(names2[0]);
+          }
+          if (!create && !names2.length) return { out: 'fatal: missing branch name', ok: false };
           var name = names2[0];
+          // `-` is the branch (or commit) you were on before
+          if (name === '-' && !create) {
+            if (!prevHead) return { out: 'fatal: invalid reference: @{-1}', ok: false };
+            name = prevHead;
+            // back to a detached commit: checkout does that; switch wants --detach
+            if (/^[0-9a-f]{40}$/.test(name) && sub === 'checkout') detach = true;
+          }
           var all2 = await gitlib.listBranches(opts());
           var midMerge = await statusModel();
           if (midMerge.conflicted.length) {
@@ -1708,50 +1882,84 @@
               ok: false
             };
           }
+          // What to switch to: an existing branch (target2 null), a new
+          // branch at newStart, or a commit to detach at (target2).
+          var target2 = null, newStart = null;
+          if (!create && !detach && all2.indexOf(name) === -1 && await trackingOid(name)) {
+            // git's guess: `git switch feature` when only origin/feature exists
+            create = name;
+            name = 'origin/' + name;
+          }
           if (create) {
-            if (all2.indexOf(name) !== -1) return { out: "fatal: a branch named '" + name + "' already exists", ok: false };
-            // like real git, switching away drops a merge whose conflicts
-            // are all resolved but not yet committed
-            if (midMerge.merging) await clearMergeState();
-            await gitlib.branch(opts({ ref: name, checkout: true }));
-            return { out: "Switched to a new branch '" + name + "'", ok: true };
-          }
-          var detach = rest.indexOf('--detach') !== -1 || rest.indexOf('-d') !== -1;
-          var target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
-          if (all2.indexOf(name) === -1 && !target2) {
-            return { out: (sub === 'switch' ? 'fatal: invalid reference: ' + name
-                : "error: pathspec '" + name + "' did not match any file(s) known to git") +
-              '\nhint: use `git ' + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + '` to create it', ok: false };
-          }
-          // `git switch` only moves between branches unless told to detach
-          if (target2 && sub === 'switch' && !detach) {
-            return { out: "fatal: a branch is expected, got commit '" + name + "'\n" +
-              'hint: If you want to detach HEAD at the commit, try again with the --detach option.', ok: false };
+            if (all2.indexOf(create) !== -1) return { out: "fatal: a branch named '" + create + "' already exists", ok: false };
+            if (name) {
+              newStart = await startPoint(name);
+              if (!newStart) {
+                return { out: "fatal: '" + name + "' is not a commit and a branch '" + create + "' cannot be created from it", ok: false };
+              }
+            }
+          } else {
+            target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
+            if (all2.indexOf(name) === -1 && !target2) {
+              return { out: (sub === 'switch' ? 'fatal: invalid reference: ' + name
+                  : "error: pathspec '" + name + "' did not match any file(s) known to git") +
+                '\nhint: use `git ' + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + '` to create it', ok: false };
+            }
+            // `git switch` only moves between branches unless told to detach
+            if (target2 && sub === 'switch' && !detach) {
+              return { out: "fatal: a branch is expected, got commit '" + name + "'\n" +
+                'hint: If you want to detach HEAD at the commit, try again with the --detach option.', ok: false };
+            }
           }
           var wasBranch = await currentBranch();
           var wasOid = null;
           try { wasOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
-          var newOid = target2 || await gitlib.resolveRef(opts({ ref: name }));
+          if (create && !newStart) {
+            // a new branch right here: nothing to check out, and it works
+            // before the first commit too
+            if (midMerge.merging) await clearMergeState();
+            await gitlib.branch(opts({ ref: create, checkout: true }));
+            prevHead = wasBranch || wasOid;
+            return { out: "Switched to a new branch '" + create + "'", ok: true };
+          }
+          var branchTo = create || (target2 ? null : name);
+          var newOid = target2 || (newStart ? newStart.oid : await gitlib.resolveRef(opts({ ref: name })));
           var clobbered = midMerge.merging ? [] : await overwrittenBy(newOid, midMerge);
           if (clobbered.length) {
             return { out: 'error: Your local changes to the following files would be overwritten by checkout:\n' +
               clobbered.map(function (f) { return '\t' + f; }).join('\n') + '\n' +
               'Please commit your changes or stash them before you switch branches.\nAborting', ok: false };
           }
+          if (branchTo && branchTo === wasBranch) {
+            return { out: "Already on '" + branchTo + "'" + prefixLines(await trackingLines(branchTo)), ok: true };
+          }
           if (midMerge.merging) await clearMergeState();
+          var tracksNote = '';
+          if (create) {
+            await gitlib.writeRef(opts({ ref: 'refs/heads/' + create, value: newOid }));
+            // starting from origin/x sets it as the upstream, as git does
+            if (newStart.tracks) {
+              await setUpstream(create, newStart.tracks);
+              tracksNote = "\nbranch '" + create + "' set up to track 'origin/" + newStart.tracks + "'.";
+            }
+          }
           // isomorphic-git's checkout rewrites the index and working tree
           // even when the target is the commit we are already on, dropping
           // staged and modified files; real git carries them over, so when
           // nothing differs only HEAD moves
           if (wasOid && wasOid === newOid) {
             await gitlib.writeRef(opts(target2 ? { ref: 'HEAD', value: target2, force: true }
-              : { ref: 'HEAD', value: 'refs/heads/' + name, symbolic: true, force: true }));
+              : { ref: 'HEAD', value: 'refs/heads/' + branchTo, symbolic: true, force: true }));
           } else {
-            try { await gitlib.checkout(opts({ ref: target2 || name })); }
+            try { await gitlib.checkout(opts({ ref: target2 || branchTo })); }
             catch (e) { return { out: 'fatal: ' + e.message, ok: false }; }
           }
+          prevHead = wasBranch || wasOid;
           var leaving = !wasBranch && wasOid && wasOid !== target2 ? await leavingDetached(wasOid) : '';
-          if (!target2) return { out: leaving + "Switched to branch '" + name + "'", ok: true };
+          if (create) return { out: leaving + "Switched to a new branch '" + create + "'" + tracksNote, ok: true };
+          if (!target2) {
+            return { out: leaving + "Switched to branch '" + name + "'" + prefixLines(await trackingLines(name)), ok: true };
+          }
           detachPoint = target2;
           var landed = 'HEAD is now at ' + target2.slice(0, 7) + ' ' + await subjectOf(target2);
           if (!wasBranch) return { out: leaving + landed, ok: true };
@@ -1763,8 +1971,9 @@
               'If you want to create a new branch to retain commits you create, you may\n' +
               'do so (now or later) by using -c with the switch command. Example:\n\n' +
               '  git switch -c <new-branch-name>\n\n' +
-              'Or go back to where you were with:\n\n' +
-              '  git switch ' + wasBranch + '\n\n' +
+              'Or undo this operation with:\n\n' +
+              '  git switch -\n\n' +
+              'Turn off this advice by setting config variable advice.detachedHead to false\n\n' +
               landed,
             ok: true
           };
@@ -1796,19 +2005,35 @@
             return { out: 'fatal: this sandbox can only merge into a branch, and HEAD is detached.\n' +
               'Switch to a branch first, or create one here with `git switch -c <name>`.', ok: false };
           }
-          var known = await gitlib.listBranches(opts());
-          if (known.indexOf(theirs) === -1) return { out: "merge: " + theirs + " - not something we can merge", ok: false };
           if (theirs === ours) return { out: 'Already up to date.', ok: true };
+          // a local branch, a remote-tracking branch such as origin/main
+          // (what `git fetch` brought in), or any commit
+          var known = await gitlib.listBranches(opts());
+          var theirRef = null, mergeMsg;
+          // git leaves " into main" out of the message (merge.suppressDest)
+          var into = ours === 'main' || ours === 'master' ? '' : ' into ' + ours;
+          if (known.indexOf(theirs) !== -1) {
+            theirRef = theirs;
+            mergeMsg = "Merge branch '" + theirs + "'" + into;
+          } else if (trackingName(theirs) && await trackingOid(trackingName(theirs))) {
+            theirRef = 'refs/remotes/origin/' + trackingName(theirs);
+            mergeMsg = "Merge remote-tracking branch '" + theirs + "'" + into;
+          } else {
+            theirRef = await resolveCommit(theirs);
+            mergeMsg = "Merge commit '" + theirs + "'" + into;
+          }
+          if (!theirRef) return { out: 'merge: ' + theirs + ' - not something we can merge', ok: false };
+          var oursBefore = await gitlib.resolveRef(opts({ ref: ours }));
           var result;
           try {
-            result = await mergeInto(ours, theirs, theirs, "Merge branch '" + theirs + "' into " + ours);
+            result = await mergeInto(ours, theirRef, theirs, mergeMsg);
           } catch (e) {
             return { out: 'fatal: ' + e.message, ok: false };
           }
           if (result.conflict) return result.conflict;
           if (result.alreadyMerged) return { out: 'Already up to date.', ok: true };
-          if (result.fastForward) return { out: 'Updating ' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
-          return { out: "Merge made by the 'recursive' strategy.", ok: true };
+          if (result.fastForward) return { out: 'Updating ' + oursBefore.slice(0, 7) + '..' + (result.oid || '').slice(0, 7) + '\nFast-forward', ok: true };
+          return { out: "Merge made by the 'ort' strategy.", ok: true };
         }
 
         case 'remote': {
@@ -1836,7 +2061,7 @@
           if (!pbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
           var locals = await gitlib.listBranches(opts());
           if (locals.indexOf(pbr) === -1) return { out: 'error: src refspec ' + pbr + ' does not match any', ok: false };
-          if (!words[1] && !upstreams[pbr]) {
+          if (!words[1] && !(await upstreamOf(pbr))) {
             return {
               out: 'fatal: The current branch ' + pbr + ' has no upstream branch.\n' +
                    'To push the current branch and set the remote as upstream, use\n\n' +
@@ -1846,8 +2071,12 @@
           }
           var localOid = await gitlib.resolveRef(opts({ ref: pbr }));
           var remoteOid = await remoteBranchOid(pbr);
-          if (setUp) upstreams[pbr] = true;
-          if (remoteOid === localOid) return { out: 'Everything up-to-date', ok: true };
+          var upNote = '';
+          if (setUp && (await upstreamOf(pbr)) !== pbr) {
+            await setUpstream(pbr, pbr);
+            upNote = "branch '" + pbr + "' set up to track 'origin/" + pbr + "'.";
+          }
+          if (remoteOid === localOid) return { out: (upNote ? upNote + '\n' : '') + 'Everything up-to-date', ok: true };
           if (remoteOid) {
             // only fast-forward pushes are allowed, like a real remote
             var pushedSet = await reachableFrom(localOid, opts);
@@ -1869,7 +2098,7 @@
           pushOut.push(remoteOid
             ? '   ' + remoteOid.slice(0, 7) + '..' + localOid.slice(0, 7) + '  ' + pbr + ' -> ' + pbr
             : ' * [new branch]      ' + pbr + ' -> ' + pbr);
-          if (setUp) pushOut.push("branch '" + pbr + "' set up to track 'origin/" + pbr + "'.");
+          if (upNote) pushOut.push(upNote);
           return { out: pushOut.join('\n'), ok: true };
         }
 
@@ -1894,6 +2123,9 @@
 
         case 'pull': {
           if (!remoteUrl) return { out: "fatal: 'origin' does not appear to be a git repository", ok: false };
+          if (rest.indexOf('--rebase') !== -1 || rest.indexOf('-r') !== -1) {
+            return { out: 'This sandbox has no rebase, so `git pull` always merges.\nRun `git pull` without --rebase.', ok: false };
+          }
           var inMerge2 = await statusModel();
           if (inMerge2.conflicted.length) return unmergedError('Pulling');
           if (inMerge2.merging) {
@@ -1902,16 +2134,40 @@
           }
           var lbr = await currentBranch();
           if (!lbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
+          var pwords = rest.filter(function (a) { return a.charAt(0) !== '-'; });
+          if (pwords[0] && pwords[0] !== 'origin') {
+            return { out: "fatal: '" + pwords[0] + "' does not appear to be a git repository\n" +
+              'fatal: Could not read from remote repository.\n\n' +
+              'Please make sure you have the correct access rights\nand the repository exists.', ok: false };
+          }
+          // `git pull origin <branch>` names the branch; plain `git pull`
+          // takes the upstream that `push -u`, `clone` or `--track` set
+          var fromBranch = pwords[1] || await upstreamOf(lbr);
           var fetched = await gitCommand(['fetch']);
-          var theirOid = await remoteBranchOid(lbr);
-          if (!theirOid) return { out: "fatal: origin has no branch named '" + lbr + "' to pull from.", ok: false };
-          var oursOid = await gitlib.resolveRef(opts({ ref: lbr }));
           var prefix2 = fetched.out ? fetched.out + '\n' : '';
+          if (!fromBranch) {
+            return {
+              out: prefix2 + (pwords[0]
+                ? "You asked to pull from the remote 'origin', but did not specify\n" +
+                  'a branch. Because this is not the default configured remote\n' +
+                  'for your current branch, you must specify a branch on the command line.'
+                : 'There is no tracking information for the current branch.\n' +
+                  'Please specify which branch you want to merge with.\n' +
+                  'See git-pull(1) for details.\n\n' +
+                  '    git pull <remote> <branch>\n\n' +
+                  'If you wish to set tracking information for this branch you can do so with:\n\n' +
+                  '    git branch --set-upstream-to=origin/<branch> ' + lbr),
+              ok: false
+            };
+          }
+          var theirOid = await remoteBranchOid(fromBranch);
+          if (!theirOid) return { out: prefix2 + "fatal: couldn't find remote ref " + fromBranch, ok: false };
+          var oursOid = await gitlib.resolveRef(opts({ ref: lbr }));
           if (theirOid === oursOid) return { out: prefix2 + 'Already up to date.', ok: true };
           var pres;
           try {
-            pres = await mergeInto(lbr, 'refs/remotes/origin/' + lbr, 'origin/' + lbr,
-              "Merge branch '" + lbr + "' of " + remoteUrl);
+            pres = await mergeInto(lbr, 'refs/remotes/origin/' + fromBranch, 'origin/' + fromBranch,
+              "Merge branch '" + fromBranch + "' of " + remoteUrl);
           } catch (e) {
             return { out: prefix2 + 'fatal: ' + e.message, ok: false };
           }
@@ -1921,7 +2177,7 @@
           }
           if (pres.alreadyMerged) return { out: prefix2 + 'Already up to date.', ok: true };
           if (pres.fastForward) return { out: prefix2 + 'Updating ' + oursOid.slice(0, 7) + '..' + theirOid.slice(0, 7) + '\nFast-forward', ok: true };
-          return { out: prefix2 + "Merge made by the 'recursive' strategy.", ok: true };
+          return { out: prefix2 + "Merge made by the 'ort' strategy.", ok: true };
         }
 
         case 'diff': {
@@ -2405,7 +2661,7 @@
       return {
         store: cloneStore(fs._store),
         remoteUrl: remoteUrl,
-        upstreams: JSON.parse(JSON.stringify(upstreams)),
+        prevHead: prevHead,
         merges: mergesDone.map(function (m) { return { from: m.from, into: m.into }; }),
         author: { name: author.name, email: author.email },
         globalConfig: JSON.parse(JSON.stringify(globalConfig)),
@@ -2421,7 +2677,7 @@
       fs._store.clear();
       cloned.forEach(function (v, k) { fs._store.set(k, v); });
       remoteUrl = snap.remoteUrl;
-      upstreams = JSON.parse(JSON.stringify(snap.upstreams));
+      prevHead = snap.prevHead || null;
       mergesDone = snap.merges.map(function (m) { return { from: m.from, into: m.into }; });
       author = { name: snap.author.name, email: snap.author.email };
       globalConfig = JSON.parse(JSON.stringify(snap.globalConfig || {}));
@@ -2435,7 +2691,6 @@
     function changedSince(snap) {
       if (remoteUrl !== snap.remoteUrl) return true;
       if (mergesDone.length !== snap.merges.length) return true;
-      if (JSON.stringify(upstreams) !== JSON.stringify(snap.upstreams)) return true;
       if (author.name !== snap.author.name || author.email !== snap.author.email) return true;
       if (JSON.stringify(globalConfig) !== JSON.stringify(snap.globalConfig || {})) return true;
       if (fs._store.size !== snap.store.size) return true;
@@ -2461,7 +2716,7 @@
       base.fs = fs;
       repoReady = false;
       remoteUrl = null;
-      upstreams = {};
+      prevHead = null;
       mergesDone = [];
       author = { name: 'Your Name', email: 'you@example.com' };
       globalConfig = {};

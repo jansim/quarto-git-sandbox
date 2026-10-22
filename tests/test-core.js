@@ -260,7 +260,7 @@ async function scenario(name, fn) {
 
     let r = await run('git checkout ' + first);
     check('checkout by short hash', r.ok && /detached HEAD/.test(r.out), r.out);
-    check('advice names the way back', /git switch main/.test(r.out), r.out);
+    check('advice names the way back', /git switch -$/m.test(r.out), r.out);
     check('says where HEAD is', new RegExp('HEAD is now at ' + first + ' First').test(r.out), r.out);
     check('no current branch', (await sb.currentBranch()) === null);
     check('workdir is the old commit', (await run('cat notes.txt')).out === 'one');
@@ -762,7 +762,7 @@ async function scenario(name, fn) {
 
     r = await run('git commit');
     check('commit without -m offers the merge message',
-      r.ok && r.editor && /^Merge branch 'feat' into main\n/.test(r.editor.text) && /# Conflicts:\n#\td\.txt\n#\tf\.txt/.test(r.editor.text),
+      r.ok && r.editor && /^Merge branch 'feat'\n/.test(r.editor.text) && /# Conflicts:\n#\td\.txt\n#\tf\.txt/.test(r.editor.text),
       JSON.stringify(r.editor));
     r = await sb.finishCommit(r.editor.text);
     check('finishing the editor commit concludes the merge', r.ok, r.out);
@@ -773,7 +773,7 @@ async function scenario(name, fn) {
     check('merge state cleared', !st.merging && !(await sb.mergeState()));
     check('resolution committed', (await sb.readFile('f.txt')) === 'both\n');
     r = await run('git log --oneline');
-    check('log shows the merge', /Merge branch 'feat' into main/.test(r.out), r.out);
+    check('log shows the merge', /Merge branch 'feat'$/m.test(r.out), r.out);
   });
 
   await scenario('merge conflict, abort and undo', async ({ sb, run, check }) => {
@@ -1144,6 +1144,87 @@ async function scenario(name, fn) {
   await scenario('init -b', async ({ sb, run, check }) => {
     const r = await run('git init -b develop');
     check('init -b names the first branch', r.ok && (await run('git status')).out.indexOf('On branch develop') === 0);
+  });
+
+  /* ---------------- remote-tracking branches ---------------- */
+  await scenario('tracking', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo a > a.txt');
+    await run('git add .');
+    await run('git commit -m one');
+    await run('git remote add origin https://example.com/acme/repo.git');
+    let r = await run('git pull');
+    check('pull without an upstream explains itself', !r.ok && /no tracking information/.test(r.out) &&
+      /--set-upstream-to=origin\/<branch> main/.test(r.out), r.out);
+    await run('git push -u origin main');
+    check('push -u records the upstream in .git/config',
+      /\[branch "main"\][^[]*merge = refs\/heads\/main/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')) &&
+      /\[branch "main"\][^[]*remote = origin/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')));
+    r = await run('git status');
+    check('status: up to date', /^On branch main\nYour branch is up to date with 'origin\/main'\./.test(r.out), r.out);
+    await run('echo b > b.txt');
+    await run('git add .');
+    await run('git commit -m two');
+    r = await run('git status');
+    check('status: ahead', /ahead of 'origin\/main' by 1 commit\./.test(r.out), r.out);
+    await run('git push');
+    await run('echo c > c.txt');
+    await run('git add .');
+    await run('git commit -m colleague');
+    await run('git push');
+    await run('rewind 1');
+    r = await run('git status');
+    check('status: news on the remote shows only after fetch', /up to date with/.test(r.out), r.out);
+    await run('git fetch');
+    r = await run('git status');
+    check('status: behind after fetch', /behind 'origin\/main' by 1 commit, and can be fast-forwarded/.test(r.out), r.out);
+    r = await run('git merge origin/main');
+    check('merge origin/main fast-forwards', r.ok && /Fast-forward/.test(r.out), r.out);
+    check('merge origin/main is recorded', (await sb.graphModel()).merges.some(m => m.from === 'origin/main' && m.into === 'main'));
+
+    // a colleague's branch
+    await run('git checkout -b feature');
+    await run('echo f > f.txt');
+    await run('git add .');
+    await run('git commit -m feature');
+    await run('git push -u origin feature');
+    await run('git checkout main');
+    r = await run('git branch -D feature');
+    check('branch -D says what it deleted', r.ok && /^Deleted branch feature \(was [0-9a-f]{7}\)\.$/.test(r.out), r.out);
+    r = await run('git branch -a');
+    check('branch -a lists remote-tracking branches', /remotes\/origin\/feature/.test(r.out) && /remotes\/origin\/main/.test(r.out), r.out);
+    r = await run('git switch feature');
+    check('switch guesses the remote branch', r.ok && /Switched to a new branch 'feature'\nbranch 'feature' set up to track 'origin\/feature'\./.test(r.out), r.out);
+    check('...and checks it out', (await sb.currentBranch()) === 'feature' && (await sb.readFile('f.txt')) === 'f\n');
+    r = await run('git switch -');
+    check('switch - goes back', r.ok && (await sb.currentBranch()) === 'main', r.out);
+    r = await run('git checkout -');
+    check('checkout - too', r.ok && (await sb.currentBranch()) === 'feature', r.out);
+    r = await run('git checkout feature');
+    check('already on it', r.ok && /^Already on 'feature'\nYour branch is up to date with 'origin\/feature'\.$/.test(r.out), r.out);
+    await run('git checkout main');
+    await run('git branch -D feature');
+    r = await run('git checkout --track origin/feature');
+    check('checkout --track', r.ok && (await sb.currentBranch()) === 'feature' && /set up to track 'origin\/feature'/.test(r.out), r.out);
+    r = await run('git pull');
+    check('pull uses the upstream', r.ok && /Already up to date/.test(r.out), r.out);
+    await run('git checkout -b copy origin/main');
+    check('-b with a start point starts there, tracking it', !(await sb.listFiles()).includes('f.txt') &&
+      /up to date with 'origin\/main'/.test((await run('git status')).out));
+    r = await run('git pull origin feature');
+    check('pull origin <branch> merges that branch', r.ok && (await sb.readFile('f.txt')) === 'f\n', r.out);
+    r = await run('git pull --rebase');
+    check('pull --rebase is explained', !r.ok && /no rebase/.test(r.out), r.out);
+    r = await run('git branch --set-upstream-to=origin/feature');
+    check('--set-upstream-to', r.ok && /'copy' set up to track 'origin\/feature'/.test(r.out), r.out);
+    r = await run('git branch --unset-upstream');
+    check('--unset-upstream', r.ok && !/Your branch/.test((await run('git status')).out));
+
+    const snap = sb.snapshot();
+    await run('git checkout main');
+    sb.restore(snap);
+    r = await run('git switch -');
+    check('undo restores where switch - goes', r.ok && (await sb.currentBranch()) === 'feature', r.out);
   });
 
   /* ---------------- report ---------------- */

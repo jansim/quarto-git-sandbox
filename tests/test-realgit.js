@@ -12,6 +12,9 @@
    must match line for line, and `firstLine` steps only on their first
    line (for `-h`, whose option lists change between git versions). Both
    sides must also agree on success, unless a step says otherwise with `ok`.
+   A step with `sandbox` runs that instead in the sandbox, for setups the
+   two reach differently (a colleague's push is a second clone for git,
+   and a push followed by `rewind` in the sandbox).
 
    Needs `git` on PATH. Run: node tests/test-realgit.js */
 const { spawnSync } = require('child_process');
@@ -79,7 +82,9 @@ async function scenario(name, steps) {
     LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0'
   });
   const sb = Core.createSandbox({ git });
-  const reps = [[work, '~/project'], [remote, '<remote>'], [SANDBOX_URL, '<remote>']];
+  // git shows a local remote's path without its .git
+  const reps = [[work, '~/project'], [remote, '<remote>'], [remote.replace(/\.git$/, ''), '<remote>'],
+    [SANDBOX_URL, '<remote>']];
 
   try {
     for (const step of steps) {
@@ -87,7 +92,7 @@ async function scenario(name, steps) {
       const real = realGit(s.cmd.split('$REMOTE').join(remote), work, env);
       // the sandbox has no `&&`, so a chain runs one command at a time
       let mine;
-      for (const part of s.cmd.split(' && ')) {
+      for (const part of (s.sandbox || s.cmd).split(' && ')) {
         mine = await sb.run(part.split('$REMOTE').join(SANDBOX_URL));
         if (s.setup && !mine.ok) throw new Error('setup failed in the sandbox: ' + part + '\n' + mine.out);
       }
@@ -192,10 +197,11 @@ async function scenario(name, steps) {
     { cmd: 'git init', setup: true },
     { cmd: 'echo a > a.txt && git add . && git commit -q -m one', setup: true },
     { cmd: 'echo b > a.txt && git add . && git commit -q -m two', setup: true },
-    // the sandbox has no `git switch -`, so it names the branch instead
-    { cmd: 'git checkout HEAD~1', ignore: [/^Or go back to where you were with:$/, /^git switch main$/] },
+    { cmd: 'git checkout HEAD~1', exact: true },
     { cmd: 'git status', exact: true },
-    'git checkout main'
+    { cmd: 'git checkout main', exact: true },
+    { cmd: 'git switch -', exact: true },
+    { cmd: 'git switch -', exact: true }
   ]);
 
   await scenario('remote', [
@@ -315,6 +321,63 @@ async function scenario(name, steps) {
     { cmd: 'cat log.txt', exact: true },
     { cmd: 'git nope > out.txt', ok: false, ignore: [/./] },
     { cmd: 'git init -h > library.txt', ok: true }
+  ]);
+
+  // what a colleague pushing to the remote looks like on each side
+  const colleague = (branch, file) => ({
+    cmd: 'cd .. && rm -rf colleague && git clone -q $REMOTE colleague && cd colleague && ' +
+      (branch === 'main' ? '' : 'git checkout -q -b ' + branch + ' && ') +
+      'echo c > ' + file + ' && git add . && git commit -q -m colleague && git push -q -u origin ' + branch,
+    sandbox: branch === 'main'
+      ? 'echo c > ' + file + ' && git add . && git commit -q -m colleague && git push -q && rewind 1'
+      : 'git checkout -q -b ' + branch + ' && echo c > ' + file + ' && git add . && git commit -q -m colleague && ' +
+        'git push -q -u origin ' + branch + ' && git checkout -q main && git branch -D ' + branch +
+        ' && git branch -d -r origin/' + branch,
+    setup: true
+  });
+
+  await scenario('remote tracking', [
+    { cmd: 'git init', setup: true },
+    { cmd: 'echo a > a.txt && git add . && git commit -q -m one', setup: true },
+    { cmd: 'git remote add origin $REMOTE && git push -q -u origin main', setup: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'echo b > b.txt && git add . && git commit -q -m two', setup: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git push -q', setup: true },
+    colleague('main', 'c.txt'),
+    { cmd: 'git status', exact: true },
+    'git fetch',
+    { cmd: 'git status', exact: true },
+    { cmd: 'git checkout main', exact: true },
+    'git pull origin main',
+    { cmd: 'git status', exact: true },
+    colleague('main', 'd.txt'),
+    { cmd: 'echo e > e.txt && git add . && git commit -q -m local', setup: true },
+    { cmd: 'git fetch -q', setup: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git merge origin/main', ignore: [/\|/, /changed/, /create mode/] },
+    { cmd: 'git log --oneline -1', sandbox: 'git log --oneline', firstLine: true },
+    { cmd: 'git push -q', setup: true },
+    { cmd: 'git branch -r', exact: true },
+    { cmd: 'git branch -a', exact: true },
+    colleague('feature', 'f.txt'),
+    'git fetch',
+    { cmd: 'git switch feature', exact: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git switch -', exact: true },
+    { cmd: 'git checkout --track origin/feature', exact: true },
+    { cmd: 'git branch -D feature', exact: true },
+    { cmd: 'git checkout --track origin/feature', exact: true },
+    { cmd: 'git checkout main', exact: true },
+    { cmd: 'git checkout -b copy origin/feature', exact: true },
+    { cmd: 'git switch -c lonely', exact: true },
+    { cmd: 'git pull', ignore: [/^From |->/] },
+    { cmd: 'git push', ignore: [/^git push -u origin lonely$/] },
+    { cmd: 'git branch --set-upstream-to=origin/main', exact: true },
+    { cmd: 'git status', exact: true },
+    'git branch --set-upstream-to=origin/nope',
+    { cmd: 'git pull origin nope', ignore: [/^From |->/] },
+    { cmd: 'git pull upstream main', exact: true }
   ]);
 
   console.log('\n===== real git comparison =====');

@@ -265,10 +265,12 @@ Policy. `when:` does not, which is another reason to prefer it.
 **Git:** `init`, `status [--ignored]`, `add [-f]`, `rm [--cached] [-r]`,
 `check-ignore`, `commit [-a] [-m]`, `restore [--staged] [--source=<commit>]
 <file>`, `reset [<file>]`, `reset [--soft|--mixed|--hard] [<commit>]`, `log [--oneline]`,
-`diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
-`switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
-`remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
-`fetch`, `pull`, `config [--global] <key> [<value>]` (also `--list` and
+`diff`, `branch [-d] [-a|-r] [<name> [<start>]]`,
+`branch --set-upstream-to=origin/<branch>`, `checkout [-b] <branch>
+[<start>]`, `checkout --track origin/<branch>`, `checkout <commit>`,
+`switch [-c] <branch>`, `switch --detach <commit>`, `switch -`,
+`merge <branch | origin/branch | commit>`, `remote [-v] | remote add origin
+<url>`, `push [-u origin <branch>]`, `fetch`, `pull [origin <branch>]`, `config [--global] <key> [<value>]` (also `--list` and
 `--unset`), and `-h` on any of them, as in `git commit -h`
 
 **Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
@@ -311,7 +313,13 @@ The remote is a bare repository elsewhere in the same in-memory filesystem.
 Push and fetch move objects and refs between the two repositories with real
 semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
-rejected with `(fetch first)`.
+rejected with `(fetch first)`. Upstreams live in `.git/config` as in git:
+`git status` and `git checkout` then say whether the branch is ahead of,
+behind, or diverged from `origin/<branch>` (as of the last fetch), and a
+plain `git pull` on a branch without one fails with git's "no tracking
+information" message. `git switch <branch>` (or `checkout`) for a branch
+that exists only as `origin/<branch>` creates it, tracking the remote one,
+as `git checkout --track origin/<branch>` does.
 
 **vim:** `git commit` without `-m` does what real git usually does: it
 drops you into vim on the commit message, in normal mode, where typing does
