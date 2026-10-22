@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- New `cd` command for moving between folders inside the project. The prompt
+  shows the current folder, relative paths in shell and git commands resolve
+  from it, and `git add .` stages only that folder and below. `cd`, `cd ~`
+  and `cd ~/path` start from the project's top folder, and `cd -` goes back
+  to the previous one. Leaving the project is refused with a message saying
+  why.
+- `ls` accepts a folder to list, e.g. `ls src`.
+
 ## 1.1.0
 
 A layout rework so complex exercises stay one screen tall instead of a long

@@ -90,6 +90,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     host.querySelector('.gs-tasks').textContent);
   check('prompt shows branch', /\(main\)/.test(host.querySelector('.gs-prompt').textContent),
     host.querySelector('.gs-prompt').textContent);
+  await run('mkdir docs');
+  await run('cd docs');
+  check('prompt follows cd', host.querySelector('.gs-prompt').textContent === '~/project/docs (main) $',
+    host.querySelector('.gs-prompt').textContent);
+  await run('cd ..');
+  check('prompt back at the root', host.querySelector('.gs-prompt').textContent === '~/project (main) $',
+    host.querySelector('.gs-prompt').textContent);
   check('state pill flips to repository after init',
     /repository/.test(host.querySelector('.gs-state').textContent) &&
     !/no repository/.test(host.querySelector('.gs-state').textContent) &&

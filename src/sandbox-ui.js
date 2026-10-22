@@ -658,9 +658,9 @@
       undoBtn.disabled = !undoStack.length;
 
       var br = graph.head;
-      var promptText = (config.prompt || '~/project') .replace(/\s*\$\s*$/, '');
+      // follows `cd`, so the prompt always says which folder paths resolve in
       host.querySelector('.gs-prompt').textContent =
-        promptText + (br ? ' (' + br + ')' : '') + ' $';
+        sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
     }
 
     async function submit(line) {
@@ -719,7 +719,8 @@
         '{y}git{/}    init, status, add, commit -m, log [--oneline], diff,',
         '       branch [-d], checkout [-b], switch [-c], merge, config,',
         '       remote add origin, push [-u], pull, fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm, mkdir, pwd',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '       mkdir, cd, pwd',
         '{y}other{/}  help, clear, reset, undo',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',

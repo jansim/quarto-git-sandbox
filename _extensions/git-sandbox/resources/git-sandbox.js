@@ -301,6 +301,10 @@
     var author = { name: 'Your Name', email: 'you@example.com' };
     var defaultBranch = options.defaultBranch || 'main';
     var repoReady = false;
+    // Shell working directory, always `dir` or a folder inside it. The
+    // repository itself stays at `dir`; only relative paths follow `cd`.
+    var cwd = dir;
+    var prevCwd = dir;
 
     var base = { fs: fs, dir: dir };
     function opts(extra) {
@@ -310,8 +314,8 @@
     }
 
     function abs(p) {
-      if (!p) return dir;
-      return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(dir + '/' + p);
+      if (!p) return cwd;
+      return p.charAt(0) === '/' ? fs._norm(p) : fs._norm(cwd + '/' + p);
     }
     function rel(p) {
       var a = abs(p);
@@ -320,6 +324,26 @@
 
     async function ensureWorkdir() {
       await fs.promises.mkdir(dir, { recursive: true });
+    }
+
+    // cwd as the learner sees it, e.g. ~/project/src
+    function displayCwd() {
+      return cwd === dir ? displayDir : displayDir + cwd.slice(dir.length);
+    }
+
+    function insideProject(p) {
+      return p === dir || p.indexOf(dir + '/') === 0;
+    }
+
+    // A checkout or reset can delete the folder the learner is standing in.
+    // A real shell would leave them in a ghost directory; here we step back
+    // to the project root so every later command still works.
+    async function ensureCwd() {
+      if (cwd === dir) return;
+      try {
+        if ((await fs.promises.stat(cwd)).isDirectory()) return;
+      } catch (e) {}
+      cwd = dir;
     }
 
     async function isRepo() {
@@ -617,6 +641,9 @@
 
       switch (sub) {
         case 'init': {
+          if (cwd !== dir && !(await isRepo())) {
+            return { out: 'This sandbox keeps the repository at the top of the project.\nRun `cd ~` first, then `git init`.', ok: false };
+          }
           if (await isRepo()) return { out: 'Reinitialized existing Git repository in ' + displayDir + '/.git/', ok: true };
           await gitlib.init(opts({ defaultBranch: defaultBranch }));
           repoReady = true;
@@ -667,8 +694,11 @@
             var spec = rest[i];
             if (spec === '.' || spec === '-A' || spec === '--all' || spec === '*') {
               var m = await gitlib.statusMatrix(opts());
+              // like real git, `.` and `*` mean "here and below"; -A is repo-wide
+              var under = (spec === '.' || spec === '*') && cwd !== dir ? rel(cwd) + '/' : '';
               for (var j = 0; j < m.length; j++) {
                 var row = m[j];
+                if (under && row[0].indexOf(under) !== 0) continue;
                 if (row[2] === 0) await gitlib.remove(opts({ filepath: row[0] }));
                 else await gitlib.add(opts({ filepath: row[0] }));
                 added++;
@@ -1038,12 +1068,16 @@
       switch (cmd) {
         case 'ls': {
           var showAll = args.indexOf('-a') !== -1 || args.indexOf('-la') !== -1 || args.indexOf('-al') !== -1;
-          var entries = await fs.promises.readdir(dir);
+          var lsArg = args.filter(function (a) { return a.charAt(0) !== '-'; })[0];
+          var lsDir = abs(lsArg);
+          var entries;
+          try { entries = await fs.promises.readdir(lsDir); }
+          catch (e) { return { out: 'ls: ' + lsArg + ': No such file or directory', ok: false }; }
           if (!showAll) entries = entries.filter(function (e) { return e.charAt(0) !== '.'; });
           if (!entries.length) return { out: '', ok: true };
           var marked = [];
           for (var i = 0; i < entries.length; i++) {
-            var s = await fs.promises.stat(dir + '/' + entries[i]);
+            var s = await fs.promises.stat(lsDir + '/' + entries[i]);
             marked.push(s.isDirectory() ? '{b}' + entries[i] + '/{/}' : entries[i]);
           }
           return { out: marked.join('  '), ok: true };
@@ -1092,7 +1126,27 @@
           return { out: '', ok: true };
         }
         case 'pwd':
-          return { out: displayDir, ok: true };
+          return { out: displayCwd(), ok: true };
+        case 'cd': {
+          var to = args[0];
+          var dest;
+          // `~` is the project root: the prompt shows it as ~/project, and
+          // there is nothing above it to visit.
+          if (!to || to === '~' || to === '~/') dest = dir;
+          else if (to === '-') dest = prevCwd;
+          else if (to.indexOf('~/') === 0) dest = fs._norm(dir + '/' + to.slice(2));
+          else dest = abs(to);
+          if (!insideProject(dest)) {
+            return { out: 'cd: ' + to + ': this sandbox only has the project folder.\nUse `cd ~` to get back to its top.', ok: false };
+          }
+          var dst;
+          try { dst = await fs.promises.stat(dest); }
+          catch (e) { return { out: 'cd: ' + to + ': No such file or directory', ok: false }; }
+          if (!dst.isDirectory()) return { out: 'cd: ' + to + ': Not a directory', ok: false };
+          prevCwd = cwd;
+          cwd = dest;
+          return { out: to === '-' ? displayCwd() : '', ok: true };
+        }
         // Authoring helper for seeds: move the current branch back n commits
         // (first parent), so a previously-pushed commit exists only on the
         // remote — the "colleague pushed while you were away" setup.
@@ -1140,11 +1194,14 @@
       var cmd = args[0];
 
       await ensureWorkdir();
+      await ensureCwd();
 
       try {
         if (cmd === 'git') {
           var r = await gitCommand(args.slice(1));
           r.kind = 'git';
+          // a checkout or merge may have removed the folder we are in
+          await ensureCwd();
           return r;
         }
         var sh = await shellCommand(cmd, args.slice(1), parsed.redirect, parsed.target);
@@ -1182,7 +1239,9 @@
         upstreams: JSON.parse(JSON.stringify(upstreams)),
         merges: mergesDone.map(function (m) { return { from: m.from, into: m.into }; }),
         author: { name: author.name, email: author.email },
-        repoReady: repoReady
+        repoReady: repoReady,
+        cwd: cwd,
+        prevCwd: prevCwd
       };
     }
 
@@ -1196,6 +1255,8 @@
       mergesDone = snap.merges.map(function (m) { return { from: m.from, into: m.into }; });
       author = { name: snap.author.name, email: snap.author.email };
       repoReady = snap.repoReady;
+      cwd = snap.cwd || dir;
+      prevCwd = snap.prevCwd || dir;
     }
 
     // Did anything meaningful change since the snapshot? Compares content,
@@ -1231,8 +1292,15 @@
       upstreams = {};
       mergesDone = [];
       author = { name: 'Your Name', email: 'you@example.com' };
+      cwd = dir;
+      prevCwd = dir;
       await ensureWorkdir();
-      if (seed) await seed(api);
+      if (seed) {
+        await seed(api);
+        // seeds may `cd` to set things up; the learner always starts at the top
+        cwd = dir;
+        prevCwd = dir;
+      }
     }
 
     var api = {
@@ -1245,6 +1313,7 @@
       statusModel: statusModel,
       diffModel: diffModel,
       remoteModel: remoteModel,
+      pwd: displayCwd,
       isRepo: isRepo,
       currentBranch: currentBranch,
       listFiles: listFiles,
@@ -2322,9 +2391,9 @@
       undoBtn.disabled = !undoStack.length;
 
       var br = graph.head;
-      var promptText = (config.prompt || '~/project') .replace(/\s*\$\s*$/, '');
+      // follows `cd`, so the prompt always says which folder paths resolve in
       host.querySelector('.gs-prompt').textContent =
-        promptText + (br ? ' (' + br + ')' : '') + ' $';
+        sb.pwd() + (br ? ' (' + br + ')' : '') + ' $';
     }
 
     async function submit(line) {
@@ -2383,7 +2452,8 @@
         '{y}git{/}    init, status, add, commit -m, log [--oneline], diff,',
         '       branch [-d], checkout [-b], switch [-c], merge, config,',
         '       remote add origin, push [-u], pull, fetch',
-        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm, mkdir, pwd',
+        '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
+        '       mkdir, cd, pwd',
         '{y}other{/}  help, clear, reset, undo',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',

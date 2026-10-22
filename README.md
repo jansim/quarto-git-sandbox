@@ -214,9 +214,16 @@ Policy. `when:` does not, which is another reason to prefer it.
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
 `fetch`, `pull`, `config user.name|user.email`
 
-**Shell:** `ls [-a]`, `cat`, `echo "…" > file`, `echo "…" >> file`, `touch`,
-`rm`, `mkdir`, `pwd`, `whoami`, plus `help`, `clear`, `reset`, `undo`, and
-the authoring-only `rewind <n>`
+**Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
+`touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
+`undo`, and the authoring-only `rewind <n>`
+
+`cd` moves around inside the project folder, and the prompt shows where you
+are. Relative paths in shell and git commands resolve from there, and
+`git add .` stages only the current folder and below, as in real git. `cd`,
+`cd ~` and `cd ~/path` are measured from the project's top folder, `cd -`
+goes back to the previous folder, and nothing outside the project can be
+reached. The repository always lives at the top, so `git init` must run there.
 
 The remote is a bare repository elsewhere in the same in-memory filesystem.
 Push and fetch move objects and refs between the two repositories with real
