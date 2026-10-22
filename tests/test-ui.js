@@ -192,13 +192,21 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('editing a file auto-switches to files', activeTab() === 'files');
   check('files badge counts the modified file', badge('files').textContent === '1',
     badge('files').outerHTML);
-  await run('git checkout fix.txt');
+  // git commands never move the learner off the view they chose
+  host.querySelector('.gs-tab[data-tab="history"]').dispatchEvent(new win.Event('click'));
+  for (const cmd of ['git status', 'git diff', 'git add fix.txt', 'git restore --staged fix.txt',
+    'git log', 'git branch', 'git checkout fix.txt']) {
+    await run(cmd);
+    check(cmd + ' leaves the chosen tab alone', activeTab() === 'history', activeTab());
+  }
 
   // the remote tab appears once origin exists
   await run('git remote add origin https://example.com/demo.git');
   check('remote tab appears with a remote',
     host.querySelector('.gs-tab[data-tab="remote"]').hidden === false);
-  check('git remote auto-switches to the remote tab', activeTab() === 'remote');
+  check('git remote leaves the chosen tab alone', activeTab() === 'history');
+  host.querySelector('.gs-tab[data-tab="remote"]').dispatchEvent(new win.Event('click'));
+  check('the new remote tab can be selected', activeTab() === 'remote');
 
   // undo: full time travel over the last state-changing command
   check('undo button enabled once something is undoable',
@@ -283,9 +291,34 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await run('git merge analysis');
 
   await run('git remote add origin https://example.com/demo.git');
-  check('state shows origin pill once a remote exists',
-    /origin/.test(host.querySelector('.gs-state').textContent),
+  check('no origin pill in the title bar once a remote exists',
+    host.querySelector('.gs-state').textContent === '',
     host.querySelector('.gs-state').innerHTML);
+  check('remote panel splits into local and remote halves',
+    host.querySelectorAll('.gs-remote .gs-side').length === 2 &&
+    /Local/.test(host.querySelector('.gs-side-local').textContent) &&
+    /Remote/.test(host.querySelector('.gs-side-remote').textContent));
+  check('local half draws the local history compactly',
+    host.querySelectorAll('.gs-local-graph circle').length === 5,
+    String(host.querySelectorAll('.gs-local-graph circle').length));
+  check('remote half names the single remote without a dropdown',
+    host.querySelector('.gs-remote-name').textContent === 'origin' && !host.querySelector('.gs-remote-select'),
+    host.querySelector('.gs-remote-name').innerHTML);
+  check('the remote half is empty until a push', /No commits yet/.test(host.querySelector('.gs-remote-graph').textContent),
+    host.querySelector('.gs-remote-graph').textContent);
+  await run('git push -u origin main');
+  check('a push fills the remote half', host.querySelectorAll('.gs-remote-graph circle').length === 5,
+    String(host.querySelectorAll('.gs-remote-graph circle').length));
+  check('compact rows show the HEAD ref', /HEAD → main/.test(host.querySelector('.gs-local-graph').textContent),
+    host.querySelector('.gs-local-graph').textContent);
+  const refBox = (sel) => {
+    const t = [...host.querySelectorAll(sel + ' text.gs-ref-remote')].find((n) => n.textContent === 'origin/main');
+    return t && t.previousElementSibling;
+  };
+  check('local half dashes the remote-tracking origin/main',
+    refBox('.gs-local-graph') && refBox('.gs-local-graph').getAttribute('stroke-dasharray') === '3 2');
+  check('remote half draws its own origin/main solid',
+    refBox('.gs-remote-graph') && !refBox('.gs-remote-graph').hasAttribute('stroke-dasharray'));
 
   // workspace title bar: Terminal and Editor tabs over the dark pane
   const view = () => host.querySelector('.gs-wtab.is-active').getAttribute('data-view');

@@ -67,19 +67,10 @@
   color: var(--gs-blue-500);
 }
 
-/* Repo/remote status pills. margin-right: auto keeps them beside the title
-   while the Reset button stays pinned to the right edge. */
+/* An empty spacer: margin-right: auto keeps the title on the left while
+   the Undo/Reset buttons stay pinned to the right edge. */
 .gs-state { display: flex; gap: 6px; margin-right: auto; }
 .gs-head > :not(.gs-eyebrow) { flex-shrink: 0; }
-.gs-state-pill {
-  font-family: var(--gs-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  border-radius: 999px;
-  padding: 3px 10px;
-  white-space: nowrap;
-}
-.gs-state-remote { background: #DBE6D3; color: #394D27; }
 
 .gs-reset, .gs-undo {
   font-family: var(--gs-mono);
@@ -872,10 +863,35 @@
 .gs-ref-head { font-weight: 700; fill: var(--gs-blue-600); }
 .gs-ref-remote { fill: var(--gs-gray); }
 
-/* remote (mock origin) — its own tab, so no divider needed */
+/* remote (mock origin): the local repository and the remote side by side,
+   each a compact graph; stacked on narrow screens */
 
-.gs-remote-sync { font-size: 12px; color: var(--gs-gray-body); margin-top: 2px; }
-.gs-remote-sync code { font-family: var(--gs-mono); font-size: 11px; }
+.gs-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.gs-side { min-width: 0; border: 1px solid var(--gs-blue-50); border-radius: 6px; padding: 6px 4px 4px; }
+.gs-side-head {
+  display: flex; align-items: center; gap: 8px; min-height: 24px;
+  padding: 0 6px 4px; border-bottom: 1px solid var(--gs-blue-50); margin-bottom: 2px;
+}
+.gs-side-label {
+  font-family: var(--gs-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--gs-blue-500);
+}
+.gs-remote-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--gs-mono); font-size: 12px; color: var(--gs-gray-body); }
+.gs-remote-select {
+  font-family: var(--gs-mono); font-size: 12px; color: var(--gs-blue-500);
+  background: #FFFFFF; border: 1px solid var(--gs-blue-100); border-radius: 4px; padding: 1px 4px;
+  max-width: 100%;
+}
+.gs-remote-select:focus-visible { outline: 2px solid var(--gs-blue-vibrant); outline-offset: 1px; }
+.gs-graph-compact { display: block; width: 100%; }
+.gs-graph-compact .gs-sha { font-size: 11px; }
+.gs-graph-compact .gs-msg { font-size: 12px; }
+.gs-graph-compact .gs-ref { font-size: 10px; }
+@media (max-width: 560px) {
+  .gs-split { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+}
+
 .gs-empty-text { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray-body); }
 
 /* ----------------------------- commit tree ---------------------------- */
