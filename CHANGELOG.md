@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `git checkout <commit>` (and `git switch --detach <commit>`) moves HEAD
+  to a commit instead of a branch. A commit can be named by its hash, full
+  or abbreviated, or as `HEAD~2`, `main^` and the like. The learner sees
+  git's own "detached HEAD" note; `git status`, `git branch` and `git log`
+  show the detached HEAD; commits made there print `[detached HEAD …]`;
+  and switching back to a branch warns about any commits that would be
+  left behind, naming them. `git switch <commit>` without `--detach` is
+  refused with git's hint. A new `when: detached` condition checks for it.
+- `git checkout` and `git switch` refuse to move HEAD when uncommitted
+  changes would be overwritten, as git does, instead of silently
+  discarding them.
 - The File Status animations are paced to be followed. `git add` eases files
   across instead of snapping them over, and the files left behind close the
   gap afterwards. On `git commit` the staged files morph together into one
