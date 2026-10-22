@@ -300,7 +300,8 @@
 
   /* ------------------------------ -h help ---------------------------- */
 
-  // What `git <command> -h` prints. The usage lines are git's own; the
+  // What `git <command> -h` prints. The usage lines are git's own (as of
+  // git 2.55; tests/test-realgit.js checks them against the git it finds); the
   // options are only those this sandbox understands, laid out the way
   // git lays out its option lists, so what a learner copies into their
   // notes is both real and something they can try here.
@@ -313,6 +314,7 @@
   var HELP = {
     init: ['usage: git init [-q | --quiet] [--bare] [--template=<template-directory>]',
       '                [--separate-git-dir <git-dir>] [--object-format=<format>]',
+      '                [--ref-format=<format>]',
       '                [-b <branch-name> | --initial-branch=<branch-name>]',
       '                [--shared[=<permissions>]] [<directory>]', '',
       opt('-b, --initial-branch <name>', 'override the name of the initial branch')],
@@ -321,8 +323,8 @@
     add: ['usage: git add [<options>] [--] <pathspec>...', '',
       opt('-f, --force', 'allow adding otherwise ignored files'),
       opt('-A, --all', 'add changes from all tracked and untracked files')],
-    commit: ['usage: git commit [-a | --interactive | --patch] [-s] [-v] [-u<mode>] [--amend]',
-      '                  [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>)]',
+    commit: ['usage: git commit [-a | --interactive | --patch] [-s] [-v] [-u[<mode>]] [--amend]',
+      '                  [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>]',
       '                  [-F <file> | -m <msg>] [--reset-author] [--allow-empty]',
       '                  [--allow-empty-message] [--no-verify] [-e] [--author=<author>]',
       '                  [--date=<date>] [--cleanup=<mode>] [--[no-]status]',
@@ -357,7 +359,7 @@
       '   or: git diff [<options>] [--merge-base] <commit> [<commit>...] <commit> [--] [<path>...]',
       '   or: git diff [<options>] <commit>...<commit> [--] [<path>...]',
       '   or: git diff [<options>] <blob> <blob>',
-      '   or: git diff [<options>] --no-index [--] <path> <path>'],
+      '   or: git diff [<options>] --no-index [--] <path> <path> [<pathspec>...]'],
     branch: ['usage: git branch [<options>] [-r | -a] [--merged] [--no-merged]',
       '   or: git branch [<options>] [-f] [--recurse-submodules] <branch-name> [<start-point>]',
       '   or: git branch [<options>] [-l] [<pattern>...]',
@@ -399,31 +401,37 @@
     pull: ['usage: git pull [<options>] [<repository> [<refspec>...]]'],
     fetch: ['usage: git fetch [<options>] [<repository> [<refspec>...]]',
       '   or: git fetch [<options>] <group>',
-      '   or: git fetch --multiple [<options>] [(<repository> | <group>)...]',
+      '   or: git fetch --multiple [<options>] [(<repository>|<group>)...]',
       '   or: git fetch --all [<options>]'],
     clone: ['usage: git clone [<options>] [--] <repo> [<dir>]'],
-    config: ['usage: git config [<options>]', '',
+    config: ['usage: git config list [<file-option>] [<display-option>] [--includes]',
+      '   or: git config get [<file-option>] [<display-option>] [--includes] [--all] [--regexp] [--value=<pattern>] [--fixed-value] [--default=<default>] [--url=<url>] <name>',
+      '   or: git config set [<file-option>] [--type=<type>] [--all] [--value=<pattern>] [--fixed-value] <name> <value>',
+      '   or: git config unset [<file-option>] [--all] [--value=<pattern>] [--fixed-value] <name>',
+      '   or: git config rename-section [<file-option>] <old-name> <new-name>',
+      '   or: git config remove-section [<file-option>] <name>',
+      '   or: git config edit [<file-option>]',
+      '   or: git config [<file-option>] --get-colorbool <name> [<stdout-is-tty>]', '',
       'Config file location',
       opt('--global', 'use global config file'),
-      opt('--local', 'use repository config file'), '',
-      'Action',
-      opt('-l, --list', 'list all'),
-      opt('--unset', 'remove a variable: name [value-pattern]')],
+      opt('--local', 'use repository config file')],
     stash: ['usage: git stash list [<log-options>]',
       '   or: git stash show [-u | --include-untracked | --only-untracked] [<diff-options>] [<stash>]',
       '   or: git stash drop [-q | --quiet] [<stash>]',
       '   or: git stash pop [--index] [-q | --quiet] [<stash>]',
-      '   or: git stash apply [--index] [-q | --quiet] [<stash>]',
+      '   or: git stash apply [--index] [-q | --quiet] [--label-ours=<label>] [--label-theirs=<label>] [--label-base=<label>] [<stash>]',
       '   or: git stash branch <branchname> [<stash>]',
-      '   or: git stash [push [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
-      '          [-u | --include-untracked] [-a | --all] [(-m | --message) <message>]',
-      '          [--pathspec-from-file=<file> [--pathspec-file-nul]]',
-      '          [--] [<pathspec>...]]',
+      '   or: git stash [push] [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
+      '                 [-u | --include-untracked] [-a | --all] [(-m | --message) <message>]',
+      '                 [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '                 [--] [<pathspec>...]',
       '   or: git stash save [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
-      '          [-u | --include-untracked] [-a | --all] [<message>]',
+      '                 [-u | --include-untracked] [-a | --all] [<message>]',
       '   or: git stash clear',
       '   or: git stash create [<message>]',
-      '   or: git stash store [(-m | --message) <message>] [-q | --quiet] <commit>'],
+      '   or: git stash store [(-m | --message) <message>] [-q | --quiet] <commit>',
+      '   or: git stash export (--print | --to-ref <ref>) [<stash>...]',
+      '   or: git stash import <commit>'],
     'check-ignore': ['usage: git check-ignore [<options>] <pathname>...',
       '   or: git check-ignore [<options>] --stdin']
   };
@@ -1464,7 +1472,11 @@
         case 'config': {
           var global = false, list = false, unset = false;
           var cw = [];
-          rest.forEach(function (a) {
+          // git 2.46+ spells the actions as subcommands: list, get, set, unset
+          var action = ['list', 'get', 'set', 'unset'].indexOf(rest[0]) !== -1 ? rest[0] : null;
+          if (action === 'list') list = true;
+          if (action === 'unset') unset = true;
+          rest.slice(action ? 1 : 0).forEach(function (a) {
             if (a === '--global' || a === '--system') global = true;
             else if (a === '-l' || a === '--list') list = true;
             else if (a === '--unset') unset = true;
@@ -1486,6 +1498,8 @@
             return { out: 'error: key does not contain a section: ' + key, ok: false };
           }
           var value = cw.length > 1 ? cw.slice(1).join(' ') : null;
+          if (action === 'get' && value !== null) return { out: 'error: wrong number of arguments, should be 1', ok: false };
+          if (action === 'set' && value === null) return { out: 'error: wrong number of arguments, should be 2', ok: false };
           // user.name and user.email sign the sandbox's commits, whichever file they are set in
           if (lk === 'user.name' || lk === 'user.email') {
             var field = lk === 'user.name' ? 'name' : 'email';
