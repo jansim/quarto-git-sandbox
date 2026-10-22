@@ -112,8 +112,10 @@ end
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
-  donenote = true, ['tree-view'] = true, ['tree_view'] = true
+  donenote = true, ['tree-view'] = true, ['tree_view'] = true,
+  editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true
 }
+local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
 
 local function check_keys(tbl, allowed, where, problems)
@@ -137,14 +139,44 @@ local function build_config(cfg, problems)
 
   if cfg.seed ~= nil and cfg.seed ~= '' then out.seed = tostring(cfg.seed) end
 
-  -- yaml.lua leaves scalars as strings, so spell out what counts as on
-  local tree = cfg['tree-view']
-  if tree == nil then tree = cfg['tree_view'] end
-  if tree ~= nil and tree ~= '' then
-    local v = tostring(tree):lower()
-    if v == 'true' or v == 'yes' or v == 'on' then out.treeView = true
-    elseif not (v == 'false' or v == 'no' or v == 'off') then
-      problems[#problems + 1] = ('"tree-view" must be true or false, got "%s"'):format(tostring(tree))
+  -- yaml.lua leaves scalars as strings, so spell out what counts as on.
+  -- Returns true, false, 'toggle' (when allowed), or nil if unset or bad.
+  local function switch(key, allow_toggle)
+    local raw = cfg[key]
+    if raw == nil then raw = cfg[key:gsub('-', '_')] end
+    if raw == nil or raw == '' then return nil end
+    local v = tostring(raw):lower()
+    if v == 'true' or v == 'yes' or v == 'on' then return true end
+    if v == 'false' or v == 'no' or v == 'off' then return false end
+    if allow_toggle and v == 'toggle' then return 'toggle' end
+    problems[#problems + 1] = ('"%s" must be %s, got "%s"'):format(
+      key, allow_toggle and 'true, false or toggle' or 'true or false', tostring(raw))
+    return nil
+  end
+
+  -- left unset, the browser applies the defaults: tree-view and panels
+  -- 'toggle', editor true
+  local tree = switch('tree-view', true)
+  if tree ~= nil then out.treeView = tree end
+  local panels = switch('panels', true)
+  if panels ~= nil then out.panels = panels end
+  local editor = switch('editor', false)
+  if editor ~= nil then out.editor = editor end
+
+  local tabs = cfg['panel-tabs']
+  if tabs == nil then tabs = cfg['panel_tabs'] end
+  if tabs ~= nil and tabs ~= '' then
+    out.panelTabs = {}
+    for _, t in ipairs(as_array(tabs)) do
+      local name = tostring(t):lower()
+      local known = false
+      for _, n in ipairs(PANEL_NAMES) do if n == name then known = true end end
+      if known then
+        out.panelTabs[#out.panelTabs + 1] = name
+      else
+        problems[#problems + 1] = ('"panel-tabs" lists "%s"; the panels are %s'):format(
+          tostring(t), table.concat(PANEL_NAMES, ', '))
+      end
     end
   end
 
@@ -251,7 +283,8 @@ function CodeBlock(el)
   local json = quarto.json.encode(config)
   -- The tree pane needs room beside the box, so let the exercise run on
   -- into the right margin, as Quarto's own wide figures do.
-  local classes = config.treeView and 'git-sandbox column-page-right' or 'git-sandbox'
+  -- (A tree that opens on demand drops below the box when there is no room.)
+  local classes = config.treeView == true and 'git-sandbox column-page-right' or 'git-sandbox'
   return pandoc.Blocks({
     pandoc.RawBlock('html',
       '<div class="' .. classes .. '" id="' .. id .. '">' ..

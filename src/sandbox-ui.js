@@ -14,6 +14,23 @@
   var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
   var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
   var ICON_PLUS = icon('M8 3v10M3 8h10');
+  // a small commit graph: two branches off a trunk
+  var ICON_TREE = '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+    '<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
+    '<path d="M5 5.3v5.4M5 10c0-2.5 6-2 6-4.7"/>' +
+    '<circle cx="5" cy="3.5" r="1.8"/><circle cx="5" cy="12.5" r="1.8"/><circle cx="11" cy="3.5" r="1.8"/></g></svg>';
+
+  var PANEL_NAMES = ['files', 'changes', 'history', 'remote'];
+
+  // `tree-view` and `panels` take true (always shown), false (left out
+  // entirely) or 'toggle' (shown, with a button to fold it away). Anything
+  // else falls back to the default.
+  function showMode(v, dflt) {
+    if (v === true || v === false || v === 'toggle') return v;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return dflt;
+  }
 
   var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
 
@@ -540,27 +557,47 @@
     var tasks = normaliseTasks(config.tasks);
     var seed = normaliseSeed(config.seed);
     var intro = normaliseIntro(config.intro);
-    // the learngitbranching-style pane is opt-in: `tree-view: true`
-    var treeOn = !!config.treeView && !!root.GitSandboxTree;
+    // The learngitbranching-style pane: `tree-view: true` shows it beside
+    // the box, 'toggle' (the default) puts a button in the header that
+    // opens it, and false leaves it out.
+    var treeMode = root.GitSandboxTree ? showMode(config.treeView, 'toggle') : false;
+    var treeOn = treeMode !== false;
+    var treeShown = treeMode === true;
+    // The editor tab (and with it the tab strip) can be turned off.
+    var editorOn = config.editor !== false && config.editor !== 'false';
+    // The panels below the terminal: the same three modes, here 'toggle'
+    // starts open with a chevron to fold them. `panelTabs` picks which
+    // panels there are at all.
+    var panelTabs = Array.isArray(config.panelTabs)
+      ? PANEL_NAMES.filter(function (n) { return config.panelTabs.indexOf(n) !== -1; })
+      : PANEL_NAMES.slice();
+    var panelMode = panelTabs.length ? showMode(config.panels, 'toggle') : false;
+    var panelsOpen = panelMode !== false;
 
     host.classList.add('gs');
-    host.classList.toggle('gs-has-tree', treeOn);
+    host.classList.toggle('gs-has-tree', treeShown);
     host.innerHTML =
       '<div class="gs-head">' +
         // The workspace tabs live in the title bar and open onto the dark
         // pane below it: the terminal and the file editor share that pane,
         // one at a time, like tabs in a code editor.
-        '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
-          '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
-            '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
-          '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
-            '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
-            '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
-        '</div>' +
+        (editorOn
+          ? '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
+              '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
+                '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
+              '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+                '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+                '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+            '</div>'
+          : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state" role="status"></span>' +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
+        (treeMode === 'toggle'
+          ? '<button type="button" class="gs-tree-btn" aria-pressed="false" aria-label="Commit tree"' +
+            ' title="Show the commit tree">' + ICON_TREE + '</button>'
+          : '') +
       '</div>' +
       '<div class="gs-body">' +
         '<div class="gs-term-wrap">' +
@@ -613,7 +650,7 @@
           '</div>' +
         '</div>' +
         '<div class="gs-tasks"></div>' +
-        '<div class="gs-viz">' +
+        '<div class="gs-viz"' + (panelMode === false ? ' hidden' : '') + '>' +
           // One panel at a time; each tab carries a live badge so the folded
           // panels still tell you what they hold at a glance.
           '<div class="gs-tabs" role="tablist" aria-label="Repository views">' +
@@ -621,6 +658,10 @@
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="changes">Changes<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="history">History<span class="gs-tab-badge" hidden></span></button>' +
             '<button type="button" class="gs-tab" role="tab" aria-selected="false" data-tab="remote" hidden>Remote<span class="gs-tab-badge" hidden></span></button>' +
+            (panelMode === 'toggle'
+              ? '<button type="button" class="gs-viz-toggle" aria-expanded="true" aria-label="Repository views"' +
+                ' title="Hide these views">' + ICON_CHEVRON + '</button>'
+              : '') +
           '</div>' +
           '<section class="gs-panel" role="tabpanel" data-panel="files">' +
             '<div class="gs-stages"></div>' +
@@ -644,7 +685,8 @@
         // Beside the whole box rather than in a tab, so learners can keep
         // an eye on the tree while they type.
         // A div, not an <aside>: Quarto's page grid sends asides to the margin.
-        ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"><div class="gs-tree-inner">' +
+        ? '<div class="gs-tree" role="complementary" aria-label="Commit tree"' + (treeShown ? '' : ' hidden') + '>' +
+            '<div class="gs-tree-inner">' +
             '<div class="gs-tree-head"><span class="gs-eyebrow">Commit tree</span></div>' +
             '<div class="gs-tree-scroll"><svg class="gs-tree-svg" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>' +
           '</div></div>'
@@ -725,25 +767,50 @@
     var tabPanels = {};
     host.querySelectorAll('.gs-tab').forEach(function (b) { tabButtons[b.getAttribute('data-tab')] = b; });
     host.querySelectorAll('.gs-panel').forEach(function (p) { tabPanels[p.getAttribute('data-panel')] = p; });
-    var activeTab = 'files';
+    var panelOn = {};
+    panelTabs.forEach(function (n) { panelOn[n] = true; });
+    // panels left out by `panel-tabs` never show; Remote also waits for a remote
+    PANEL_NAMES.forEach(function (n) { if (!panelOn[n]) tabButtons[n].hidden = true; });
+    var defaultTab = panelTabs.filter(function (n) { return n !== 'remote'; })[0] || 'remote';
+    var activeTab = defaultTab;
+    var vizToggle = host.querySelector('.gs-viz-toggle');
 
-    function selectTab(name) {
-      if (!tabButtons[name] || tabButtons[name].hidden) return;
+    // `fromUser`: a click on a tab also unfolds folded panels; a command
+    // choosing a tab for the learner leaves them folded.
+    function selectTab(name, fromUser) {
+      if (!tabButtons[name] || tabButtons[name].hidden || !panelOn[name]) return;
       activeTab = name;
+      if (fromUser && !panelsOpen) setPanelsOpen(true);
+      showPanels();
+    }
+
+    function showPanels() {
       Object.keys(tabButtons).forEach(function (k) {
-        var on = k === name;
+        var on = k === activeTab;
         tabButtons[k].classList.toggle('is-active', on);
         tabButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
-        tabPanels[k].hidden = !on;
+        tabPanels[k].hidden = !on || !panelsOpen;
       });
       // A graph drawn while its panel was hidden used the fallback width;
       // now that it has a real width, redraw at it.
       redrawGraph();
     }
 
+    function setPanelsOpen(open) {
+      panelsOpen = open;
+      host.querySelector('.gs-viz').classList.toggle('is-folded', !open);
+      if (vizToggle) {
+        vizToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        vizToggle.title = open ? 'Hide these views' : 'Show these views';
+      }
+      showPanels();
+    }
+
     Object.keys(tabButtons).forEach(function (k) {
-      tabButtons[k].addEventListener('click', function () { selectTab(k); });
+      tabButtons[k].addEventListener('click', function () { selectTab(k, true); });
     });
+    if (vizToggle) vizToggle.addEventListener('click', function () { setPanelsOpen(!panelsOpen); });
+    if (activeTab !== 'files') showPanels();
 
     function setBadge(name, text) {
       var badge = tabButtons[name].querySelector('.gs-tab-badge');
@@ -815,6 +882,22 @@
       else root.addEventListener('resize', fitTree);
       fitTree();
     }
+
+    // `tree-view: toggle`: the header button opens and closes the pane. The
+    // tree keeps up with every command while closed, so it opens current.
+    var treeBtn = host.querySelector('.gs-tree-btn');
+    function setTreeShown(on) {
+      treeShown = on;
+      host.classList.toggle('gs-has-tree', on);
+      host.querySelector('.gs-tree').hidden = !on;
+      treeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      treeBtn.title = on ? 'Hide the commit tree' : 'Show the commit tree';
+      if (on) {
+        lastTreeW = 0;
+        fitTree();
+      }
+    }
+    if (treeBtn) treeBtn.addEventListener('click', function () { setTreeShown(!treeShown); });
 
     /* ------------------------ workspace views ------------------------- */
 
@@ -1019,7 +1102,7 @@
       edStatus.textContent = dirty ? 'unsaved'
         : openFile && openKind !== 'text' ? 'read-only' + (openKind === 'readonly' ? ', managed by git' : '')
         : edNote;
-      dirtyDot.hidden = !Object.keys(drafts).length;
+      if (dirtyDot) dirtyDot.hidden = !Object.keys(drafts).length;
     }
 
     // Read the open file and decide how it can be shown. Anything under
@@ -1314,7 +1397,7 @@
         : (files.length ? String(files.length) : ''));
       setBadge('changes', !isRepo ? '' : (diff && diff.files.length ? String(diff.files.length) : '✓'));
       setBadge('history', graph.commits.length ? String(graph.commits.length) : '');
-      tabButtons.remote.hidden = !remote;
+      tabButtons.remote.hidden = !remote || !panelOn.remote;
       if (remote) {
         setBadge('remote', !remote.tracked ? ''
           : (!remote.ahead && !remote.behind) ? '✓'
@@ -1322,7 +1405,7 @@
              (remote.ahead && remote.behind ? ' ' : '') +
              (remote.behind ? '⇣' + remote.behind : '')));
       } else if (activeTab === 'remote') {
-        selectTab('files');
+        selectTab(defaultTab);
       }
 
       var stateHtml = remote ? '<span class="gs-state-pill gs-state-remote">⇄ origin</span>' : '';
@@ -1675,11 +1758,12 @@
         'gives up.',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
-        'nicety, not a git command — real git has no undo).',
+        'nicety, not a git command — real git has no undo).'
+      ].concat(editorOn ? [
         '',
         'The {y}Editor{/} tab above the terminal opens files for editing.',
         'Saved edits land in the working directory, ready for git add.'
-      ].join('\n');
+      ] : []).join('\n');
     }
 
     async function doReset() {
@@ -1697,7 +1781,7 @@
       histIdx = 0;
       undoStack.length = 0;
       tasks.forEach(function (t) { t._done = false; t._wasDone = false; });
-      selectTab('files');
+      selectTab(defaultTab);
       // unsaved drafts belong to the run being thrown away
       drafts = {};
       openFile = null;

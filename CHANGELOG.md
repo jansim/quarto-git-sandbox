@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- More of the box can be configured per exercise:
+  - `tree-view` now takes `true`, `false` or `toggle`, and `toggle` is the
+    new default: every box gets a small commit-graph button in its header
+    that opens and closes the commit tree. `true` shows it from the start,
+    as before; `false` removes it and its button.
+  - `panels: true | false | toggle` does the same for the views below the
+    terminal. With `toggle` (the default) a chevron at the end of the tab
+    row folds them away, leaving the tabs and their badges; clicking a tab
+    unfolds them. `false` leaves them out.
+  - `panel-tabs: [files, changes, history, remote]` picks which of those
+    views an exercise offers; the first listed opens first.
+  - `editor: false` removes the Editor tab for a terminal-only box.
 - Each commit in the **History** graph has a chevron at the end of its row
   that opens the commit's contents underneath it, as `git show` would: the
   full hash, author, date and message, and every file it added, changed or

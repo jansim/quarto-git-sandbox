@@ -301,7 +301,10 @@ function outText(win, hostId) {
 
     check('tree-flow widens into the right margin', host.classList.contains('column-page-right'));
     check('tree-flow has the commit tree pane', !!host.querySelector('.gs-tree .gs-tree-svg'));
-    check('other boxes have no commit tree', win.document.querySelectorAll('.gs-tree').length === 1);
+    check('other boxes keep their commit tree closed',
+      Array.from(win.document.querySelectorAll('.gs-tree')).filter(t => !t.hidden).length === 1);
+    check('other boxes offer the tree from a header button',
+      win.document.querySelectorAll('.gs-tree-btn').length === win.document.querySelectorAll('.git-sandbox').length - 1);
     check('tree-flow seed drawn as C0 and C1', names() === 'C0 C1', names());
 
     await type('git checkout -b report');

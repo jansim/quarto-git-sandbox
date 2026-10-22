@@ -460,8 +460,9 @@ branch is on the remote.
 
 ## Optional: a commit tree beside the box
 
-Add `tree-view: true` to a block and the box gains a **commit tree** pane
-on its right, drawn in the style of
+Every box has a small graph button at the right of its header that opens
+a **commit tree** pane. Add `tree-view: true` to a block and the pane is
+open from the start, on the box's right, drawn in the style of
 [Learn Git Branching](https://learngitbranching.js.org/). Each commit is a
 circle named `C0`, `C1`, … in the order it was made, with its short hash
 underneath, the first commit at the top, and every branch a label
@@ -469,7 +470,7 @@ pointing at its tip; `main*` marks the branch `HEAD` is on. Every command
 animates: a new commit grows out of its parent, branch labels glide to
 their new tips, and commits that `undo` takes back shrink away. The box
 widens into the right margin to make room, and the pane drops below the
-box on narrow screens. It is off by default.
+box on narrow screens. `tree-view: false` removes the pane and its button.
 
 ```git-sandbox
 id: tree-flow
@@ -502,6 +503,24 @@ tasks:
 ```git-sandbox
 title: Branch, commit, merge
 tree-view: true
+```
+````
+
+## Optional: trimming the box
+
+Each part of the box beyond the terminal can be offered, folded, or left
+out. `panels` does for the views below the terminal what `tree-view` does
+for the tree: `true` shows them, `toggle` (the default) adds a chevron that
+folds them away, and `false` removes them. `panel-tabs` picks which views
+there are, and `editor: false` removes the Editor tab.
+
+````markdown
+```git-sandbox
+title: Just the terminal and the history
+editor: false
+tree-view: false
+panels: true
+panel-tabs: [history]
 ```
 ````
 

@@ -704,7 +704,83 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
 
   /* ---------------- commit tree (tree-view option) ---------------- */
-  check('no commit tree unless asked for', !host.querySelector('.gs-tree') && !host.classList.contains('gs-has-tree'));
+  check('by default the commit tree is closed behind a header button',
+    host.querySelector('.gs-tree').hidden === true && !host.classList.contains('gs-has-tree') &&
+    host.querySelector('.gs-head .gs-tree-btn').getAttribute('aria-pressed') === 'false');
+  host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
+  check('the header button opens the tree', host.querySelector('.gs-tree').hidden === false &&
+    host.classList.contains('gs-has-tree') && host.querySelector('.gs-tree-btn').getAttribute('aria-pressed') === 'true');
+  check('an opened tree already shows the history', host.querySelectorAll('.gs-tree-node').length >= 1,
+    host.querySelectorAll('.gs-tree-node').length);
+  host.querySelector('.gs-tree-btn').dispatchEvent(new win.Event('click'));
+  check('and closes it again', host.querySelector('.gs-tree').hidden === true && !host.classList.contains('gs-has-tree'));
+
+  /* ---------------- configurability ---------------- */
+  {
+    const mk = async (id, cfg) => {
+      const b = win.document.createElement('div');
+      b.id = id;
+      win.document.body.appendChild(b);
+      const inst = win.GitSandboxUI.mount('#' + id, cfg);
+      await inst.ready;
+      return { b, inst };
+    };
+
+    let { b } = await mk('cfg-tree-off', { treeView: false });
+    check('tree-view: false leaves no tree and no button', !b.querySelector('.gs-tree') && !b.querySelector('.gs-tree-btn'));
+    ({ b } = await mk('cfg-tree-on', { treeView: true }));
+    check('tree-view: true shows the tree with no button',
+      b.querySelector('.gs-tree').hidden === false && b.classList.contains('gs-has-tree') && !b.querySelector('.gs-tree-btn'));
+
+    ({ b } = await mk('cfg-no-editor', { editor: false }));
+    check('editor: false removes the workspace tabs', !b.querySelector('.gs-titlebar') && !b.querySelector('.gs-wtab'));
+    check('editor: false keeps the editor out of sight', b.querySelector('.gs-view-editor').hidden === true);
+    check('editor: false keeps the terminal', b.querySelector('.gs-view[data-view="terminal"]').hidden === false);
+    let r = await mk('cfg-no-editor-help', { editor: false });
+    await r.inst.run('help');
+    check('help leaves out the Editor tab when it is off', !/Editor/.test(r.b.querySelector('.gs-out').textContent));
+
+    ({ b } = await mk('cfg-panels-off', { panels: false }));
+    check('panels: false hides the views', b.querySelector('.gs-viz').hidden === true);
+    check('panels: false still shows tasks', !!b.querySelector('.gs-tasks'));
+
+    r = await mk('cfg-panels-on', { panels: true });
+    check('panels: true has no fold button', !r.b.querySelector('.gs-viz-toggle'));
+
+    r = await mk('cfg-panels-toggle', {});
+    const vt = r.b.querySelector('.gs-viz-toggle');
+    const pnl = (n) => r.b.querySelector('.gs-panel[data-panel="' + n + '"]');
+    check('panels default to open with a fold button', !!vt && vt.getAttribute('aria-expanded') === 'true' && pnl('files').hidden === false);
+    vt.dispatchEvent(new win.Event('click'));
+    check('the fold button hides every panel', vt.getAttribute('aria-expanded') === 'false' &&
+      ['files', 'changes', 'history', 'remote'].every(n => pnl(n).hidden) &&
+      r.b.querySelector('.gs-viz').classList.contains('is-folded'));
+    await r.inst.run('git init');
+    await r.inst.run('echo a > a.txt');
+    await r.inst.run('git add .');
+    await r.inst.run('git commit -m one');
+    check('commands do not unfold the panels', pnl('files').hidden === true);
+    check('badges still update while folded',
+      r.b.querySelector('.gs-tab[data-tab="history"] .gs-tab-badge').textContent === '1');
+    r.b.querySelector('.gs-tab[data-tab="history"]').dispatchEvent(new win.Event('click'));
+    check('clicking a tab unfolds onto that panel', pnl('history').hidden === false && vt.getAttribute('aria-expanded') === 'true');
+
+    r = await mk('cfg-tabs', { panelTabs: ['history', 'changes'] });
+    const shown = Array.from(r.b.querySelectorAll('.gs-tab')).filter(t => !t.hidden).map(t => t.getAttribute('data-tab'));
+    check('panel-tabs picks the panels', JSON.stringify(shown) === '["changes","history"]', JSON.stringify(shown));
+    check('the first chosen panel is open', r.b.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'changes' &&
+      r.b.querySelector('.gs-panel[data-panel="changes"]').hidden === false &&
+      r.b.querySelector('.gs-panel[data-panel="files"]').hidden === true);
+    await r.inst.run('git init');
+    await r.inst.run('echo a > a.txt');
+    check('a command cannot open a left-out panel', r.b.querySelector('.gs-panel[data-panel="files"]').hidden === true &&
+      r.b.querySelector('.gs-tab.is-active').getAttribute('data-tab') === 'changes');
+    await r.inst.run('git remote add origin https://example.com/x.git');
+    check('Remote stays away when not chosen', r.b.querySelector('.gs-tab[data-tab="remote"]').hidden === true);
+
+    r = await mk('cfg-tabs-none', { panelTabs: [] });
+    check('an empty panel-tabs hides the views', r.b.querySelector('.gs-viz').hidden === true);
+  }
   {
     const box2 = win.document.createElement('div');
     box2.id = 'treebox';

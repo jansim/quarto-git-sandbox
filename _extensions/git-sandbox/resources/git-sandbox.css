@@ -95,6 +95,23 @@
 /* nothing on the stack yet */
 .gs-undo:disabled { opacity: 0.45; cursor: default; }
 
+/* `tree-view: toggle`: opens and closes the commit tree pane */
+.gs-tree-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gs-blue);
+  background: #FFFFFF;
+  border: 1px solid var(--gs-blue-100);
+  border-radius: 4px;
+  padding: 5px 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.gs-tree-btn .gs-icon { width: 16px; height: 16px; }
+.gs-tree-btn:hover, .gs-tree-btn[aria-pressed="true"] { background: var(--gs-blue); color: #FFFFFF; border-color: var(--gs-blue); }
+.gs-tree-btn:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: 2px; }
+
 /* -------------------------------- body ------------------------------- */
 
 .gs-body {
@@ -638,6 +655,27 @@
 }
 .gs-tab-badge-ok { background: #DBE6D3; color: #394D27; }
 
+/* `panels: toggle`: folds the views away, leaving the tab row (and its
+   badges) as a summary; a tab click unfolds them again. */
+.gs-viz-toggle {
+  align-self: center;
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--gs-blue-500);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px;
+  cursor: pointer;
+}
+.gs-viz-toggle:hover { background: var(--gs-off-white); border-color: var(--gs-blue-50); }
+.gs-viz-toggle:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: -1px; }
+.gs-viz-toggle .gs-icon { transition: transform 0.15s ease; }
+.gs-viz-toggle[aria-expanded="true"] .gs-icon { transform: rotate(90deg); }
+.gs-viz.is-folded { padding-bottom: 10px; }
+.gs-viz.is-folded .gs-tabs { margin-bottom: 0; border-bottom-color: transparent; }
+.gs-viz.is-folded .gs-tab.is-active { border-bottom-color: transparent; }
+
 .gs-panel { min-width: 0; }
 
 /* stages */
@@ -828,7 +866,7 @@
 
 /* ----------------------------- commit tree ---------------------------- */
 
-/* `tree-view: true` adds a learngitbranching-style pane down the right of
+/* `tree-view: true` (or an opened `toggle`) adds a learngitbranching-style pane down the right of
    the whole box. Its contents are positioned out of flow, so the box keeps
    the height its main column gives it and a tall tree scrolls instead. */
 .gs.gs-has-tree {
@@ -990,7 +1028,7 @@
 
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
-  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tabs,
+  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
   .gs-titlebar, .gs-view-editor { display: none; }
   /* the terminal transcript prints even if the editor was showing */
   .gs-view[data-view="terminal"][hidden] { display: flex; }
