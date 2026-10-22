@@ -2,8 +2,12 @@ name: test
 
 on:
   push:
-    branches: [main]
   pull_request:
+
+# Push and PR runs for the same branch share a group, so one cancels the other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   test:
