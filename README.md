@@ -1,8 +1,17 @@
 # quarto-git-sandbox
 
-[![test](https://github.com/ryjohnson09/quarto-git-sandbox/actions/workflows/test.yml/badge.svg)](https://github.com/ryjohnson09/quarto-git-sandbox/actions/workflows/test.yml)
+[![test](https://github.com/jansim/quarto-git-sandbox/actions/workflows/test.yml/badge.svg)](https://github.com/jansim/quarto-git-sandbox/actions/workflows/test.yml)
 
-**[Try the live demo →](https://ryjohnson09.github.io/quarto-git-sandbox/)**
+**[Try the live demo →](https://jansim.github.io/quarto-git-sandbox/)**
+
+> [!NOTE]
+> This repository is a separately developed fork of
+> [ryjohnson09/quarto-git-sandbox](https://github.com/ryjohnson09/quarto-git-sandbox),
+> created by [Ryan Johnson (@ryjohnson09)](https://github.com/ryjohnson09).
+> It was unlinked from the original on GitHub so that it can have its own
+> issues. Please report problems with this version
+> [here](https://github.com/jansim/quarto-git-sandbox/issues), not on the
+> original repository.
 
 Interactive Git exercises for Quarto documents. Each exercise is a **real Git
 repository running in the reader's browser**. Learners type real `git`
@@ -34,7 +43,7 @@ need to write JavaScript to author an exercise.
 ## Install
 
 ```bash
-quarto add ryjohnson09/quarto-git-sandbox
+quarto add jansim/quarto-git-sandbox
 ```
 
 Then add the filter to your document, and use a `git-sandbox` block wherever
@@ -328,6 +337,14 @@ npm install          # dev dependencies only; the extension itself needs none
 
 `_extensions/git-sandbox/resources/git-sandbox.js` is generated. Edit `src/`
 and rebuild. See `CONTRIBUTING.md`.
+
+## Credits
+
+quarto-git-sandbox was created by
+[Ryan Johnson (@ryjohnson09)](https://github.com/ryjohnson09). The original
+repository is
+[ryjohnson09/quarto-git-sandbox](https://github.com/ryjohnson09/quarto-git-sandbox);
+this fork is developed separately from it.
 
 ## Licence
 
