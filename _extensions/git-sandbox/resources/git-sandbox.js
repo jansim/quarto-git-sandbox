@@ -646,6 +646,52 @@
       return res;
     }
 
+    /* ---------------------------- commits --------------------------- */
+
+    async function makeCommit(msg, st) {
+      var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
+      var branch = await currentBranch();
+      var nFiles = st.staged.length + st.stagedDeleted.length;
+      return {
+        out: '[' + branch + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        ok: true
+      };
+    }
+
+    // what `git commit` without -m puts in the editor, as real git does
+    async function commitTemplate(st) {
+      var lines = [
+        '',
+        '# Please enter the commit message for your changes. Lines starting',
+        "# with '#' will be ignored, and an empty message aborts the commit.",
+        '#',
+        '# On branch ' + (await currentBranch()),
+        '#',
+        '# Changes to be committed:'
+      ];
+      st.staged.forEach(function (s) { lines.push('#\t' + s.kind + ':   ' + s.file); });
+      st.stagedDeleted.forEach(function (f) { lines.push('#\tdeleted:    ' + f); });
+      lines.push('#');
+      return lines.join('\n') + '\n';
+    }
+
+    // Second half of an editor commit: `text` is the saved COMMIT_EDITMSG,
+    // or null if the editor quit without saving.
+    async function finishCommit(text) {
+      var msg = String(text == null ? '' : text).split('\n')
+        .filter(function (l) { return l.charAt(0) !== '#'; })
+        .map(function (l) { return l.replace(/\s+$/, ''); })
+        .join('\n').replace(/^\n+|\n+$/g, '');
+      if (!msg) return { out: 'Aborting commit due to empty commit message.', ok: false, kind: 'git' };
+      var st = await statusModel();
+      if (!st.staged.length && !st.stagedDeleted.length) {
+        return { out: 'nothing to commit, working tree clean', ok: false, kind: 'git' };
+      }
+      var r = await makeCommit(msg, st);
+      r.kind = 'git';
+      return r;
+    }
+
     /* -------------------------- git commands ----------------------- */
 
     async function gitCommand(args) {
@@ -744,10 +790,10 @@
         case 'commit': {
           var msg = null;
           for (var k = 0; k < rest.length; k++) {
-            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1]; break; }
+            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1] || ''; break; }
             if (rest[k].indexOf('-m') === 0 && rest[k].length > 2) { msg = rest[k].slice(2); break; }
           }
-          if (!msg) return { out: 'Aborting commit due to empty commit message.\nhint: use  git commit -m "your message"', ok: false };
+          if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
           if (!st2.staged.length && !st2.stagedDeleted.length) {
             var br2 = await currentBranch();
@@ -755,13 +801,14 @@
               ? '\nUse `git add <file>` to stage changes first.' : '';
             return { out: 'On branch ' + br2 + '\nnothing to commit, working tree clean' + extra, ok: false };
           }
-          var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
-          var branch3 = await currentBranch();
-          var nFiles = st2.staged.length + st2.stagedDeleted.length;
-          return {
-            out: '[' + branch3 + ' ' + sha.slice(0, 7) + '] ' + msg + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
-            ok: true
-          };
+          if (msg === null) {
+            // Without -m, real git opens an editor (usually vim) on
+            // COMMIT_EDITMSG. The engine has no screen, so it hands the
+            // template back; the UI runs the editor and passes what was
+            // saved to finishCommit. Nothing has changed yet.
+            return { out: '', ok: true, editor: { file: '.git/COMMIT_EDITMSG', text: await commitTemplate(st2) } };
+          }
+          return makeCommit(msg, st2);
         }
 
         case 'log': {
@@ -1324,6 +1371,7 @@
 
     var api = {
       run: run,
+      finishCommit: finishCommit,
       reset: reset,
       snapshot: snapshot,
       restore: restore,
@@ -2342,6 +2390,9 @@
     return async function (sb) {
       for (var i = 0; i < lines.length; i++) {
         var r = await sb.run(lines[i]);
+        if (r.editor) {
+          throw new Error('seed command opened an editor: ' + lines[i] + ' — give git commit a message with -m');
+        }
         if (!r.ok) {
           // A broken seed is an authoring bug, so make it loud rather than
           // leaving the learner in a half-built repository.
@@ -2664,6 +2715,12 @@
               ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
               ' placeholder="type a command and press Enter">' +
             '</form>' +
+            // `git commit` without -m opens this, as real git opens vim
+            '<div class="gs-vim" hidden>' +
+              '<textarea class="gs-vim-text" spellcheck="false" autocapitalize="off" autocorrect="off"' +
+              ' aria-label="vim, editing the commit message"></textarea>' +
+              '<div class="gs-vim-status" role="status"></div>' +
+            '</div>' +
             '<div class="gs-hints"></div>' +
           '</div>' +
           '<div class="gs-view gs-view-editor" role="tabpanel" data-view="editor" hidden>' +
@@ -2749,6 +2806,11 @@
     var stateNode = host.querySelector('.gs-state');
     var resetBtn = host.querySelector('.gs-reset');
     var undoBtn = host.querySelector('.gs-undo');
+    var vimNode = host.querySelector('.gs-vim');
+    var vimText = host.querySelector('.gs-vim-text');
+    var vimStatus = host.querySelector('.gs-vim-status');
+    // the open vim session, if any: { abandon() }
+    var vim = null;
     var lastStateHtml = '';
     var treeScroll = host.querySelector('.gs-tree-scroll');
     var tree = treeOn ? root.GitSandboxTree.createTreeView(host.querySelector('.gs-tree-svg')) : null;
@@ -3443,6 +3505,183 @@
       }
     }
 
+    /* ------------------------------ vim ------------------------------ */
+
+    // A small modal vim, just enough to write a commit message and, more to
+    // the point, to show learners why "how do I quit vim" is a famous
+    // question. It starts in normal mode where typing does nothing useful,
+    // and only the real ways out (:wq, :x, ZZ, :q!, ZQ) leave it. Resolves
+    // with what was last written to the file, the way git reads it back.
+    function openVim(file, text) {
+      var saved = text;
+      var mode = 'normal';
+      var cmd = '';
+      var pending = '';
+      var nLines = function (t) { return t.replace(/\n$/, '').split('\n').length; };
+      var info = '"' + file + '" ' + nLines(text) + 'L, ' + text.length + 'B';
+
+      function status(msg, isErr) {
+        vimStatus.textContent = msg;
+        vimStatus.classList.toggle('is-err', !!isErr);
+      }
+      function caret(pos) {
+        pos = Math.max(0, Math.min(vimText.value.length, pos));
+        vimText.selectionStart = vimText.selectionEnd = pos;
+      }
+      function lineStart(pos) { return vimText.value.lastIndexOf('\n', pos - 1) + 1; }
+      function lineEnd(pos) {
+        var e = vimText.value.indexOf('\n', pos);
+        return e === -1 ? vimText.value.length : e;
+      }
+      function setMode(m) {
+        mode = m;
+        vimNode.classList.toggle('is-insert', m === 'insert');
+        if (m === 'insert') status('-- INSERT --');
+        else if (m === 'normal') status('');
+      }
+      function moveLine(dir) {
+        var pos = vimText.selectionStart, s = lineStart(pos), col = pos - s;
+        if (dir < 0) {
+          if (s === 0) return;
+          var ps = lineStart(s - 1);
+          caret(Math.min(ps + col, s - 1));
+        } else {
+          var e = lineEnd(pos);
+          if (e === vimText.value.length) return;
+          caret(Math.min(e + 1 + col, lineEnd(e + 1)));
+        }
+      }
+      function write() {
+        saved = vimText.value;
+        status('"' + file + '" ' + nLines(saved) + 'L, ' + saved.length + 'B written');
+      }
+      function runCmd(c) {
+        var bang = /!$/.test(c);
+        var name = c.replace(/!$/, '');
+        if (name === 'w') { write(); return; }
+        if (name === 'wq' || name === 'x' || name === 'wqa' || name === 'xa') { write(); close(saved); return; }
+        if (name === 'q' || name === 'qa') {
+          if (!bang && vimText.value !== saved) {
+            status('E37: No write since last change (add ! to override)', true);
+            return;
+          }
+          close(saved);
+          return;
+        }
+        status('E492: Not an editor command: ' + c, true);
+      }
+      // `result` is what git reads back; undefined means the session was
+      // abandoned by Reset and there is no commit to finish
+      function close(result) {
+        vim = null;
+        vimNode.hidden = true;
+        out.hidden = false;
+        form.hidden = false;
+        hintsNode.hidden = false;
+        vimText.removeEventListener('keydown', onKey);
+        vimText.removeEventListener('beforeinput', onBeforeInput);
+        resolve(result);
+      }
+
+      function onBeforeInput(e) {
+        // phones type through beforeinput, not keydown; only insert mode edits
+        if (mode !== 'insert') e.preventDefault();
+      }
+
+      function onKey(e) {
+        var k = e.key;
+        if (mode === 'insert') {
+          if (k === 'Escape' || (e.ctrlKey && k === 'c')) {
+            e.preventDefault();
+            setMode('normal');
+            // like vim, leaving insert mode steps back onto the last character
+            var p = vimText.selectionStart;
+            if (p > lineStart(p)) caret(p - 1);
+          }
+          return;
+        }
+        if (mode === 'cmd') {
+          e.preventDefault();
+          if (k === 'Escape' || (e.ctrlKey && k === 'c')) { setMode('normal'); return; }
+          if (k === 'Enter') { setMode('normal'); runCmd(cmd.slice(1).trim()); return; }
+          if (k === 'Backspace') {
+            cmd = cmd.slice(0, -1);
+            if (!cmd) { setMode('normal'); return; }
+          } else if (k.length === 1) {
+            cmd += k;
+          }
+          status(cmd);
+          return;
+        }
+
+        // normal mode: arrows, Home, End and paging keep their usual meaning
+        if (/^(Arrow|Page)|^(Home|End|Tab|Shift|Control|Alt|Meta)$/.test(k)) return;
+        if (e.metaKey || (e.altKey && !e.ctrlKey)) return;
+        e.preventDefault();
+        if (e.ctrlKey) {
+          if (k === 'c') status('Type  :qa!  and press <Enter> to abandon all changes and exit Vim');
+          return;
+        }
+        var pos = vimText.selectionStart;
+        var v = vimText.value;
+        var two = pending + k;
+        pending = '';
+        if (two === 'ZZ') { if (v !== saved) write(); close(saved); return; }
+        if (two === 'ZQ') { close(saved); return; }
+        if (two === 'dd') {
+          var s0 = lineStart(pos), e0 = lineEnd(pos);
+          vimText.value = v.slice(0, s0) + v.slice(e0 + 1);
+          caret(s0);
+          return;
+        }
+        if (two === 'gg') { caret(0); return; }
+        switch (k) {
+          case 'i': setMode('insert'); return;
+          case 'a': if (pos < lineEnd(pos)) caret(pos + 1); setMode('insert'); return;
+          case 'I': caret(lineStart(pos)); setMode('insert'); return;
+          case 'A': caret(lineEnd(pos)); setMode('insert'); return;
+          case 'o':
+            var eo = lineEnd(pos);
+            vimText.value = v.slice(0, eo) + '\n' + v.slice(eo);
+            caret(eo + 1); setMode('insert'); return;
+          case 'O':
+            var so = lineStart(pos);
+            vimText.value = v.slice(0, so) + '\n' + v.slice(so);
+            caret(so); setMode('insert'); return;
+          case 'h': if (pos > lineStart(pos)) caret(pos - 1); return;
+          case 'l': if (pos < lineEnd(pos) - 1) caret(pos + 1); return;
+          case 'j': moveLine(1); return;
+          case 'k': moveLine(-1); return;
+          case '0': caret(lineStart(pos)); return;
+          case '$': caret(Math.max(lineStart(pos), lineEnd(pos) - 1)); return;
+          case 'G': caret(lineStart(v.length > 0 && v.charAt(v.length - 1) === '\n' ? v.length - 1 : v.length)); return;
+          case 'x':
+            if (pos < lineEnd(pos)) { vimText.value = v.slice(0, pos) + v.slice(pos + 1); caret(pos); }
+            return;
+          case ':': mode = 'cmd'; cmd = ':'; status(cmd); return;
+          case 'Z': case 'd': case 'g': pending = k; return;
+          case 'Escape': return;
+        }
+      }
+
+      var resolve;
+      var done = new Promise(function (r) { resolve = r; });
+      vim = { abandon: function () { close(undefined); } };
+      out.hidden = true;
+      form.hidden = true;
+      hintsNode.hidden = true;
+      vimNode.hidden = false;
+      vimText.value = text;
+      vimText.addEventListener('keydown', onKey);
+      vimText.addEventListener('beforeinput', onBeforeInput);
+      setMode('normal');
+      status(info);
+      selectView('terminal');
+      vimText.focus();
+      caret(0);
+      return done;
+    }
+
     async function submit(line) {
       if (busy) return;
       busy = true;
@@ -3462,6 +3701,12 @@
       history.push(line);
       histIdx = history.length;
       var r = await sb.run(line);
+      if (r.editor) {
+        var saved = await openVim(r.editor.file, r.editor.text);
+        // Reset closes the editor from underneath us and starts afresh
+        if (saved === undefined) return;
+        r = await sb.finishCommit(saved);
+      }
       if (trimmed === 'clear') { out.innerHTML = ''; }
       else if (trimmed === 'help') { writeText(helpText()); }
       else if (trimmed === 'reset') { await doReset(); }
@@ -3496,12 +3741,16 @@
       return [
         '{w}This sandbox runs real git{/} (isomorphic-git) on a repo that lives only in this page.',
         '',
-        '{y}git{/}    init, status, add, commit -m, log [--oneline], diff,',
+        '{y}git{/}    init, status, add, commit [-m], log [--oneline], diff,',
         '       branch [-d], checkout [-b], switch [-c], merge, config,',
         '       remote add origin, push [-u], pull, fetch',
         '{y}shell{/}  ls, cat, echo "text" > file, echo "text" >> file, touch, rm,',
         '       mkdir, cd, pwd',
         '{y}other{/}  help, clear, reset, undo',
+        '',
+        '{y}git commit{/} without -m opens {y}vim{/}, as real git usually does.',
+        'Press {y}i{/} to type, {y}Esc{/} to stop typing, then {y}:wq{/} and Enter to',
+        'save and commit, or {y}:q!{/} and Enter to give up.',
         '',
         '{y}undo{/} takes back your last state-changing command (a sandbox',
         'nicety, not a git command — real git has no undo).',
@@ -3512,6 +3761,12 @@
     }
 
     async function doReset() {
+      if (vim) {
+        // abandon the commit in progress; the submit waiting on it bows out
+        vim.abandon();
+        busy = false;
+        input.disabled = false;
+      }
       out.innerHTML = '';
       input.value = '';
       // Tasks checked with `ran "..."` read the command history, so it has to

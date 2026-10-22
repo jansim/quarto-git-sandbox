@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `git commit` without `-m` now opens a small vim in the terminal pane, on a
+  commit message template like real git's, instead of refusing. It starts in
+  normal mode; `i`/`a`/`o` and friends start typing, `Esc` stops, and `:wq`,
+  `:x` or `ZZ` save and commit, while `:q!` or `ZQ` abort. `:q` with unsaved
+  changes gives `E37`, and Ctrl+C prints vim's "Type :qa! …" hint. `help`
+  says how to get out. `git commit -m ""` still aborts, and `git commit` with
+  nothing staged now says "nothing to commit" as git does.
 - New `tree-view: true` block option (off by default) that adds a
   **commit tree** pane to the right of the box, drawn in the style of
   [Learn Git Branching](https://learngitbranching.js.org/). Commits are
