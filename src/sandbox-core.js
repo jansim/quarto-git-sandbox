@@ -888,6 +888,8 @@
     async function makeCommit(msg, st) {
       var o = { message: msg, author: { name: author.name, email: author.email } };
       var merge = await mergeState();
+      var root = false;
+      try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) { root = true; }
       // concluding a conflicted merge: the commit gets both parents
       if (merge) o.parent = [await gitlib.resolveRef(opts({ ref: 'HEAD' })), merge.oid];
       var sha = await gitlib.commit(opts(o));
@@ -898,7 +900,7 @@
       }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
-        out: '[' + (branch || 'detached HEAD') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        out: '[' + (branch || 'detached HEAD') + (root ? ' (root-commit)' : '') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
         ok: true
       };
     }
@@ -1024,9 +1026,17 @@
             lines.push('', 'Untracked files:');
             st.untracked.forEach(function (f) { lines.push('  {r}' + f + '{/}'); });
           }
-          if (!st.staged.length && !st.stagedDeleted.length && !st.modified.length && !st.deleted.length &&
-              !st.untracked.length && !st.conflicted.length) {
-            lines.push('', 'nothing to commit, working tree clean');
+          var anyStaged = st.staged.length || st.stagedDeleted.length;
+          if (!anyStaged && !st.conflicted.length) {
+            if (st.modified.length || st.deleted.length) {
+              lines.push('', 'no changes added to commit (use "git add" and/or "git commit -a")');
+            } else if (st.untracked.length) {
+              lines.push('', 'nothing added to commit but untracked files present (use "git add" to track)');
+            } else if (!anyCommit) {
+              lines.push('', 'nothing to commit (create/copy files and use "git add" to track)');
+            } else {
+              lines.push('', 'nothing to commit, working tree clean');
+            }
           }
           return { out: lines.join('\n'), ok: true };
         }
@@ -1116,13 +1126,15 @@
           var outLines = [];
           commits.forEach(function (c) {
             var decor = refsByOid[c.oid]
-              ? ' {y}(' + refsByOid[c.oid].map(function (r) { return r.isHead ? 'HEAD -> ' + r.name : r.name; }).join(', ') + '){/}'
+              ? ' {y}(' + refsByOid[c.oid].slice().sort(function (x, y) { return (y.isHead || y.name === 'HEAD') - (x.isHead || x.name === 'HEAD'); })
+                  .map(function (r) { return r.isHead ? 'HEAD -> ' + r.name : r.name; }).join(', ') + '){/}'
               : '';
             if (oneline) {
               outLines.push('{y}' + c.oid.slice(0, 7) + '{/}' + decor + ' ' + c.commit.message.split('\n')[0]);
             } else {
               outLines.push('{y}commit ' + c.oid + '{/}' + decor);
               outLines.push('Author: ' + c.commit.author.name + ' <' + c.commit.author.email + '>');
+              outLines.push('Date:   ' + gitDate(c.commit.author));
               outLines.push('');
               outLines.push('    ' + c.commit.message.split('\n')[0]);
               outLines.push('');
@@ -1180,7 +1192,9 @@
           var detach = rest.indexOf('--detach') !== -1 || rest.indexOf('-d') !== -1;
           var target2 = all2.indexOf(name) !== -1 && !detach ? null : await resolveCommit(name);
           if (all2.indexOf(name) === -1 && !target2) {
-            return { out: "error: pathspec '" + name + "' did not match any file(s) known to git\nhint: use `git " + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + "` to create it", ok: false };
+            return { out: (sub === 'switch' ? 'fatal: invalid reference: ' + name
+                : "error: pathspec '" + name + "' did not match any file(s) known to git") +
+              '\nhint: use `git ' + sub + ' ' + (sub === 'switch' ? '-c ' : '-b ') + name + '` to create it', ok: false };
           }
           // `git switch` only moves between branches unless told to detach
           if (target2 && sub === 'switch' && !detach) {
@@ -1424,6 +1438,21 @@
         else break;
       }
       return out;
+    }
+
+    // A commit's date as `git log` prints it: "Thu Oct 22 21:36:29 2026 +0000",
+    // in the author's own timezone. isomorphic-git stores the offset the way
+    // Date#getTimezoneOffset does, in minutes and with the sign flipped.
+    function gitDate(who) {
+      var off = -(who.timezoneOffset || 0);
+      var d = new Date((who.timestamp + off * 60) * 1000);
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      var a = Math.abs(off);
+      return days[d.getUTCDay()] + ' ' + months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' ' +
+        pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + ' ' +
+        d.getUTCFullYear() + ' ' + (off < 0 ? '-' : '+') + pad(Math.floor(a / 60)) + pad(a % 60);
     }
 
     function simpleDiff(oldTxt, newTxt) {

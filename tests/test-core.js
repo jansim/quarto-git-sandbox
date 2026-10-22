@@ -107,7 +107,7 @@ async function scenario(name, fn) {
     check('status: staged new file', /Changes to be committed/.test(r.out) && /new file:\s+README\.md/.test(r.out), r.out);
 
     r = await run('git commit -m "First commit"');
-    check('commit ok', r.ok && /\[main [0-9a-f]{7}\] First commit/.test(r.out), r.out);
+    check('commit ok', r.ok && /\[main \(root-commit\) [0-9a-f]{7}\] First commit/.test(r.out), r.out);
     check('commit reports 1 file', /1 file changed/.test(r.out), r.out);
 
     r = await run('git status');
@@ -354,7 +354,7 @@ async function scenario(name, fn) {
 
     const t = (await run('git commit')).editor.text;
     r = await sb.finishCommit('Add a greeting\n\nLonger body.  \n' + t);
-    check('saved message commits', r.ok && /^\[main [0-9a-f]{7}\] Add a greeting\n 1 file changed$/.test(r.out), r.out);
+    check('saved message commits', r.ok && /^\[main \(root-commit\) [0-9a-f]{7}\] Add a greeting\n 1 file changed$/.test(r.out), r.out);
     const log = await sb.git.log({ fs: sb.fs, dir: sb.dir, depth: 1 });
     check('comment lines dropped, body kept', log[0].commit.message.trim() === 'Add a greeting\n\nLonger body.',
       JSON.stringify(log[0].commit.message));

@@ -527,7 +527,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await pending; await sleep(30);
     check(':wq closes vim', vimNode.hidden && !box3.querySelector('.gs-out').hidden && !box3.querySelector('.gs-input-row').hidden);
     check(':wq commits', (await commits()) === 1);
-    check('commit summary printed', /\[main [0-9a-f]{7}\] First line from vim/.test(box3.querySelector('.gs-out').textContent),
+    check('commit summary printed', /\[main \(root-commit\) [0-9a-f]{7}\] First line from vim/.test(box3.querySelector('.gs-out').textContent),
       box3.querySelector('.gs-out').textContent.slice(-200));
     check('vim commit can be undone', box3.querySelector('.gs-undo').disabled === false);
 

@@ -58,11 +58,18 @@ without a toolchain.
 | `tests/test-embed.js` | The same widget on a plain HTML page, without Quarto |
 | `tests/test-rendered.js` | The real rendered `example.qmd`, driven end to end |
 | `tests/test-revealjs.js` | The rendered `example-revealjs.qmd`: boxes on reveal.js slides, one repository shared across two |
+| `tests/test-realgit.js` | The same commands run in the sandbox and through the real `git` binary, with the terminal output compared |
 
 The UI and end-to-end suites use jsdom, so they run in CI without a browser.
 `test-rendered.js` loads the actual rendered HTML, executes its real scripts,
 and completes the exercises by submitting the form. If it passes, the
 lesson works.
+
+`test-realgit.js` needs `git` on your PATH. It normalises hashes, paths and
+spacing, then checks that every line the sandbox prints also appears in real
+git's output, in order (real git may print more), or, for steps marked
+`exact`, that the two match line for line. When you add or change a command,
+add a step there too, so the sandbox keeps saying what git says.
 
 Please add tests with changes. New `when:` conditions in particular should get
 both a true and a false case, plus an error case for bad syntax.
