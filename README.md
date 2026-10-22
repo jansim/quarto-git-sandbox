@@ -264,7 +264,7 @@ Policy. `when:` does not, which is another reason to prefer it.
 
 **Git:** `init`, `status [--ignored]`, `add [-f]`, `rm [--cached] [-r]`,
 `check-ignore`, `commit [-a] [-m]`, `restore [--staged] [--source=<commit>]
-<file>`, `reset [<file>]`, `reset [--soft|--mixed|--hard] [<commit>]`, `log [--oneline]`,
+<file>`, `reset [<file>]`, `reset [--soft|--mixed|--hard] [<commit>]`, `log [--oneline] [--all] [-<n>] [<branch|origin/branch|commit>]`,
 `diff`, `branch [-d] [-a|-r] [<name> [<start>]]`,
 `branch --set-upstream-to=origin/<branch>`, `checkout [-b] <branch>
 [<start>]`, `checkout --track origin/<branch>`, `checkout <commit>`,

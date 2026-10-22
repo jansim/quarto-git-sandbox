@@ -784,13 +784,15 @@
       catch (e) { return null; }
     }
 
-    // the branches `git fetch` has recorded from origin, sorted
+    // the branches `git fetch` has recorded from origin, sorted; not
+    // origin/HEAD, which only points at one of them
     async function trackingNames() {
       var out = [];
       async function walk(sub) {
         var names = [];
         try { names = await fs.promises.readdir(dir + '/.git/refs/remotes/origin' + sub); } catch (e) { return; }
         for (var i = 0; i < names.length; i++) {
+          if (!sub && names[i] === 'HEAD') continue;
           var p = dir + '/.git/refs/remotes/origin' + sub + '/' + names[i];
           if ((await fs.promises.stat(p)).isDirectory()) await walk(sub + '/' + names[i]);
           else out.push((sub + '/' + names[i]).slice(1));
@@ -798,6 +800,16 @@
       }
       await walk('');
       return out.sort();
+    }
+
+    // The branch origin/HEAD points at (the remote's default branch, which
+    // fetch and clone record), or null
+    async function originHead() {
+      try {
+        var t = await fs.promises.readFile(dir + '/.git/refs/remotes/origin/HEAD', 'utf8');
+        var m = /^ref: refs\/remotes\/origin\/(.+)$/.exec(t.trim());
+        return m ? m[1] : null;
+      } catch (e) { return null; }
     }
 
     // A branch's upstream lives in .git/config, as in git, so it survives
@@ -1101,8 +1113,9 @@
 
       // remote-tracking refs (origin/*) appear as grey pills, like real git log
       if (remoteUrl) {
-        var tracked = [];
-        try { tracked = await fs.promises.readdir(dir + '/.git/refs/remotes/origin'); } catch (e) {}
+        // origin/HEAD is left out: a pill saying where the remote's
+        // default branch is would only crowd the graph
+        var tracked = await trackingNames();
         for (var t = 0; t < tracked.length; t++) {
           try {
             var toid = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + tracked[t] }));
@@ -1746,8 +1759,23 @@
 
         case 'log': {
           var oneline = rest.indexOf('--oneline') !== -1;
+          // `git log origin/main`: start from a branch, remote-tracking
+          // branch or commit instead of HEAD
+          var logFrom = null;
+          for (var lf = 0; lf < rest.length; lf++) {
+            if (rest[lf] === '-n') { lf++; continue; }
+            if (rest[lf].charAt(0) === '-') continue;
+            var tn = trackingName(rest[lf]);
+            logFrom = (tn && await trackingOid(tn)) || await resolveCommit(rest[lf]);
+            if (!logFrom) {
+              return { out: "fatal: ambiguous argument '" + rest[lf] + "': unknown revision or path not in the working tree.\n" +
+                "Use '--' to separate paths from revisions, like this:\n" +
+                "'git <command> [<revision>...] -- [<file>...]'", ok: false };
+            }
+            break;
+          }
           var commits;
-          try { commits = await gitlib.log(opts({ depth: 50 })); }
+          try { commits = await gitlib.log(opts({ depth: 50, ref: logFrom || 'HEAD' })); }
           catch (e) { return { out: "fatal: your current branch does not have any commits yet", ok: false }; }
           if (!commits.length) return { out: 'fatal: your current branch does not have any commits yet', ok: false };
           // isomorphic-git's log revisits shared history once per merge parent
@@ -1758,10 +1786,26 @@
             return true;
           });
           var g = await graphModel();
+          // --all: every commit any branch or origin/* reaches, newest first
+          if (rest.indexOf('--all') !== -1) {
+            commits = [];
+            for (var ga = 0; ga < g.commits.length; ga++) commits.push(await gitlib.readCommit(opts({ oid: g.commits[ga].oid })));
+          }
+          // -3, -n 3, --max-count=3
+          var maxCount = null;
+          for (var lr = 0; lr < rest.length; lr++) {
+            if (/^-\d+$/.test(rest[lr])) maxCount = parseInt(rest[lr].slice(1), 10);
+            else if (rest[lr] === '-n') maxCount = parseInt(rest[lr + 1], 10);
+            else if (rest[lr].indexOf('--max-count=') === 0) maxCount = parseInt(rest[lr].slice(12), 10);
+          }
+          if (maxCount !== null && !isNaN(maxCount)) commits = commits.slice(0, maxCount);
           var refsByOid = {};
           g.commits.forEach(function (c) { if (c.refs.length) refsByOid[c.oid] = c.refs; });
           // a detached HEAD points at a commit, not a branch: `(HEAD, main)`
           if (g.detached) refsByOid[g.headOid] = [{ name: 'HEAD' }].concat(refsByOid[g.headOid] || []);
+          var remoteHead = await originHead();
+          var rhOid = remoteHead ? await trackingOid(remoteHead) : null;
+          if (rhOid) refsByOid[rhOid] = (refsByOid[rhOid] || []).concat([{ name: 'origin/HEAD' }]);
           var outLines = [];
           commits.forEach(function (c) {
             var decor = refsByOid[c.oid]
@@ -1845,6 +1889,8 @@
             var listed = listRemote ? [] : all.map(function (b) { return b === cur ? '{g}* ' + b + '{/}' : '  ' + b; });
             if (!listRemote && !cur && all.length) listed.unshift('{g}* (' + (await headLine()) + '){/}');
             if (listAll || listRemote) {
+              var oh = await originHead();
+              if (oh) listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/HEAD{/} -> origin/' + oh);
               (await trackingNames()).forEach(function (t) {
                 listed.push('  {r}' + (listAll ? 'remotes/' : '') + 'origin/' + t + '{/}');
               });
@@ -2140,6 +2186,15 @@
             updated.push(cur
               ? '   ' + cur.slice(0, 7) + '..' + rOid.slice(0, 7) + '  ' + rnames[fi] + '       -> origin/' + rnames[fi]
               : ' * [new branch]      ' + rnames[fi] + '       -> origin/' + rnames[fi]);
+          }
+          // like git 2.48+, the first fetch also records which branch is the
+          // remote's default, as origin/HEAD (silently)
+          if (!(await originHead())) {
+            var rhead = null;
+            try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+            if (rhead && rnames.indexOf(rhead) !== -1) {
+              await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/HEAD', value: 'refs/remotes/origin/' + rhead, symbolic: true, force: true }));
+            }
           }
           if (!updated.length) return { out: '', ok: true };
           return { out: ['From ' + remoteUrl].concat(updated).join('\n'), ok: true };

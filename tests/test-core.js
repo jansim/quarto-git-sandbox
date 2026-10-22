@@ -1178,6 +1178,16 @@ async function scenario(name, fn) {
     await run('git fetch');
     r = await run('git status');
     check('status: behind after fetch', /behind 'origin\/main' by 1 commit, and can be fast-forwarded/.test(r.out), r.out);
+    r = await run('git branch -r');
+    check('fetch records origin/HEAD, as git 2.48+ does', r.out === '  origin/HEAD -> origin/main\n  origin/main', r.out);
+    check('origin/HEAD gets no pill in the graph',
+      !(await sb.graphModel()).commits.some(c => c.refs.some(x => x.name === 'origin/HEAD')));
+    r = await run('git log --oneline origin/main');
+    check('log <ref> starts there', r.out.split('\n').length === 3 && /\(origin\/main, origin\/HEAD\) colleague/.test(r.out), r.out);
+    r = await run('git log --oneline --all -2');
+    check('log --all -2', r.out.split('\n').length === 2 && /colleague/.test(r.out), r.out);
+    r = await run('git log nope');
+    check('log of an unknown ref', !r.ok && /ambiguous argument 'nope'/.test(r.out), r.out);
     r = await run('git merge origin/main');
     check('merge origin/main fast-forwards', r.ok && /Fast-forward/.test(r.out), r.out);
     check('merge origin/main is recorded', (await sb.graphModel()).merges.some(m => m.from === 'origin/main' && m.into === 'main'));
