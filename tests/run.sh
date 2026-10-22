@@ -48,7 +48,8 @@ step "test-revealjs (boxes on slides)"
 node tests/test-revealjs.js example-revealjs.html 2>/dev/null | tail -8 || fail=1
 
 step "test-realgit (output compared with real git)"
-node tests/test-realgit.js | tail -30 || fail=1
+# no tail: on failure every mismatch should reach the CI log
+node tests/test-realgit.js || fail=1
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

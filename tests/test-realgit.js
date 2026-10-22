@@ -10,6 +10,9 @@
    git prints more hints and statistics than the sandbox does, and that is
    fine; printing something real git would not is not. Steps marked `exact`
    must match line for line. Both sides must also agree on success.
+   A step with `minGit` is only compared when the installed git is at
+   least that version, for output that changed between git releases; CI
+   runs a current git, so there every step counts.
 
    Needs `git` on PATH. Run: node tests/test-realgit.js */
 const { spawnSync } = require('child_process');
@@ -58,6 +61,17 @@ function realGit(line, cwd, env) {
   return { out: r.stdout, ok: r.status === 0 };
 }
 
+function versionOf(text) {
+  const m = /(\d+)\.(\d+)/.exec(text || '');
+  return m ? [Number(m[1]), Number(m[2])] : [0, 0];
+}
+const GIT_VERSION = versionOf(spawnSync('git', ['--version'], { encoding: 'utf8' }).stdout);
+function gitAtLeast(v) {
+  const [maj, min] = versionOf(v);
+  return GIT_VERSION[0] > maj || (GIT_VERSION[0] === maj && GIT_VERSION[1] >= min);
+}
+let skipped = 0;
+
 async function scenario(name, steps) {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gs-real-')));
   const work = path.join(tmp, 'project');
@@ -93,6 +107,7 @@ async function scenario(name, steps) {
         if (!real.ok) throw new Error('setup failed in git: ' + s.cmd + '\n' + real.out);
         continue;
       }
+      if (s.minGit && !gitAtLeast(s.minGit)) { skipped++; continue; }
       const label = name + ' :: ' + s.cmd;
       const a = normalise(mine.out, reps).filter((l) => !(s.ignore || []).some((re) => re.test(l)));
       const b = normalise(real.out, reps);
@@ -286,7 +301,8 @@ async function scenario(name, steps) {
   ]);
 
   console.log('\n===== real git comparison =====');
-  console.log('passed: ' + pass + '   failed: ' + fail);
+  console.log('passed: ' + pass + '   failed: ' + fail +
+    (skipped ? '   (' + skipped + ' steps skipped: they need a newer git than ' + GIT_VERSION.join('.') + ')' : ''));
   if (fail) {
     console.log('\nFAILURES:');
     failures.forEach((f) => console.log('  ✗ ' + f));
