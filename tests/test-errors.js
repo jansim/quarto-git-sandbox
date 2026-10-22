@@ -38,9 +38,11 @@ function render(fixture) {
   {
     const { html } = render('bad-config.qmd');
 
-    // seven bad blocks, and the duplicate-id pair which should still render
+    // eight bad blocks, and the duplicate-id pair which should still render
     const errors = (html.match(/gs-config-error/g) || []).length;
-    check('six config errors reported', errors === 6, 'found ' + errors);
+    check('seven config errors reported', errors === 7, 'found ' + errors);
+    check('says tree-view must be true or false',
+      /&quot;tree-view&quot; must be true or false, got &quot;sometimes&quot;|"tree-view" must be true or false, got "sometimes"/.test(html));
 
     check('names the unknown option', /unknown option &quot;tittle&quot;/.test(html) ||
       /unknown option "tittle"/.test(html), 'no mention of tittle');

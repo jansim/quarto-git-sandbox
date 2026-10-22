@@ -112,7 +112,7 @@ end
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
-  donenote = true
+  donenote = true, ['tree-view'] = true, ['tree_view'] = true
 }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
 
@@ -136,6 +136,17 @@ local function build_config(cfg, problems)
   for _, h in ipairs(as_array(cfg.hints)) do out.hints[#out.hints + 1] = tostring(h) end
 
   if cfg.seed ~= nil and cfg.seed ~= '' then out.seed = tostring(cfg.seed) end
+
+  -- yaml.lua leaves scalars as strings, so spell out what counts as on
+  local tree = cfg['tree-view']
+  if tree == nil then tree = cfg['tree_view'] end
+  if tree ~= nil and tree ~= '' then
+    local v = tostring(tree):lower()
+    if v == 'true' or v == 'yes' or v == 'on' then out.treeView = true
+    elseif not (v == 'false' or v == 'no' or v == 'off') then
+      problems[#problems + 1] = ('"tree-view" must be true or false, got "%s"'):format(tostring(tree))
+    end
+  end
 
   local note = cfg['done-note'] or cfg['done_note'] or cfg.donenote
   if note and note ~= '' then out.doneNote = markdown_inline(note) end
@@ -238,9 +249,12 @@ function CodeBlock(el)
   add_dependencies()
 
   local json = quarto.json.encode(config)
+  -- The tree pane needs room beside the box, so let the exercise run on
+  -- into the right margin, as Quarto's own wide figures do.
+  local classes = config.treeView and 'git-sandbox column-page-right' or 'git-sandbox'
   return pandoc.Blocks({
     pandoc.RawBlock('html',
-      '<div class="git-sandbox" id="' .. id .. '">' ..
+      '<div class="' .. classes .. '" id="' .. id .. '">' ..
       '<div class="gs-loading">Loading the Git sandbox…</div></div>'),
     pandoc.RawBlock('html',
       '<script>(window.__gsPending=window.__gsPending||[]).push(["#' .. id .. '",' .. json .. ']);</script>')

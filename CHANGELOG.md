@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- New `tree-view: true` block option (off by default) that adds a
+  **commit tree** pane to the right of the box, drawn in the style of
+  [Learn Git Branching](https://learngitbranching.js.org/). Commits are
+  named `C0`, `C1`, … in the order they were made, each with its short
+  hash; the first commit is at the top; branches are labels pointing at
+  their tips, with `*` on the checked-out one. Changes animate: new commits
+  grow out of their parent, branch labels glide to their new tips, and
+  commits taken back by `undo` shrink away. The exercise widens into the
+  right margin in Quarto, and the pane drops below the box when the box is
+  narrow.
+- The History graph now matches the commit tree's look: commits are
+  outlined in their lane colour over a pale tint of it, and branch labels
+  are tinted boxes outlined in the branch colour (bold for `HEAD`, dashed
+  grey for remote-tracking refs) instead of solid pills.
 - New `cd` command for moving between folders inside the project. The prompt
   shows the current folder, relative paths in shell and git commands resolve
   from it, and `git add .` stages only that folder and below. `cd`, `cd ~`

@@ -740,14 +740,81 @@
 .gs-sha  { font-family: var(--gs-mono); font-size: 12px; fill: var(--gs-gray-body); }
 .gs-msg  { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray); }
 .gs-ref  { font-family: var(--gs-mono); font-size: 11px; fill: var(--gs-blue-500); }
-.gs-ref-head { fill: #FFFFFF; }
-.gs-ref-remote { fill: var(--gs-gray-body); }
+.gs-ref-head { font-weight: 700; fill: var(--gs-blue-600); }
+.gs-ref-remote { fill: var(--gs-gray); }
 
 /* remote (mock origin) — its own tab, so no divider needed */
 
 .gs-remote-sync { font-size: 12px; color: var(--gs-gray-body); margin-top: 2px; }
 .gs-remote-sync code { font-family: var(--gs-mono); font-size: 11px; }
 .gs-empty-text { font-family: var(--gs-font); font-size: 13px; fill: var(--gs-gray-body); }
+
+/* ----------------------------- commit tree ---------------------------- */
+
+/* `tree-view: true` adds a learngitbranching-style pane down the right of
+   the whole box. Its contents are positioned out of flow, so the box keeps
+   the height its main column gives it and a tall tree scrolls instead. */
+.gs.gs-has-tree {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: auto 1fr;
+}
+.gs-has-tree > .gs-head { grid-column: 1; grid-row: 1; }
+.gs-has-tree > .gs-body { grid-column: 1; grid-row: 2; }
+.gs-tree {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--gs-blue-50);
+  background: #FFFFFF;
+}
+.gs-tree-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gs-tree-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  background: var(--gs-off-white);
+  border-bottom: 1px solid var(--gs-blue-50);
+}
+.gs-tree-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.gs-tree-svg { display: block; }
+
+.gs-tree-c   { font-family: var(--gs-mono); font-size: 13px; font-weight: 700; fill: var(--gs-blue-600); }
+/* a white halo keeps the hash legible where an edge runs under it */
+.gs-tree-sha {
+  font-family: var(--gs-mono); font-size: 10.5px; fill: var(--gs-gray-body);
+  paint-order: stroke; stroke: #FFFFFF; stroke-width: 4px; stroke-linejoin: round;
+}
+.gs-tree-edge { stroke-width: 2.5; stroke-linecap: round; }
+.gs-tree-ref-text { font-family: var(--gs-mono); font-size: 12px; fill: var(--gs-blue-500); }
+.gs-tree-ref-text.is-head { font-weight: 700; fill: var(--gs-blue-600); }
+.gs-tree-ref-text.is-remote { fill: var(--gs-gray); }
+.gs-tree-ref-text.is-detached { fill: #FFFFFF; }
+
+/* Too narrow to share: the pane drops below the box (toggled from JS on
+   the box's own width, which a viewport media query cannot see). */
+.gs.gs-has-tree.gs-tree-below { grid-template-columns: minmax(0, 1fr); }
+.gs-tree-below > .gs-tree {
+  grid-column: 1;
+  grid-row: 3;
+  border-left: 0;
+  border-top: 1px solid var(--gs-blue-50);
+}
+.gs-tree-below .gs-tree-inner { position: static; }
+.gs-tree-below .gs-tree-scroll { height: 320px; flex: 0 0 auto; }
 
 /* ------------------------------- tasks -------------------------------- */
 
@@ -853,6 +920,8 @@
   /* On paper there are no tabs to click, so print every panel. */
   .gs-panel[hidden] { display: block; }
   .gs-diff, .gs-graph-scroll { max-height: none; overflow: visible; }
+  .gs-tree-inner { position: static; }
+  .gs-tree-scroll { overflow: visible; }
   .gs::after {
     content: "This exercise is interactive. Open the lesson in a browser to use it.";
     display: block;

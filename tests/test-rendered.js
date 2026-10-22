@@ -1,5 +1,5 @@
 /* End-to-end: load the RENDERED example.html (the author's guide) in jsdom,
-   execute its real inlined scripts, and drive all five demo boxes to
+   execute its real inlined scripts, and drive all six demo boxes to
    completion.
    Run: node test-rendered.js ../example.html */
 const fs = require('fs');
@@ -87,8 +87,8 @@ function outText(win, hostId) {
 
   // whichever ids the page used (hand-written qmd or the extension)
   const IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
-  check('page has five demo boxes', IDS.length === 5, JSON.stringify(IDS));
-  const [ID1, ID2, ID3, ID4, ID5] = IDS;
+  check('page has six demo boxes', IDS.length === 6, JSON.stringify(IDS));
+  const [ID1, ID2, ID3, ID4, ID5, ID6] = IDS;
 
   for (const id of IDS) {
     await waitFor(() => win.document.querySelector('#' + id + ' .gs-input'), 15000, id + ' to mount');
@@ -264,6 +264,33 @@ function outText(win, hostId) {
     check('remote-flow graphs agree', remoteCircles() === 3 && localCircles() === 3,
       'remote=' + remoteCircles() + ' local=' + localCircles());
     check('remote-flow sync line says in sync', /in sync/.test(syncText()), syncText());
+  }
+
+  /* ---------------- box 6: the commit tree (tree-view) ---------------- */
+  {
+    const id = ID6;
+    const type = typer(win, id);
+    const host = win.document.querySelector('#' + id);
+    const names = () => Array.from(host.querySelectorAll('.gs-tree-node .gs-tree-c')).map(n => n.textContent).sort().join(' ');
+    const label = () => host.querySelector('.gs-tree-svg').getAttribute('aria-label');
+
+    check('tree-flow widens into the right margin', host.classList.contains('column-page-right'));
+    check('tree-flow has the commit tree pane', !!host.querySelector('.gs-tree .gs-tree-svg'));
+    check('other boxes have no commit tree', win.document.querySelectorAll('.gs-tree').length === 1);
+    check('tree-flow seed drawn as C0 and C1', names() === 'C0 C1', names());
+
+    await type('git checkout -b report');
+    check('tree-flow star moves to report', /report\* at C1/.test(label()) && /main at C1/.test(label()), label());
+    check('tree-flow task 1 ticks', tasksState(win, id).done >= 1, tasksState(win, id).text);
+    await type('echo "# Q3" > report.md');
+    await type('git add .');
+    await type('git commit -m "Start the report"');
+    check('tree-flow new commit is C2', names() === 'C0 C1 C2' && /report\* at C2/.test(label()), names() + ' :: ' + label());
+    await type('git checkout main');
+    await type('git merge report');
+    const st = tasksState(win, id);
+    check('tree-flow all 3 tasks complete', st.done === 3, st.text);
+    check('tree-flow fast-forward moves main to C2', /main\* at C2/.test(label()), label());
   }
 
   /* ---------------- isolation between boxes ---------------- */
