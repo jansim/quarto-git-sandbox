@@ -251,7 +251,7 @@ Policy. `when:` does not, which is another reason to prefer it.
 
 ## What the sandbox supports
 
-**Git:** `init`, `status`, `add`, `rm`, `commit -m`, `log [--oneline]`,
+**Git:** `init`, `status`, `add`, `rm`, `commit [-m]`, `log [--oneline]`,
 `diff`, `branch [-d]`, `checkout [-b]`, `switch [-c]`, `merge`,
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
 `fetch`, `pull`, `config user.name|user.email`
@@ -272,6 +272,15 @@ Push and fetch move objects and refs between the two repositories with real
 semantics: the first push needs `-u origin <branch>`, `origin/*` tracking
 refs appear in the local graph after a fetch, and a non-fast-forward push is
 rejected with `(fetch first)`.
+
+**vim:** `git commit` without `-m` does what real git usually does: it
+drops you into vim on the commit message, in normal mode, where typing does
+nothing useful. That is deliberate, so learners meet the famous "how do I
+get out of vim" moment somewhere safe. Press `i` to type, `Esc` to stop,
+then `:wq` (or `ZZ`) to save and commit, or `:q!` (or `ZQ`) to give up,
+which aborts the commit. Lines starting with `#` are dropped, as in git.
+`:q` refuses to leave unsaved changes, and Ctrl+C prints vim's own hint.
+Seeds must still use `-m`: a seed that opens vim is reported as an error.
 
 **Editor:** tabs in the exercise's title bar switch between the
 **Terminal** and an **Editor** tab. The editor's file browser is a

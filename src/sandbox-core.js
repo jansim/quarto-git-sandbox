@@ -636,6 +636,52 @@
       return res;
     }
 
+    /* ---------------------------- commits --------------------------- */
+
+    async function makeCommit(msg, st) {
+      var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
+      var branch = await currentBranch();
+      var nFiles = st.staged.length + st.stagedDeleted.length;
+      return {
+        out: '[' + branch + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        ok: true
+      };
+    }
+
+    // what `git commit` without -m puts in the editor, as real git does
+    async function commitTemplate(st) {
+      var lines = [
+        '',
+        '# Please enter the commit message for your changes. Lines starting',
+        "# with '#' will be ignored, and an empty message aborts the commit.",
+        '#',
+        '# On branch ' + (await currentBranch()),
+        '#',
+        '# Changes to be committed:'
+      ];
+      st.staged.forEach(function (s) { lines.push('#\t' + s.kind + ':   ' + s.file); });
+      st.stagedDeleted.forEach(function (f) { lines.push('#\tdeleted:    ' + f); });
+      lines.push('#');
+      return lines.join('\n') + '\n';
+    }
+
+    // Second half of an editor commit: `text` is the saved COMMIT_EDITMSG,
+    // or null if the editor quit without saving.
+    async function finishCommit(text) {
+      var msg = String(text == null ? '' : text).split('\n')
+        .filter(function (l) { return l.charAt(0) !== '#'; })
+        .map(function (l) { return l.replace(/\s+$/, ''); })
+        .join('\n').replace(/^\n+|\n+$/g, '');
+      if (!msg) return { out: 'Aborting commit due to empty commit message.', ok: false, kind: 'git' };
+      var st = await statusModel();
+      if (!st.staged.length && !st.stagedDeleted.length) {
+        return { out: 'nothing to commit, working tree clean', ok: false, kind: 'git' };
+      }
+      var r = await makeCommit(msg, st);
+      r.kind = 'git';
+      return r;
+    }
+
     /* -------------------------- git commands ----------------------- */
 
     async function gitCommand(args) {
@@ -734,10 +780,10 @@
         case 'commit': {
           var msg = null;
           for (var k = 0; k < rest.length; k++) {
-            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1]; break; }
+            if (rest[k] === '-m' || rest[k] === '--message') { msg = rest[k + 1] || ''; break; }
             if (rest[k].indexOf('-m') === 0 && rest[k].length > 2) { msg = rest[k].slice(2); break; }
           }
-          if (!msg) return { out: 'Aborting commit due to empty commit message.\nhint: use  git commit -m "your message"', ok: false };
+          if (msg === '') return { out: 'Aborting commit due to empty commit message.', ok: false };
           var st2 = await statusModel();
           if (!st2.staged.length && !st2.stagedDeleted.length) {
             var br2 = await currentBranch();
@@ -745,13 +791,14 @@
               ? '\nUse `git add <file>` to stage changes first.' : '';
             return { out: 'On branch ' + br2 + '\nnothing to commit, working tree clean' + extra, ok: false };
           }
-          var sha = await gitlib.commit(opts({ message: msg, author: { name: author.name, email: author.email } }));
-          var branch3 = await currentBranch();
-          var nFiles = st2.staged.length + st2.stagedDeleted.length;
-          return {
-            out: '[' + branch3 + ' ' + sha.slice(0, 7) + '] ' + msg + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
-            ok: true
-          };
+          if (msg === null) {
+            // Without -m, real git opens an editor (usually vim) on
+            // COMMIT_EDITMSG. The engine has no screen, so it hands the
+            // template back; the UI runs the editor and passes what was
+            // saved to finishCommit. Nothing has changed yet.
+            return { out: '', ok: true, editor: { file: '.git/COMMIT_EDITMSG', text: await commitTemplate(st2) } };
+          }
+          return makeCommit(msg, st2);
         }
 
         case 'log': {
@@ -1314,6 +1361,7 @@
 
     var api = {
       run: run,
+      finishCommit: finishCommit,
       reset: reset,
       snapshot: snapshot,
       restore: restore,

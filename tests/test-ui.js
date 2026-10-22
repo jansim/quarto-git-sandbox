@@ -482,6 +482,93 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   click(host.querySelector('.gs-wtab[data-view="terminal"]'));
   check('clicking Terminal swaps back', view() === 'terminal' && pane('editor').hidden === true);
 
+  /* ---------------- vim: git commit without -m ---------------- */
+  {
+    const box3 = win.document.createElement('div');
+    box3.id = 'vimbox';
+    win.document.body.appendChild(box3);
+    const v = win.GitSandboxUI.mount('#vimbox', { seed: 'git init\necho a > a.txt\ngit add .' });
+    await v.ready;
+    const vimNode = box3.querySelector('.gs-vim');
+    const text = box3.querySelector('.gs-vim-text');
+    const status = () => box3.querySelector('.gs-vim-status').textContent;
+    const key = (k, opts) => {
+      const e = new win.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, opts || {}));
+      text.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    const keys = (s) => s.split('').forEach((k) => key(k));
+    const commits = async () => (await v.sandbox.graphModel()).commits.length;
+
+    let pending = v.run('git commit');
+    await sleep(60);
+    check('vim opens over the terminal', !vimNode.hidden && box3.querySelector('.gs-out').hidden &&
+      box3.querySelector('.gs-input-row').hidden);
+    check('vim shows the template', /# Please enter the commit message/.test(text.value), text.value);
+    check('vim names the file', /"\.git\/COMMIT_EDITMSG" \d+L, \d+B/.test(status()), status());
+    check('normal mode swallows typing', key('q') === true && text.value.indexOf('q') !== 0);
+    key('c', { ctrlKey: true });
+    check('ctrl-c says how to really quit', /:qa!/.test(status()), status());
+    keys(':q');
+    check('command line echoes', status() === ':q', status());
+    key('Escape');
+    check('Esc cancels the command line', status() === '' && !vimNode.hidden, status());
+    keys(':wat'); key('Enter');
+    check('unknown command is E492', /E492: Not an editor command: wat/.test(status()), status());
+
+    key('i');
+    check('i enters insert mode', status() === '-- INSERT --' && vimNode.classList.contains('is-insert'), status());
+    check('insert mode lets keys through', key('x') === false);
+    text.value = 'First line from vim' + text.value;
+    key('Escape');
+    check('Esc leaves insert mode', status() === '' && !vimNode.classList.contains('is-insert'), status());
+    keys(':q'); key('Enter');
+    check(':q with changes is E37', /E37: No write since last change/.test(status()) && !vimNode.hidden, status());
+    keys(':wq'); key('Enter');
+    await pending; await sleep(30);
+    check(':wq closes vim', vimNode.hidden && !box3.querySelector('.gs-out').hidden && !box3.querySelector('.gs-input-row').hidden);
+    check(':wq commits', (await commits()) === 1);
+    check('commit summary printed', /\[main [0-9a-f]{7}\] First line from vim/.test(box3.querySelector('.gs-out').textContent),
+      box3.querySelector('.gs-out').textContent.slice(-200));
+    check('vim commit can be undone', box3.querySelector('.gs-undo').disabled === false);
+
+    await v.run('echo b > b.txt'); await v.run('git add .');
+    pending = v.run('git commit');
+    await sleep(60);
+    key('o');
+    text.value = text.value + 'never saved';
+    key('Escape');
+    keys(':q!'); key('Enter');
+    await pending; await sleep(30);
+    check(':q! aborts the commit', (await commits()) === 1 &&
+      /Aborting commit due to empty commit message/.test(box3.querySelector('.gs-out').textContent));
+
+    pending = v.run('git commit');
+    await sleep(60);
+    key('i'); text.value = 'Via ZZ\n' + text.value; key('Escape');
+    keys('ZZ');
+    await pending; await sleep(30);
+    check('ZZ saves and commits', (await commits()) === 2);
+
+    await v.run('echo c > c.txt'); await v.run('git add .');
+    pending = v.run('git commit');
+    await sleep(60);
+    box3.querySelector('.gs-reset').dispatchEvent(new win.Event('click'));
+    await pending; await sleep(200);
+    check('reset closes vim', vimNode.hidden && !box3.querySelector('.gs-input-row').hidden);
+    check('input usable after reset', box3.querySelector('.gs-input').disabled === false);
+    await v.run('echo d > d.txt');
+    check('commands run after reset', /d\.txt/.test(box3.querySelector('.gs-stages').textContent));
+
+    const bad = win.document.createElement('div');
+    bad.id = 'vimseed';
+    win.document.body.appendChild(bad);
+    const b = win.GitSandboxUI.mount('#vimseed', { seed: 'git init\necho a > a.txt\ngit add .\ngit commit' });
+    await b.ready;
+    check('a seed that opens vim fails loudly', /opened an editor/.test(bad.querySelector('.gs-out').textContent),
+      bad.querySelector('.gs-out').textContent);
+  }
+
   /* ---------------- commit tree (tree-view option) ---------------- */
   check('no commit tree unless asked for', !host.querySelector('.gs-tree') && !host.classList.contains('gs-has-tree'));
   {

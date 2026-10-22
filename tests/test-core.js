@@ -260,13 +260,39 @@ async function scenario(name, fn) {
     r = await run('cat nope.txt');
     check('cat missing', !r.ok && /No such file/.test(r.out), r.out);
     r = await run('git commit');
-    check('commit without -m', !r.ok && /empty commit message/.test(r.out), r.out);
+    check('commit without -m and nothing staged', !r.ok && /nothing to commit/.test(r.out) && !r.editor, r.out);
+    r = await run('git commit -m ""');
+    check('commit with an empty -m', !r.ok && /empty commit message/.test(r.out), r.out);
     r = await run('git log');
     check('log with no commits', !r.ok && /does not have any commits/.test(r.out), r.out);
     r = await run('git bogus');
     check('unsupported subcommand', !r.ok && /not supported in this sandbox/.test(r.out), r.out);
     r = await run('');
     check('empty line is a no-op', r.ok && r.out === '', r.out);
+  });
+
+  /* ---------------- 9b. commit without -m opens an editor ---------------- */
+  await scenario('commit editor', async ({ sb, run, check }) => {
+    await run('git init');
+    await run('echo hi > a.txt');
+    await run('git add a.txt');
+    let r = await run('git commit');
+    check('hands back an editor', r.ok && r.editor && r.editor.file === '.git/COMMIT_EDITMSG', JSON.stringify(r));
+    check('template lists the staged file', /#\tnew file:   a\.txt/.test(r.editor.text), r.editor.text);
+    check('template names the branch', /# On branch main/.test(r.editor.text), r.editor.text);
+    check('nothing committed yet', (await sb.graphModel()).commits.length === 0);
+
+    r = await sb.finishCommit(r.editor.text);
+    check('untouched template aborts', !r.ok && /empty commit message/.test(r.out), r.out);
+    r = await sb.finishCommit(null);
+    check('quitting without saving aborts', !r.ok && /empty commit message/.test(r.out), r.out);
+
+    const t = (await run('git commit')).editor.text;
+    r = await sb.finishCommit('Add a greeting\n\nLonger body.  \n' + t);
+    check('saved message commits', r.ok && /^\[main [0-9a-f]{7}\] Add a greeting\n 1 file changed$/.test(r.out), r.out);
+    const log = await sb.git.log({ fs: sb.fs, dir: sb.dir, depth: 1 });
+    check('comment lines dropped, body kept', log[0].commit.message.trim() === 'Add a greeting\n\nLonger body.',
+      JSON.stringify(log[0].commit.message));
   });
 
   /* ---------------- 10. topological ordering with same-second commits ---------------- */
