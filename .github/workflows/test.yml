@@ -2,7 +2,6 @@ name: test
 
 on:
   push:
-    branches: ['**']
   pull_request:
 
 # Push and PR runs for the same branch share a group, so one cancels the other.
