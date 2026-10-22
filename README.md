@@ -152,6 +152,11 @@ seed: |
   rewind 1
 ```
 
+In the Remote panel, the local half draws remote-tracking refs such as
+`origin/main` dashed: they are your repository's record of where the
+remote's branches were at the last `push`, `fetch` or `pull`. The remote half
+draws the remote's branches as they are now, with a solid outline.
+
 Pushing when the remote is ahead is rejected with git's real `(fetch first)`
 message, so the push → rejected → pull → push loop can be taught honestly.
 
