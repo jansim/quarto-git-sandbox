@@ -1082,6 +1082,70 @@ async function scenario(name, fn) {
     check('reset --hard ends the merge', r.ok && !(await sb.mergeState()) && (await sb.readFile('f.txt')) === 'ours\n');
   });
 
+  /* ---------------- -h, config, redirection ---------------- */
+  await scenario('help and config', async ({ sb, run, check }) => {
+    let r = await run('git init -h');
+    check('init -h works before git init', r.ok && /^usage: git init /.test(r.out) && /--initial-branch/.test(r.out), r.out);
+    r = await run('git stash -h');
+    check('stash -h shows the usage though stash is not supported', r.ok && /^usage: git stash list/.test(r.out), r.out);
+    r = await run('git help commit');
+    check('git help <command>', r.ok && /^usage: git commit /.test(r.out), r.out);
+    r = await run('git commit -m "-h"');
+    check('-h as a message is not help', !/usage:/.test(r.out), r.out);
+
+    // the slides' "command library" exercise
+    await run('git init');
+    r = await run('git init -h > library.txt');
+    check('-h output can go into a file', r.ok && r.out === '' && /^usage: git init /.test(await sb.readFile('library.txt')), await sb.readFile('library.txt'));
+    r = await run('git commit -h >> library.txt');
+    const lib = await sb.readFile('library.txt');
+    check('>> appends', /usage: git init[\s\S]*usage: git commit/.test(lib), lib);
+    check('no colour codes in files', !/\{[gryb\/w]\}/.test(lib));
+    r = await run('git status > status.txt');
+    check('any command output can be redirected', /^On branch main/.test(await sb.readFile('status.txt')));
+    r = await run('git frobnicate > err.txt');
+    check('errors still show on screen', !r.ok && /not supported/.test(r.out), r.out);
+    r = await run('ls > nope/listing.txt');
+    check('redirect into a missing folder fails', !r.ok && /No such file/.test(r.out), r.out);
+
+    r = await run('git config --global user.name "Ada Lovelace"');
+    check('config --global user.name', r.ok && (await run('git config user.name')).out === 'Ada Lovelace');
+    await run('git config --global user.email ada@example.com');
+    await run('git add library.txt');
+    await run('git commit -m "Library"');
+    check('commits use the configured name', (await sb.graphModel()).commits[0].author === 'Ada Lovelace');
+    r = await run('git config pull.rebase false');
+    check('a local key is stored', r.ok && (await run('git config pull.rebase')).out === 'false');
+    check('...in .git/config', /rebase = false/.test(await sb.fs.promises.readFile(sb.dir + '/.git/config', 'utf8')));
+    r = await run('git config --global core.editor "code --wait"');
+    check('a global key with spaces', r.ok && (await run('git config core.editor')).out === 'code --wait');
+    r = await run('git config --list');
+    check('config --list', /user\.name=Ada Lovelace/.test(r.out) && /core\.editor=code --wait/.test(r.out) && /pull\.rebase=false/.test(r.out), r.out);
+    r = await run('git config no.such.key');
+    check('a missing key fails quietly', !r.ok && r.out === '', r.out);
+    r = await run('git config nosection');
+    check('a key needs a section', !r.ok && /key does not contain a section/.test(r.out), r.out);
+    r = await run('git config --unset pull.rebase');
+    check('--unset', r.ok && !(await run('git config pull.rebase')).ok);
+
+    const snap = sb.snapshot();
+    await run('git config --global init.defaultBranch trunk');
+    check('changing a global key counts as a change', sb.changedSince(snap));
+    sb.restore(snap);
+    check('undo restores global config', !(await run('git config --global init.defaultBranch')).ok);
+  });
+
+  await scenario('init.defaultBranch', async ({ sb, run, check }) => {
+    await run('git config --global init.defaultBranch trunk');
+    await run('git init');
+    check('init uses init.defaultBranch', (await run('git status')).out.indexOf('On branch trunk') === 0);
+  });
+
+  await scenario('init -b', async ({ sb, run, check }) => {
+    const r = await run('git init -b develop');
+    check('init -b names the first branch', r.ok && (await run('git status')).out.indexOf('On branch develop') === 0);
+  });
+
   /* ---------------- report ---------------- */
   console.log('\n===== TRANSCRIPT: core happy path =====');
   console.log(mainLog.join('\n'));

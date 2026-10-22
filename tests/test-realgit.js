@@ -9,7 +9,9 @@
    git's output, in the same order, possibly as part of a longer line. Real
    git prints more hints and statistics than the sandbox does, and that is
    fine; printing something real git would not is not. Steps marked `exact`
-   must match line for line. Both sides must also agree on success.
+   must match line for line, and `firstLine` steps only on their first
+   line (for `-h`, whose option lists change between git versions). Both
+   sides must also agree on success, unless a step says otherwise with `ok`.
 
    Needs `git` on PATH. Run: node tests/test-realgit.js */
 const { spawnSync } = require('child_process');
@@ -99,7 +101,9 @@ async function scenario(name, steps) {
       const detail = '     sandbox:\n       ' + a.join('\n       ') + '\n     git:\n       ' + b.join('\n       ');
       check(label + ' (success)', mine.ok === (s.ok === undefined ? real.ok : s.ok),
         '     sandbox ok=' + mine.ok + ', git ok=' + real.ok + '\n' + detail);
-      if (s.exact) {
+      if (s.firstLine) {
+        check(label + ' (first line)', a[0] === b[0], detail);
+      } else if (s.exact) {
         check(label + ' (exact)', a.join('\n') === b.join('\n'), detail);
       } else {
         const missing = subsetInOrder(a, b);
@@ -283,6 +287,34 @@ async function scenario(name, steps) {
     { cmd: 'git log --oneline', exact: true },
     { cmd: 'git reset --hard example.txt', exact: true },
     { cmd: 'git reset nope.txt', exact: true }
+  ]);
+
+  await scenario('help, config and redirection', [
+    // git exits 129 after -h; the sandbox treats it as success
+    ...['init', 'status', 'add', 'commit', 'rm', 'restore', 'reset', 'log', 'branch', 'checkout',
+      'switch', 'merge', 'remote', 'push', 'pull', 'fetch', 'clone', 'config', 'stash', 'check-ignore']
+      .map((c) => ({ cmd: 'git ' + c + ' -h', firstLine: true, ok: true })),
+    { cmd: 'git config pull.rebase false', exact: true },
+    { cmd: 'git config --global user.name "Ada Lovelace"', exact: true },
+    { cmd: 'git config user.name', exact: true },
+    { cmd: 'git config --global init.defaultBranch trunk', exact: true },
+    { cmd: 'git config --global core.editor "code --wait"', exact: true },
+    { cmd: 'git config --global core.editor', exact: true },
+    { cmd: 'git config nosection', exact: true },
+    'git init',
+    // outside a repository, git diff -h describes --no-index instead
+    { cmd: 'git diff -h', firstLine: true, ok: true },
+    { cmd: 'git status', exact: true },
+    { cmd: 'git config pull.rebase false', exact: true },
+    { cmd: 'git config pull.rebase', exact: true },
+    { cmd: 'git config no.such.key', exact: true },
+    { cmd: 'echo a > a.txt && git add . && git commit -q -m one', setup: true },
+    { cmd: 'git log --oneline > log.txt', exact: true },
+    { cmd: 'cat log.txt', exact: true },
+    { cmd: 'git status >> log.txt', exact: true },
+    { cmd: 'cat log.txt', exact: true },
+    { cmd: 'git nope > out.txt', ok: false, ignore: [/./] },
+    { cmd: 'git init -h > library.txt', ok: true }
   ]);
 
   console.log('\n===== real git comparison =====');

@@ -268,7 +268,8 @@ Policy. `when:` does not, which is another reason to prefer it.
 `diff`, `branch [-d]`, `checkout [-b] <branch>`, `checkout <commit>`,
 `switch [-c] <branch>`, `switch --detach <commit>`, `merge`,
 `remote [-v] | remote add origin <url>`, `push [-u origin <branch>]`,
-`fetch`, `pull`, `config user.name|user.email`
+`fetch`, `pull`, `config [--global] <key> [<value>]` (also `--list` and
+`--unset`), and `-h` on any of them, as in `git commit -h`
 
 **Shell:** `ls [-a] [dir]`, `cat`, `echo "…" > file`, `echo "…" >> file`,
 `touch`, `rm`, `mkdir`, `cd`, `pwd`, `whoami`, plus `help`, `clear`, `reset`,
@@ -282,6 +283,15 @@ stay tracked until `git rm --cached <file>`, which takes them out of git but
 leaves them on disk. In the panels an ignored file shows as a grey
 "ignored" chip, and with a dim `I` in the editor's file browser. There is no
 global `.gitignore`: the sandbox has no home folder to keep one in.
+
+**Redirection:** `>` and `>>` work after any command, not only `echo`, so
+`git init -h > library.txt` or `git log --oneline > history.txt` write the
+output to a file. Errors still show in the terminal.
+
+**Config:** `git config` with or without `--global` stores any key.
+`user.name` and `user.email` sign the commits, and `init.defaultBranch`
+names the branch `git init` creates; other keys are kept and read back but
+change nothing (vim stays the editor, and `pull` always merges).
 
 **Globs:** an unquoted `*`, `?` or `[…]` expands to the matching file
 names before the command runs, as in bash, so `git add *.txt` stages the

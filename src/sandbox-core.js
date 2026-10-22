@@ -298,6 +298,136 @@
     return out;
   }
 
+  /* ------------------------------ -h help ---------------------------- */
+
+  // What `git <command> -h` prints. The usage lines are git's own; the
+  // options are only those this sandbox understands, laid out the way
+  // git lays out its option lists, so what a learner copies into their
+  // notes is both real and something they can try here.
+  function opt(flags, desc) {
+    var pad = '    ' + flags;
+    return pad.length < 26 ? pad + new Array(27 - pad.length).join(' ') + desc
+      : pad + '\n' + new Array(27).join(' ') + desc;
+  }
+
+  var HELP = {
+    init: ['usage: git init [-q | --quiet] [--bare] [--template=<template-directory>]',
+      '                [--separate-git-dir <git-dir>] [--object-format=<format>]',
+      '                [-b <branch-name> | --initial-branch=<branch-name>]',
+      '                [--shared[=<permissions>]] [<directory>]', '',
+      opt('-b, --initial-branch <name>', 'override the name of the initial branch')],
+    status: ['usage: git status [<options>] [--] [<pathspec>...]', '',
+      opt('--ignored', 'show ignored files')],
+    add: ['usage: git add [<options>] [--] <pathspec>...', '',
+      opt('-f, --force', 'allow adding otherwise ignored files'),
+      opt('-A, --all', 'add changes from all tracked and untracked files')],
+    commit: ['usage: git commit [-a | --interactive | --patch] [-s] [-v] [-u<mode>] [--amend]',
+      '                  [--dry-run] [(-c | -C | --squash) <commit> | --fixup [(amend|reword):]<commit>)]',
+      '                  [-F <file> | -m <msg>] [--reset-author] [--allow-empty]',
+      '                  [--allow-empty-message] [--no-verify] [-e] [--author=<author>]',
+      '                  [--date=<date>] [--cleanup=<mode>] [--[no-]status]',
+      '                  [-i | -o] [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '                  [(--trailer <token>[(=|:)<value>])...] [-S[<keyid>]]',
+      '                  [--] [<pathspec>...]', '',
+      'Commit message options',
+      opt('-m, --message <message>', 'commit message'), '',
+      'Commit contents options',
+      opt('-a, --all', 'commit all changed files')],
+    rm: ['usage: git rm [-f | --force] [-n] [-r] [--cached] [--ignore-unmatch]',
+      '              [--quiet] [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '              [--] [<pathspec>...]', '',
+      opt('--cached', 'only remove from the index'),
+      opt('-r', 'allow recursive removal')],
+    restore: ['usage: git restore [<options>] [--source=<branch>] <file>...', '',
+      opt('-s, --source <tree-ish>', 'which tree-ish to checkout from'),
+      opt('-S, --staged', 'restore the index'),
+      opt('-W, --worktree', 'restore the working tree (default)')],
+    reset: ['usage: git reset [--mixed | --soft | --hard | --merge | --keep] [-q] [<commit>]',
+      '   or: git reset [-q] [<tree-ish>] [--] <pathspec>...',
+      '   or: git reset [-q] [--pathspec-from-file [--pathspec-file-nul]] [<tree-ish>]',
+      '   or: git reset --patch [<tree-ish>] [--] [<pathspec>...]', '',
+      opt('--mixed', 'reset HEAD and index'),
+      opt('--soft', 'reset only HEAD'),
+      opt('--hard', 'reset HEAD, index and working tree')],
+    log: ['usage: git log [<options>] [<revision-range>] [[--] <path>...]',
+      '   or: git show [<options>] <object>...', '',
+      opt('--oneline', 'show each commit on a single line')],
+    diff: ['usage: git diff [<options>] [<commit>] [--] [<path>...]',
+      '   or: git diff [<options>] --cached [--merge-base] [<commit>] [--] [<path>...]',
+      '   or: git diff [<options>] [--merge-base] <commit> [<commit>...] <commit> [--] [<path>...]',
+      '   or: git diff [<options>] <commit>...<commit> [--] [<path>...]',
+      '   or: git diff [<options>] <blob> <blob>',
+      '   or: git diff [<options>] --no-index [--] <path> <path>'],
+    branch: ['usage: git branch [<options>] [-r | -a] [--merged] [--no-merged]',
+      '   or: git branch [<options>] [-f] [--recurse-submodules] <branch-name> [<start-point>]',
+      '   or: git branch [<options>] [-l] [<pattern>...]',
+      '   or: git branch [<options>] [-r] (-d | -D) <branch-name>...',
+      '   or: git branch [<options>] (-m | -M) [<old-branch>] <new-branch>',
+      '   or: git branch [<options>] (-c | -C) [<old-branch>] <new-branch>',
+      '   or: git branch [<options>] [-r | -a] [--points-at]',
+      '   or: git branch [<options>] [-r | -a] [--format]', '',
+      opt('-d, --delete', 'delete fully merged branch'),
+      opt('-D', 'delete branch (even if not merged)')],
+    checkout: ['usage: git checkout [<options>] <branch>',
+      '   or: git checkout [<options>] [<branch>] -- <file>...', '',
+      opt('-b <branch>', 'create and checkout a new branch'),
+      opt('--detach', 'detach HEAD at named commit')],
+    switch: ['usage: git switch [<options>] [<branch>]', '',
+      opt('-c, --create <branch>', 'create and switch to a new branch'),
+      opt('-d, --detach', 'detach HEAD at named commit')],
+    merge: ['usage: git merge [<options>] [<commit>...]',
+      '   or: git merge --abort',
+      '   or: git merge --continue', '',
+      opt('--abort', 'abort the current in-progress merge'),
+      opt('--continue', 'continue the current in-progress merge')],
+    remote: ['usage: git remote [-v | --verbose]',
+      '   or: git remote add [-t <branch>] [-m <master>] [-f] [--tags | --no-tags] [--mirror=<fetch|push>] <name> <url>',
+      '   or: git remote rename [--[no-]progress] <old> <new>',
+      '   or: git remote remove <name>',
+      '   or: git remote set-head <name> (-a | --auto | -d | --delete | <branch>)',
+      '   or: git remote [-v | --verbose] show [-n] <name>',
+      '   or: git remote prune [-n | --dry-run] <name>',
+      '   or: git remote [-v | --verbose] update [-p | --prune] [(<group> | <remote>)...]',
+      '   or: git remote set-branches [--add] <name> <branch>...',
+      '   or: git remote get-url [--push] [--all] <name>',
+      '   or: git remote set-url [--push] <name> <newurl> [<oldurl>]',
+      '   or: git remote set-url --add <name> <newurl>',
+      '   or: git remote set-url --delete <name> <url>', '',
+      opt('-v, --verbose', 'be verbose; must be placed before a subcommand')],
+    push: ['usage: git push [<options>] [<repository> [<refspec>...]]', '',
+      opt('-u, --set-upstream', 'set upstream for git pull/status')],
+    pull: ['usage: git pull [<options>] [<repository> [<refspec>...]]'],
+    fetch: ['usage: git fetch [<options>] [<repository> [<refspec>...]]',
+      '   or: git fetch [<options>] <group>',
+      '   or: git fetch --multiple [<options>] [(<repository> | <group>)...]',
+      '   or: git fetch --all [<options>]'],
+    clone: ['usage: git clone [<options>] [--] <repo> [<dir>]'],
+    config: ['usage: git config [<options>]', '',
+      'Config file location',
+      opt('--global', 'use global config file'),
+      opt('--local', 'use repository config file'), '',
+      'Action',
+      opt('-l, --list', 'list all'),
+      opt('--unset', 'remove a variable: name [value-pattern]')],
+    stash: ['usage: git stash list [<log-options>]',
+      '   or: git stash show [-u | --include-untracked | --only-untracked] [<diff-options>] [<stash>]',
+      '   or: git stash drop [-q | --quiet] [<stash>]',
+      '   or: git stash pop [--index] [-q | --quiet] [<stash>]',
+      '   or: git stash apply [--index] [-q | --quiet] [<stash>]',
+      '   or: git stash branch <branchname> [<stash>]',
+      '   or: git stash [push [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
+      '          [-u | --include-untracked] [-a | --all] [(-m | --message) <message>]',
+      '          [--pathspec-from-file=<file> [--pathspec-file-nul]]',
+      '          [--] [<pathspec>...]]',
+      '   or: git stash save [-p | --patch] [-S | --staged] [-k | --[no-]keep-index] [-q | --quiet]',
+      '          [-u | --include-untracked] [-a | --all] [<message>]',
+      '   or: git stash clear',
+      '   or: git stash create [<message>]',
+      '   or: git stash store [(-m | --message) <message>] [-q | --quiet] <commit>'],
+    'check-ignore': ['usage: git check-ignore [<options>] <pathname>...',
+      '   or: git check-ignore [<options>] --stdin']
+  };
+
   /* ------------------------------ engine ---------------------------- */
 
   function createSandbox(options) {
@@ -322,6 +452,10 @@
     // Y's — so `merged X into Y` conditions need this record.
     var mergesDone = [];
     var author = { name: 'Your Name', email: 'you@example.com' };
+    // `git config --global` settings other than user.*, keyed in lower
+    // case. The sandbox has no home folder, so they live here; the only
+    // one that changes anything is init.defaultBranch.
+    var globalConfig = {};
     var defaultBranch = options.defaultBranch || 'main';
     var repoReady = false;
     // Shell working directory, always `dir` or a folder inside it. The
@@ -1113,6 +1247,20 @@
       return { out: await unstagedSummary(), ok: true };
     }
 
+    // .git/config as `git config --list` prints it: section.key=value
+    async function localConfigLines() {
+      var text = '';
+      try { text = await fs.promises.readFile(dir + '/.git/config', 'utf8'); } catch (e) { return []; }
+      var out = [], section = '';
+      text.split('\n').forEach(function (line) {
+        var sec = /^\s*\[([^\s\]"]+)(?:\s+"([^"]*)")?\]/.exec(line);
+        if (sec) { section = sec[1].toLowerCase() + (sec[2] !== undefined ? '.' + sec[2] : ''); return; }
+        var kv = /^\s*([A-Za-z][\w-]*)\s*=\s*(.*)$/.exec(line);
+        if (kv && section) out.push(section + '.' + kv[1].toLowerCase() + '=' + kv[2].trim());
+      });
+      return out;
+    }
+
     /* ---------------------------- commits --------------------------- */
 
     async function makeCommit(msg, st) {
@@ -1199,6 +1347,14 @@
 
       if (!sub) return { out: usageGit(), ok: false };
 
+      // `git <command> -h` works anywhere, even outside a repository.
+      // Real git exits with 129 here; the sandbox counts it as success so
+      // the text is not shown as an error, and `> file` captures it.
+      if (rest.length === 1 && (rest[0] === '-h' || rest[0] === '--help') && HELP[sub]) {
+        return { out: HELP[sub].join('\n'), ok: true };
+      }
+      if (sub === 'help' && rest[0] && HELP[rest[0]]) return { out: HELP[rest[0]].join('\n'), ok: true };
+
       if (sub !== 'init' && sub !== 'help' && sub !== 'config' && !(await isRepo())) {
         return { out: 'fatal: not a git repository (or any of the parent directories): .git\nHint: run `git init` first.', ok: false };
       }
@@ -1209,17 +1365,68 @@
             return { out: 'This sandbox keeps the repository at the top of the project.\nRun `cd ~` first, then `git init`.', ok: false };
           }
           if (await isRepo()) return { out: 'Reinitialized existing Git repository in ' + displayDir + '/.git/', ok: true };
-          await gitlib.init(opts({ defaultBranch: defaultBranch }));
+          var initial = globalConfig['init.defaultbranch'] || defaultBranch;
+          for (var ib = 0; ib < rest.length; ib++) {
+            if (rest[ib] === '-b' || rest[ib] === '--initial-branch') initial = rest[++ib] || initial;
+            else if (rest[ib].indexOf('--initial-branch=') === 0) initial = rest[ib].slice(17);
+          }
+          await gitlib.init(opts({ defaultBranch: initial }));
           repoReady = true;
           return { out: 'Initialized empty Git repository in ' + displayDir + '/.git/', ok: true };
         }
 
         case 'config': {
-          if (rest[0] === 'user.name' && rest[1]) { author.name = rest.slice(1).join(' '); return { out: '', ok: true }; }
-          if (rest[0] === 'user.email' && rest[1]) { author.email = rest[1]; return { out: '', ok: true }; }
-          if (rest[0] === 'user.name') return { out: author.name, ok: true };
-          if (rest[0] === 'user.email') return { out: author.email, ok: true };
-          return { out: 'usage: git config user.name "Your Name"', ok: false };
+          var global = false, list = false, unset = false;
+          var cw = [];
+          rest.forEach(function (a) {
+            if (a === '--global' || a === '--system') global = true;
+            else if (a === '-l' || a === '--list') list = true;
+            else if (a === '--unset') unset = true;
+            else if (a === '--local' || a === '--get' || a === '--add' || a === '--replace-all') { /* the default */ }
+            else cw.push(a);
+          });
+          var inRepo = await isRepo();
+          if (list) {
+            var all = ['user.name=' + author.name, 'user.email=' + author.email];
+            Object.keys(globalConfig).sort().forEach(function (k) { all.push(k + '=' + globalConfig[k]); });
+            if (!global && inRepo) all = all.concat(await localConfigLines());
+            return { out: all.join('\n'), ok: true };
+          }
+          if (!cw.length) return { out: HELP.config.join('\n'), ok: false };
+          var key = cw[0];
+          // section and variable names are case-insensitive in git
+          var lk = key.toLowerCase();
+          if (lk.indexOf('.') <= 0 || lk.charAt(lk.length - 1) === '.') {
+            return { out: 'error: key does not contain a section: ' + key, ok: false };
+          }
+          var value = cw.length > 1 ? cw.slice(1).join(' ') : null;
+          // user.name and user.email sign the sandbox's commits, whichever file they are set in
+          if (lk === 'user.name' || lk === 'user.email') {
+            var field = lk === 'user.name' ? 'name' : 'email';
+            if (value === null && !unset) return { out: author[field], ok: true };
+            author[field] = unset ? (field === 'name' ? 'Your Name' : 'you@example.com') : value;
+            return { out: '', ok: true };
+          }
+          if (!global && !inRepo) {
+            if (value === null && !unset && lk in globalConfig) return { out: globalConfig[lk], ok: true };
+            return { out: 'fatal: not in a git directory', ok: false };
+          }
+          if (global) {
+            if (unset) delete globalConfig[lk];
+            else if (value === null) return lk in globalConfig ? { out: globalConfig[lk], ok: true } : { out: '', ok: false };
+            else globalConfig[lk] = value;
+            return { out: '', ok: true };
+          }
+          if (unset) { await gitlib.setConfig(opts({ path: key, value: undefined })); return { out: '', ok: true }; }
+          if (value === null) {
+            var got = await gitlib.getConfig(opts({ path: key }));
+            if (got === undefined || got === null) {
+              return lk in globalConfig ? { out: globalConfig[lk], ok: true } : { out: '', ok: false };
+            }
+            return { out: String(got), ok: true };
+          }
+          await gitlib.setConfig(opts({ path: key, value: value }));
+          return { out: '', ok: true };
         }
 
         case 'status': {
@@ -2145,10 +2352,13 @@
           r.kind = 'git';
           // a checkout or merge may have removed the folder we are in
           await ensureCwd();
-          return r;
+          return await redirectOutput(r, parsed);
         }
         var sh = await shellCommand(cmd, args.slice(1), parsed.redirect, parsed.target);
-        if (sh) { sh.kind = 'shell'; return sh; }
+        if (sh) {
+          sh.kind = 'shell';
+          return cmd === 'echo' ? sh : await redirectOutput(sh, parsed);
+        }
         return {
           out: cmd + ': command not found\nType `help` to see what this sandbox supports.',
           ok: false, kind: 'error'
@@ -2156,6 +2366,22 @@
       } catch (e) {
         return { out: 'error: ' + (e && e.message ? e.message : String(e)), ok: false, kind: 'error' };
       }
+    }
+
+    // `command > file` / `>> file`: what the command printed goes into the
+    // file instead of the terminal, as in a shell. Errors stay on screen,
+    // as stderr would; `echo` handles its own redirection.
+    async function redirectOutput(r, parsed) {
+      if (!parsed.redirect || r.editor) return r;
+      if (!parsed.target) return { out: 'sh: syntax error near unexpected token `newline\'', ok: false, kind: 'error' };
+      if (!r.ok) return r;
+      var p = abs(parsed.target);
+      var text = r.out ? String(r.out).replace(/\{[gryb\/w]\}/g, '') + '\n' : '';
+      var prev = '';
+      if (parsed.redirect === '>>') { try { prev = await fs.promises.readFile(p, 'utf8'); } catch (e) {} }
+      try { await fs.promises.writeFile(p, prev + text); }
+      catch (e) { return { out: 'sh: ' + parsed.target + ': No such file or directory', ok: false, kind: r.kind }; }
+      return { out: '', ok: true, kind: r.kind, silentNote: 'wrote ' + rel(parsed.target) };
     }
 
     /* ------------------------- undo snapshots ------------------------ */
@@ -2182,6 +2408,7 @@
         upstreams: JSON.parse(JSON.stringify(upstreams)),
         merges: mergesDone.map(function (m) { return { from: m.from, into: m.into }; }),
         author: { name: author.name, email: author.email },
+        globalConfig: JSON.parse(JSON.stringify(globalConfig)),
         repoReady: repoReady,
         cwd: cwd,
         prevCwd: prevCwd
@@ -2197,6 +2424,7 @@
       upstreams = JSON.parse(JSON.stringify(snap.upstreams));
       mergesDone = snap.merges.map(function (m) { return { from: m.from, into: m.into }; });
       author = { name: snap.author.name, email: snap.author.email };
+      globalConfig = JSON.parse(JSON.stringify(snap.globalConfig || {}));
       repoReady = snap.repoReady;
       cwd = snap.cwd || dir;
       prevCwd = snap.prevCwd || dir;
@@ -2209,6 +2437,7 @@
       if (mergesDone.length !== snap.merges.length) return true;
       if (JSON.stringify(upstreams) !== JSON.stringify(snap.upstreams)) return true;
       if (author.name !== snap.author.name || author.email !== snap.author.email) return true;
+      if (JSON.stringify(globalConfig) !== JSON.stringify(snap.globalConfig || {})) return true;
       if (fs._store.size !== snap.store.size) return true;
       var diff = false;
       fs._store.forEach(function (node, key) {
@@ -2235,6 +2464,7 @@
       upstreams = {};
       mergesDone = [];
       author = { name: 'Your Name', email: 'you@example.com' };
+      globalConfig = {};
       cwd = dir;
       prevCwd = dir;
       await ensureWorkdir();
