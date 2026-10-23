@@ -484,5 +484,5 @@
   }
 
   // tint is shared with the History graph, so both panels draw alike
-  return { createTreeView: createTreeView, tint: tint };
+  return { createTreeView: createTreeView, tint: tint, COLORS: COLORS };
 });

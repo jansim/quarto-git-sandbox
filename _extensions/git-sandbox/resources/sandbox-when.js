@@ -79,46 +79,51 @@
 
   /* ------------------------------ predicates ----------------------------- */
 
-  function ui() {
-    return (typeof self !== 'undefined' && self.GitSandboxUI) || null;
-  }
-  function branchOid(ctx, name) {
-    var b = (ctx.graph.branches || []).filter(function (x) { return x.name === name; })[0];
+  // Graph helpers, shared with the UI (which re-exports them for `check:`
+  // functions). `graph` is sandbox.graphModel().
+
+  // oid a branch currently points at, or null
+  function branchOid(graph, name) {
+    var b = (graph.branches || []).filter(function (x) { return x.name === name; })[0];
     return b ? b.oid : null;
   }
-  function reaches(ctx, from, target) {
-    if (!from || !target) return false;
-    if (from === target) return true;
-    var byOid = {};
-    ctx.graph.commits.forEach(function (c) { byOid[c.oid] = c; });
-    var stack = [from], seen = {};
-    while (stack.length) {
-      var oid = stack.pop();
-      if (oid === target) return true;
-      if (seen[oid]) continue;
-      seen[oid] = true;
-      var c = byOid[oid];
-      if (c) (c.parents || []).forEach(function (p) { stack.push(p); });
-    }
-    return false;
-  }
-  function commitCount(ctx, name) {
-    if (!name) return ctx.graph.commits.length;
-    var tip = branchOid(ctx, name);
-    if (!tip) return 0;
-    var byOid = {};
-    ctx.graph.commits.forEach(function (c) { byOid[c.oid] = c; });
-    var stack = [tip], seen = {}, count = 0;
+  // every commit reachable from `from` by walking parents, as { oid: true }
+  function ancestors(graph, from) {
+    var byOid = {}, seen = {}, stack = from ? [from] : [];
+    graph.commits.forEach(function (c) { byOid[c.oid] = c; });
     while (stack.length) {
       var oid = stack.pop();
       if (seen[oid]) continue;
       seen[oid] = true;
-      count++;
-      var c = byOid[oid];
-      if (c) (c.parents || []).forEach(function (p) { stack.push(p); });
+      if (byOid[oid]) stack.push.apply(stack, byOid[oid].parents || []);
     }
-    return count;
+    return seen;
   }
+  // is `target` reachable by walking parents back from `from`?
+  function reaches(graph, from, target) {
+    return !!from && !!target && !!ancestors(graph, from)[target];
+  }
+  // commits reachable from a branch tip, or all of them without a name
+  function commitCount(graph, name) {
+    if (!name) return graph.commits.length;
+    return Object.keys(ancestors(graph, branchOid(graph, name))).length;
+  }
+  // Has branch `name` been merged into branch `into`? Ancestry alone would
+  // be true the moment `name` is branched off `into`, so a real merge must
+  // also have been recorded by the sandbox. The ancestry check still
+  // matters: it goes false again if `into` is later rewound past the merge.
+  // When either branch no longer exists (deleted after merging, or a
+  // remote-tracking name), the record alone decides.
+  function isMerged(graph, name, into) {
+    var recorded = (graph.merges || []).some(function (m) { return m.from === name && m.into === into; });
+    if (!recorded) return false;
+    var fromOid = branchOid(graph, name), intoOid = branchOid(graph, into);
+    return !fromOid || !intoOid || reaches(graph, intoOid, fromOid);
+  }
+  function hasMergeCommit(graph) {
+    return graph.commits.some(function (c) { return (c.parents || []).length > 1; });
+  }
+
   function compare(op, left, right) {
     switch (op) {
       case '>=': return left >= right;
@@ -151,29 +156,23 @@
       return String(next().v);
     }
 
-    function parseOr() {
-      var left = parseAnd();
-      while (peek() && peek().t === 'or') {
-        next();
-        var right = parseAnd();
-        left = (function (a, b) {
-          return function (ctx) { return a(ctx) || b(ctx); };
-        })(left, right);
-      }
-      return left;
+    // `a or b or c` / `a and b and c`, left to right
+    function chain(word, sub, join) {
+      return function () {
+        var left = sub();
+        while (peek() && peek().t === word) {
+          next();
+          left = join(left, sub());
+        }
+        return left;
+      };
     }
-
-    function parseAnd() {
-      var left = parseNot();
-      while (peek() && peek().t === 'and') {
-        next();
-        var right = parseNot();
-        left = (function (a, b) {
-          return function (ctx) { return a(ctx) && b(ctx); };
-        })(left, right);
-      }
-      return left;
-    }
+    var parseAnd = chain('and', parseNot, function (a, b) {
+      return function (ctx) { return a(ctx) && b(ctx); };
+    });
+    var parseOr = chain('or', parseAnd, function (a, b) {
+      return function (ctx) { return a(ctx) || b(ctx); };
+    });
 
     function parseNot() {
       if (peek() && peek().t === 'not') {
@@ -233,9 +232,7 @@
               (m ? String(m.v) : '') + '"');
           }
           next();
-          return function (ctx) {
-            return ctx.graph.commits.some(function (c) { return (c.parents || []).length > 1; });
-          };
+          return function (ctx) { return hasMergeCommit(ctx.graph); };
         }
 
         case 'commits': {
@@ -254,7 +251,7 @@
           }
           next();
           var want = numTok.v;
-          return function (ctx) { return compare(op, commitCount(ctx, branch), want); };
+          return function (ctx) { return compare(op, commitCount(ctx.graph, branch), want); };
         }
 
         case 'branch': {
@@ -282,22 +279,7 @@
           }
           next();
           var target = expectWord('a branch name after "into"');
-          // Ancestry alone would be trivially true the moment X is branched
-          // off Y (X's tip is already an ancestor of Y's), so a real merge
-          // must also have been recorded by the sandbox. The ancestry check
-          // still matters: it goes false again if Y is later rewound past
-          // the merge. When either branch no longer exists (deleted after
-          // merging, or a remote-tracking name), the record alone decides.
-          return function (ctx) {
-            var recorded = (ctx.graph.merges || []).some(function (m) {
-              return m.from === from && m.into === target;
-            });
-            if (!recorded) return false;
-            var fromOid = branchOid(ctx, from);
-            var intoOid = branchOid(ctx, target);
-            if (!fromOid || !intoOid) return true;
-            return reaches(ctx, intoOid, fromOid);
-          };
+          return function (ctx) { return isMerged(ctx.graph, from, target); };
         }
 
         case 'file': {
@@ -364,17 +346,13 @@
     if (typeof src !== 'string' || src.trim() === '') {
       throw new Error('`when:` is empty');
     }
-    var fn;
+    // `file ... contains` needs file contents, which are async; the UI
+    // reads them before evaluating (see filesNeeded) into ctx._fileText.
     try {
-      fn = parse(src);
+      return parse(src);
     } catch (e) {
       throw new Error('cannot read `when: ' + src + '` — ' + e.message);
     }
-    return function (ctx) {
-      // `file ... contains` needs file contents, which are async; the UI
-      // pre-loads them into ctx._files before evaluating.
-      return fn(ctx);
-    };
   }
 
   // Which filenames does this expression need the contents of? The UI reads
@@ -397,12 +375,15 @@
     var body = /(^|[\s;{])return[\s(]/.test(src) ? src : 'return (' + src + ');';
     try {
       /* eslint-disable no-new-func */
-      var fn = new Function('c', body);
-      return function (ctx) { return fn(ctx); };
+      return new Function('c', body);
     } catch (e) {
       throw new Error('cannot compile `js:` block — ' + e.message);
     }
   }
 
-  return { compileWhen: compileWhen, compileJs: compileJs, filesNeeded: filesNeeded, tokenize: tokenize };
+  return {
+    compileWhen: compileWhen, compileJs: compileJs, filesNeeded: filesNeeded, tokenize: tokenize,
+    branchOid: branchOid, reaches: reaches, commitCount: commitCount, isMerged: isMerged,
+    hasMergeCommit: hasMergeCommit
+  };
 });

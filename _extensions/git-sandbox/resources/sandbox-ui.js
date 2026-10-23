@@ -32,9 +32,9 @@
     return dflt;
   }
 
-  var LANE_COLORS = ['#447099', '#419599', '#72994E', '#9A4665', '#EE6331', '#3276B5'];
-
-  function tint(hex, amount) { return root.GitSandboxTree.tint(hex, amount); }
+  // the commit tree's palette, so a branch keeps its colour across panels
+  var LANE_COLORS = root.GitSandboxTree.COLORS;
+  var tint = root.GitSandboxTree.tint;
 
   function esc(s) {
     return String(s)
@@ -75,11 +75,9 @@
       try {
         if (typeof t.when === 'string' && t.when.trim() !== '') {
           task._files = W.filesNeeded(t.when);
-          var pred = W.compileWhen(t.when);
-          task.check = function (ctx) { return pred(ctx); };
+          task.check = W.compileWhen(t.when);
         } else if (typeof t.js === 'string' && t.js.trim() !== '') {
-          var jsPred = W.compileJs(t.js);
-          task.check = function (ctx) { return jsPred(ctx); };
+          task.check = W.compileJs(t.js);
         } else {
           throw new Error('a task needs one of `when:`, `js:` or a `check` function');
         }
@@ -91,13 +89,19 @@
     });
   }
 
+  // Commands as a list, or as a block with one per line. Blank lines and
+  // # comments are dropped.
+  function commandLines(v) {
+    if (!v) return [];
+    return (Array.isArray(v) ? v : String(v).split('\n'))
+      .map(function (l) { return String(l).trim(); })
+      .filter(function (l) { return l !== '' && l.charAt(0) !== '#'; });
+  }
+
   // `seed` may be a function or a block of commands from YAML.
   function normaliseSeed(seed) {
-    if (!seed) return null;
     if (typeof seed === 'function') return seed;
-    var lines = String(seed).split('\n')
-      .map(function (l) { return l.trim(); })
-      .filter(function (l) { return l !== '' && l.charAt(0) !== '#'; });
+    var lines = commandLines(seed);
     if (!lines.length) return null;
     return async function (sb) {
       for (var i = 0; i < lines.length; i++) {
@@ -115,16 +119,6 @@
     };
   }
 
-  // `script`: commands to play back one at a time, as a list or as a block
-  // with one per line. Blank lines and # comments are dropped, as in a seed.
-  function normaliseScript(script) {
-    if (!script) return [];
-    var lines = Array.isArray(script) ? script : String(script).split('\n');
-    return lines
-      .map(function (l) { return String(l).trim(); })
-      .filter(function (l) { return l !== '' && l.charAt(0) !== '#'; });
-  }
-
   function normaliseIntro(intro) {
     if (!intro) return [];
     if (Array.isArray(intro)) return intro;
@@ -140,11 +134,36 @@
 
   /* --------------------------- commit graph -------------------------- */
 
+  function svgEl(tag, attrs, parent, text) {
+    var n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (text != null) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
+  function laneColor(lane) { return LANE_COLORS[lane % LANE_COLORS.length]; }
+
+  function maxLane(model) {
+    return model.commits.reduce(function (m, c) { return Math.max(m, c.lane); }, 0);
+  }
+
   // x where a commit row's text (refs, sha, message) starts
-  function graphTextX(model) {
-    var maxLane = 0;
-    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
-    return 22 + maxLane * 24 + 22 + 6;
+  function graphTextX(model) { return 22 + maxLane(model) * 24 + 22 + 6; }
+
+  // Clear the SVG; with no commits, say so and return true.
+  function startGraph(svg, model, W, h) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (model.commits.length) return false;
+    sizeGraph(svg, W, h);
+    svgEl('text', { x: W / 2, y: h / 2 + 4, 'text-anchor': 'middle', 'class': 'gs-empty-text' }, svg, 'No commits yet.');
+    return true;
+  }
+
+  function sizeGraph(svg, W, h) {
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + h);
+    svg.setAttribute('height', String(h));
+    svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
   }
 
   // `extra`, for the local history only: { onToggle(oid), open: { oid: px } }.
@@ -156,24 +175,10 @@
     extra = extra || {};
     var open = extra.open || {};
     var layout = { detailTop: {} };
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
-    var NS = 'http://www.w3.org/2000/svg';
-
     // Draw at the SVG's real pixel width so nothing overflows sideways; the
     // graph never needs a horizontal scrollbar.
     var W = svg.clientWidth || 640;
-
-    if (!model.commits.length) {
-      svg.setAttribute('viewBox', '0 0 ' + W + ' 60');
-      svg.setAttribute('height', '60');
-      var t = document.createElementNS(NS, 'text');
-      t.setAttribute('x', String(W / 2)); t.setAttribute('y', '34');
-      t.setAttribute('text-anchor', 'middle');
-      t.setAttribute('class', 'gs-empty-text');
-      t.textContent = 'No commits yet.';
-      svg.appendChild(t);
-      return layout;
-    }
+    if (startGraph(svg, model, W, 60)) return layout;
 
     var rowH = 44, laneW = 24, padTop = 26, padLeft = 22, lineH = 17;
     var graphW = graphTextX(model) - 6;
@@ -182,8 +187,8 @@
     // Wrap a commit message to a character budget, breaking on spaces and
     // hard-breaking any single word longer than the line.
     function wrapWords(text, maxChars) {
-      var words = String(text).split(/\s+/), lines = [], cur = '';
-      words.forEach(function (w) {
+      var lines = [], cur = '';
+      String(text).split(/\s+/).forEach(function (w) {
         if (!cur) cur = w;
         else if ((cur + ' ' + w).length <= maxChars) cur += ' ' + w;
         else { lines.push(cur); cur = w; }
@@ -207,59 +212,33 @@
         tx += w + 6;
         return lay;
       });
-      var shaX = tx, msgX = tx + 62;
-      var maxChars = Math.max(8, Math.floor((W - msgX - 12 - toggleW) / 6.8));
-      var lines = wrapWords(c.message, maxChars);
+      var msgX = tx + 62;
+      var lines = wrapWords(c.message, Math.max(8, Math.floor((W - msgX - 12 - toggleW) / 6.8)));
       var baseH = Math.max(rowH, lines.length * lineH + 20);
-      return { refLayouts: refLayouts, shaX: shaX, msgX: msgX, lines: lines,
+      return { refLayouts: refLayouts, shaX: tx, msgX: msgX, lines: lines,
                baseH: baseH, h: baseH + (open[c.oid] || 0) };
     });
 
     // Second pass: stack rows so a wrapped message never overlaps the next.
     var tops = [], acc = padTop;
     rows.forEach(function (r) { tops.push(acc); acc += r.h; });
-    var height = acc + 6;
+    sizeGraph(svg, W, acc + 6);
 
-    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + height);
-    svg.setAttribute('height', String(height));
-    svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
-
-    var index = {};
-    model.commits.forEach(function (c, i) { index[c.oid] = i; });
     var x = function (lane) { return padLeft + lane * laneW; };
     var cyOf = function (i) { return tops[i] + 16; };
-
-    drawEdges(svg, model, index, x, cyOf);
+    drawEdges(svg, model, x, cyOf);
 
     model.commits.forEach(function (c, i) {
-      var cx = x(c.lane), cy = cyOf(i), row = rows[i];
-      var color = LANE_COLORS[c.lane % LANE_COLORS.length];
-      drawNode(svg, c, cx, cy, 7);
-
-      row.refLayouts.forEach(function (rl) {
-        drawRef(svg, rl, rl.x, cy, 20, 7, color);
-      });
-
-      var sha = document.createElementNS(NS, 'text');
-      sha.setAttribute('x', row.shaX); sha.setAttribute('y', cy + 4);
-      sha.setAttribute('class', 'gs-sha');
-      sha.textContent = c.short;
-      svg.appendChild(sha);
-
-      var msg = document.createElementNS(NS, 'text');
-      msg.setAttribute('y', cy + 4);
-      msg.setAttribute('class', 'gs-msg');
+      var cy = cyOf(i), row = rows[i];
+      drawNode(svg, c, x(c.lane), cy, 7);
+      row.refLayouts.forEach(function (rl) { drawRef(svg, rl, cy, 20, 7, laneColor(c.lane)); });
+      svgEl('text', { x: row.shaX, y: cy + 4, 'class': 'gs-sha' }, svg, c.short);
+      var msg = svgEl('text', { y: cy + 4, 'class': 'gs-msg' }, svg);
       row.lines.forEach(function (line, li) {
-        var ts = document.createElementNS(NS, 'tspan');
-        ts.setAttribute('x', row.msgX);
-        ts.setAttribute('dy', li === 0 ? '0' : String(lineH));
-        ts.textContent = line;
-        msg.appendChild(ts);
+        svgEl('tspan', { x: row.msgX, dy: li === 0 ? 0 : lineH }, msg, line);
       });
-      svg.appendChild(msg);
-
       if (extra.onToggle) {
-        svg.appendChild(commitToggle(NS, c, W - 22, cy, !!open[c.oid], extra.onToggle));
+        svg.appendChild(commitToggle(c, W - 22, cy, !!open[c.oid], extra.onToggle));
         if (open[c.oid]) layout.detailTop[c.oid] = tops[i] + row.baseH - 6;
       }
     });
@@ -267,27 +246,22 @@
   }
 
   // parent links, drawn before the nodes so the nodes sit on top
-  function drawEdges(svg, model, index, x, cyOf) {
-    var NS = 'http://www.w3.org/2000/svg';
+  function drawEdges(svg, model, x, cyOf) {
+    var index = {};
+    model.commits.forEach(function (c, i) { index[c.oid] = i; });
     model.commits.forEach(function (c, i) {
       (c.parents || []).forEach(function (p, pi) {
         if (!(p in index)) return;
         var j = index[p];
         var x1 = x(c.lane), y1 = cyOf(i), x2 = x(model.commits[j].lane), y2 = cyOf(j);
-        var path = document.createElementNS(NS, 'path');
-        var d;
-        if (x1 === x2) {
-          d = 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2;
-        } else {
-          var mid = y1 + (y2 - y1) * 0.55;
-          d = 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + mid + ' ' + x2 + ',' + (y2 - (y2 - y1) * 0.45) + ' ' + x2 + ',' + y2;
-        }
-        path.setAttribute('d', d);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', LANE_COLORS[(pi === 0 ? c.lane : model.commits[j].lane) % LANE_COLORS.length]);
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('opacity', '0.55');
-        svg.appendChild(path);
+        var d = x1 === x2
+          ? 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2
+          : 'M' + x1 + ',' + y1 + ' C' + x1 + ',' + (y1 + (y2 - y1) * 0.55) + ' ' +
+            x2 + ',' + (y2 - (y2 - y1) * 0.45) + ' ' + x2 + ',' + y2;
+        svgEl('path', {
+          d: d, fill: 'none', 'stroke-width': 2, opacity: 0.55,
+          stroke: laneColor(pi === 0 ? c.lane : model.commits[j].lane)
+        }, svg);
       });
     });
   }
@@ -295,41 +269,28 @@
   // Outlined in the lane colour over a pale tint of it, as in the commit
   // tree; merge commits stay hollow.
   function drawNode(svg, c, cx, cy, r) {
-    var color = LANE_COLORS[c.lane % LANE_COLORS.length];
-    var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
-    circle.setAttribute('r', r);
-    circle.setAttribute('fill', (c.parents || []).length > 1 ? '#FFFFFF' : tint(color, 0.8));
-    circle.setAttribute('stroke', color);
-    circle.setAttribute('stroke-width', r > 5 ? '2.5' : '2');
-    svg.appendChild(circle);
+    var color = laneColor(c.lane);
+    svgEl('circle', {
+      cx: cx, cy: cy, r: r, stroke: color, 'stroke-width': r > 5 ? 2.5 : 2,
+      fill: (c.parents || []).length > 1 ? '#FFFFFF' : tint(color, 0.8)
+    }, svg);
   }
 
   // A ref label centred on y, styled like the commit tree's: a tinted box
   // outlined in the branch colour, bolder for HEAD, grey for remote refs:
   // dashed for the local repo's remote-tracking copies, solid for the
-  // remote's own branches. `rl` is { label, w, isHead, remote, onRemote }.
-  function drawRef(svg, rl, x, y, h, padX, color) {
-    var NS = 'http://www.w3.org/2000/svg';
-    var rect = document.createElementNS(NS, 'rect');
-    rect.setAttribute('x', x); rect.setAttribute('y', y - h / 2);
-    rect.setAttribute('width', rl.w); rect.setAttribute('height', h);
-    rect.setAttribute('rx', h / 4);
-    if (rl.remote) {
-      rect.setAttribute('fill', '#FFFFFF');
-      rect.setAttribute('stroke', '#717171');
-      if (!rl.onRemote) rect.setAttribute('stroke-dasharray', '3 2');
-    } else {
-      rect.setAttribute('fill', tint(color, rl.isHead ? 0.62 : 0.85));
-      rect.setAttribute('stroke', color);
-    }
-    rect.setAttribute('stroke-width', rl.isHead ? '2' : '1.2');
-    svg.appendChild(rect);
-    var lt = document.createElementNS(NS, 'text');
-    lt.setAttribute('x', x + padX); lt.setAttribute('y', y + h / 5);
-    lt.setAttribute('class', rl.isHead ? 'gs-ref gs-ref-head' : (rl.remote ? 'gs-ref gs-ref-remote' : 'gs-ref'));
-    lt.textContent = rl.label;
-    svg.appendChild(lt);
+  // remote's own branches. `rl` is { label, x, w, isHead, remote, onRemote }.
+  function drawRef(svg, rl, y, h, padX, color) {
+    var rect = svgEl('rect', {
+      x: rl.x, y: y - h / 2, width: rl.w, height: h, rx: h / 4, 'stroke-width': rl.isHead ? 2 : 1.2,
+      fill: rl.remote ? '#FFFFFF' : tint(color, rl.isHead ? 0.62 : 0.85),
+      stroke: rl.remote ? '#717171' : color
+    }, svg);
+    if (rl.remote && !rl.onRemote) rect.setAttribute('stroke-dasharray', '3 2');
+    svgEl('text', {
+      x: rl.x + padX, y: y + h / 5,
+      'class': rl.isHead ? 'gs-ref gs-ref-head' : (rl.remote ? 'gs-ref gs-ref-remote' : 'gs-ref')
+    }, svg, rl.label);
   }
 
   // The commit graph squeezed into half a panel, for the side-by-side
@@ -339,27 +300,13 @@
   // full text on hover. `onRemote` marks the remote's own graph, whose
   // labels are its branches rather than tracking copies of them.
   function renderCompactGraph(svg, model, onRemote) {
-    var NS = 'http://www.w3.org/2000/svg';
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
     var W = svg.clientWidth || 320;
-
-    if (!model.commits.length) {
-      svg.setAttribute('viewBox', '0 0 ' + W + ' 44');
-      svg.setAttribute('height', '44');
-      var t = document.createElementNS(NS, 'text');
-      t.setAttribute('x', String(W / 2)); t.setAttribute('y', '26');
-      t.setAttribute('text-anchor', 'middle');
-      t.setAttribute('class', 'gs-empty-text');
-      t.textContent = 'No commits yet.';
-      svg.appendChild(t);
-      return;
-    }
+    if (startGraph(svg, model, W, 44)) return;
 
     var laneW = 14, padLeft = 12, padTop = 10, refH = 16, refGap = 4, textH = 18, rowGap = 8;
-    var maxLane = 0;
-    model.commits.forEach(function (c) { if (c.lane > maxLane) maxLane = c.lane; });
-    var textX = padLeft + maxLane * laneW + 14;
-    var avail = W - textX - 6;
+    var textX = padLeft + maxLane(model) * laneW + 14;
+    var msgX = textX + 52;
+    var maxChars = Math.max(4, Math.floor((W - msgX - 6) / 6.3));
 
     var rows = model.commits.map(function (c) {
       // ref labels flow left to right, onto a new line when one won't fit
@@ -372,86 +319,52 @@
         lx += w + 4;
       });
       if (line.length) refLines.push(line);
-      var msgX = textX + 52;
-      var maxChars = Math.max(4, Math.floor((W - msgX - 6) / 6.3));
       var msg = String(c.message).split('\n')[0];
       var cut = msg.length > maxChars;
       return {
-        refLines: refLines, msgX: msgX, msg: cut ? msg.slice(0, maxChars - 1) + '…' : msg, cut: cut,
+        refLines: refLines, msg: cut ? msg.slice(0, maxChars - 1) + '…' : msg, cut: cut,
         h: refLines.length * (refH + refGap) + textH + rowGap
       };
     });
 
     var tops = [], acc = padTop;
     rows.forEach(function (r) { tops.push(acc); acc += r.h; });
-    var height = acc - rowGap + padTop;
-    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + height);
-    svg.setAttribute('height', String(height));
-    svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+    sizeGraph(svg, W, acc - rowGap + padTop);
 
-    var index = {};
-    model.commits.forEach(function (c, i) { index[c.oid] = i; });
     var x = function (lane) { return padLeft + lane * laneW; };
     // the node sits level with the first line of its row
-    var cyOf = function (i) {
-      return tops[i] + (rows[i].refLines.length ? refH / 2 : textH / 2);
-    };
-
-    drawEdges(svg, model, index, x, cyOf);
+    var cyOf = function (i) { return tops[i] + (rows[i].refLines.length ? refH / 2 : textH / 2); };
+    drawEdges(svg, model, x, cyOf);
 
     model.commits.forEach(function (c, i) {
       var row = rows[i], top = tops[i];
-      var color = LANE_COLORS[c.lane % LANE_COLORS.length];
       drawNode(svg, c, x(c.lane), cyOf(i), 5);
       row.refLines.forEach(function (l, li) {
         var cy = top + li * (refH + refGap) + refH / 2;
-        l.forEach(function (rl) { drawRef(svg, rl, rl.x, cy, refH, 5, color); });
+        l.forEach(function (rl) { drawRef(svg, rl, cy, refH, 5, laneColor(c.lane)); });
       });
       var ty = top + row.refLines.length * (refH + refGap) + textH / 2 + 4;
-      var sha = document.createElementNS(NS, 'text');
-      sha.setAttribute('x', textX); sha.setAttribute('y', ty);
-      sha.setAttribute('class', 'gs-sha');
-      sha.textContent = c.short;
-      svg.appendChild(sha);
-      var msg = document.createElementNS(NS, 'text');
-      msg.setAttribute('x', row.msgX); msg.setAttribute('y', ty);
-      msg.setAttribute('class', 'gs-msg');
-      msg.textContent = row.msg;
-      if (row.cut) {
-        var title = document.createElementNS(NS, 'title');
-        title.textContent = c.message;
-        msg.appendChild(title);
-      }
-      svg.appendChild(msg);
+      svgEl('text', { x: textX, y: ty, 'class': 'gs-sha' }, svg, c.short);
+      var msg = svgEl('text', { x: msgX, y: ty, 'class': 'gs-msg' }, svg, row.msg);
+      if (row.cut) svgEl('title', {}, msg, c.message);
     });
   }
 
   // The chevron at the end of a history row: a keyboard-reachable SVG
   // button that opens or closes the commit's contents.
-  function commitToggle(NS, c, x, cy, isOpen, onToggle) {
-    var g = document.createElementNS(NS, 'g');
-    g.setAttribute('class', 'gs-cd-toggle' + (isOpen ? ' is-open' : ''));
-    g.setAttribute('role', 'button');
-    g.setAttribute('tabindex', '0');
-    g.setAttribute('data-oid', c.oid);
-    g.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-    g.setAttribute('aria-label', (isOpen ? 'Hide' : 'Show') + ' the contents of commit ' + c.short);
-    var title = document.createElementNS(NS, 'title');
-    title.textContent = isOpen ? 'Hide contents' : 'Show contents';
-    g.appendChild(title);
-    var hit = document.createElementNS(NS, 'rect');
-    hit.setAttribute('x', x - 11); hit.setAttribute('y', cy - 11);
-    hit.setAttribute('width', 22); hit.setAttribute('height', 22);
-    hit.setAttribute('rx', 5);
-    hit.setAttribute('class', 'gs-cd-toggle-bg');
-    g.appendChild(hit);
-    var chev = document.createElementNS(NS, 'path');
+  function commitToggle(c, x, cy, isOpen, onToggle) {
+    var g = svgEl('g', {
+      'class': 'gs-cd-toggle' + (isOpen ? ' is-open' : ''), role: 'button', tabindex: 0,
+      'data-oid': c.oid, 'aria-expanded': isOpen ? 'true' : 'false',
+      'aria-label': (isOpen ? 'Hide' : 'Show') + ' the contents of commit ' + c.short
+    });
+    svgEl('title', {}, g, isOpen ? 'Hide contents' : 'Show contents');
+    svgEl('rect', { x: x - 11, y: cy - 11, width: 22, height: 22, rx: 5, 'class': 'gs-cd-toggle-bg' }, g);
     // points right when closed and down when open, like the file browser's
-    chev.setAttribute('d', isOpen
-      ? 'M' + (x - 4) + ',' + (cy - 2) + ' l4,4 l4,-4'
-      : 'M' + (x - 2) + ',' + (cy - 4) + ' l4,4 l-4,4');
-    chev.setAttribute('class', 'gs-cd-chev');
-    g.appendChild(chev);
+    svgEl('path', {
+      'class': 'gs-cd-chev',
+      d: isOpen ? 'M' + (x - 4) + ',' + (cy - 2) + ' l4,4 l4,-4' : 'M' + (x - 2) + ',' + (cy - 4) + ' l4,4 l-4,4'
+    }, g);
     g.addEventListener('click', function () { onToggle(c.oid); });
     g.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(c.oid); }
@@ -718,7 +631,7 @@
   // The lane colour of the commit HEAD points at, as the graph draws it.
   function commitColor(graph) {
     var head = graph.commits.filter(function (c) { return c.oid === graph.headOid; })[0];
-    return LANE_COLORS[(head ? head.lane : 0) % LANE_COLORS.length];
+    return laneColor(head ? head.lane : 0);
   }
 
   // `el`'s box relative to `node`, in node's own (unscaled) CSS pixels.
@@ -759,18 +672,17 @@
     var host = typeof selector === 'string' ? document.querySelector(selector) : selector;
     if (!host) return null;
 
-    if (!root.git || typeof root.git.init !== 'function') {
+    // isomorphic-git's index code calls a global Buffer. The bundle shipped
+    // with this lesson provides one; a bare CDN copy of isomorphic-git does not.
+    var missing = !root.git || typeof root.git.init !== 'function'
+      ? 'the git library did not load. Check that isomorphic-git.bundle.js is reachable from this page.'
+      : typeof root.Buffer === 'undefined'
+        ? 'no Buffer polyfill is present. Load isomorphic-git.bundle.js (which includes one) ' +
+          'rather than isomorphic-git on its own.'
+        : null;
+    if (missing) {
       host.classList.add('gs');
-      host.innerHTML = '<div class="gs-loading">This exercise could not start: the git library did not load. ' +
-        'Check that isomorphic-git.bundle.js is reachable from this page.</div>';
-      return null;
-    }
-    if (typeof root.Buffer === 'undefined') {
-      // isomorphic-git's index code calls a global Buffer. The bundle shipped with
-      // this lesson provides one; a bare CDN copy of isomorphic-git does not.
-      host.classList.add('gs');
-      host.innerHTML = '<div class="gs-loading">This exercise could not start: no Buffer polyfill is present. ' +
-        'Load isomorphic-git.bundle.js (which includes one) rather than isomorphic-git on its own.</div>';
+      host.innerHTML = '<div class="gs-loading">This exercise could not start: ' + missing + '</div>';
       return null;
     }
 
@@ -786,13 +698,15 @@
     var history = [];
     var histIdx = -1;
     var busy = false;
+    function setBusy(on) { busy = on; input.disabled = on; }
     var tasks = normaliseTasks(config.tasks);
     var seed = normaliseSeed(config.seed);
     // only the origin seeds a shared repository; a view that mounts before
     // its origin starts empty and catches up when the origin arrives
     if (isOrigin) group.seed = seed;
     var intro = normaliseIntro(config.intro);
-    var script = normaliseScript(config.script);
+    // commands to play back one at a time
+    var script = commandLines(config.script);
     // The learngitbranching-style pane: `tree-view: true` shows it beside
     // the box, 'toggle' (the default) puts a button in the header that
     // opens it, and false leaves it out.
@@ -1022,37 +936,44 @@
       });
     }
 
+    function promptText() { return host.querySelector('.gs-prompt').textContent; }
+
     function captureUndo(line) {
       return {
         line: line,
         core: sb.snapshot(),
         outHtml: out.innerHTML,
-        prompt: host.querySelector('.gs-prompt').textContent,
+        prompt: promptText(),
         histLen: history.length,
         done: tasks.map(function (t) { return !!t._done; }),
         tree: tree ? tree.snapshot() : null
       };
     }
 
+    // back to a captureUndo() snapshot: repo, terminal, history and ticks
+    function restoreSnap(snap) {
+      sb.restore(snap.core);
+      // C-names given out since the snapshot are handed back, so the next
+      // commit reuses the undone one's name
+      if (tree) tree.restore(snap.tree);
+      out.innerHTML = snap.outHtml;
+      out.scrollTop = out.scrollHeight;
+      history.length = snap.histLen;
+      histIdx = history.length;
+      tasks.forEach(function (t, i) { t._done = snap.done[i]; t._wasDone = snap.done[i]; });
+    }
+
     function doUndo() {
       if (!canUndo()) {
-        write('<span class="gs-echo-prompt">' +
-          esc(host.querySelector('.gs-prompt').textContent) + '</span> undo', 'gs-echo');
+        echo(promptText(), 'undo');
         writeText(undoStack.length
           ? 'The last change was made in another view of this repository. Undo it there.'
           : 'Nothing to undo.');
         return;
       }
       var entry = undoStack.pop();
-      sb.restore(entry.core);
-      // C-names given out since the snapshot are handed back, so the next
-      // commit reuses the undone one's name
-      if (tree) tree.restore(entry.tree);
-      out.innerHTML = entry.outHtml;
-      history.length = entry.histLen;
-      histIdx = history.length;
-      tasks.forEach(function (t, i) { t._done = entry.done[i]; t._wasDone = entry.done[i]; });
-      write('<span class="gs-echo-prompt">' + esc(entry.prompt) + '</span> undo', 'gs-echo');
+      restoreSnap(entry);
+      echo(entry.prompt, 'undo');
       writeText('Undid: {y}' + entry.line + '{/}');
     }
 
@@ -1079,13 +1000,18 @@
       showPanels();
     }
 
-    function showPanels() {
-      Object.keys(tabButtons).forEach(function (k) {
-        var on = k === activeTab;
-        tabButtons[k].classList.toggle('is-active', on);
-        tabButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
-        tabPanels[k].hidden = !on || !panelsOpen;
+    // mark the `active` tab of `buttons` selected, and show only its pane
+    function activate(buttons, panes, active, shown) {
+      Object.keys(buttons).forEach(function (k) {
+        var on = k === active;
+        buttons[k].classList.toggle('is-active', on);
+        buttons[k].setAttribute('aria-selected', on ? 'true' : 'false');
+        panes[k].hidden = !on || !shown;
       });
+    }
+
+    function showPanels() {
+      activate(tabButtons, tabPanels, activeTab, panelsOpen);
       // A graph drawn while its panel was hidden used the fallback width;
       // now that it has a real width, redraw at it.
       redrawGraph();
@@ -1240,17 +1166,10 @@
     var viewPanes = {};
     host.querySelectorAll('.gs-wtab').forEach(function (b) { viewButtons[b.getAttribute('data-view')] = b; });
     host.querySelectorAll('.gs-view').forEach(function (p) { viewPanes[p.getAttribute('data-view')] = p; });
-    var activeView = 'terminal';
 
     function selectView(name, focus) {
       if (!viewButtons[name]) return;
-      activeView = name;
-      Object.keys(viewButtons).forEach(function (k) {
-        var on = k === name;
-        viewButtons[k].classList.toggle('is-active', on);
-        viewButtons[k].setAttribute('aria-selected', on ? 'true' : 'false');
-        viewPanes[k].hidden = !on;
-      });
+      activate(viewButtons, viewPanes, name, true);
       // lets narrow screens give the stacked file tree + editor more room
       host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
       if (!focus) return;
@@ -1495,23 +1414,20 @@
     // it gets an undo entry and re-runs the task checks.
     async function editorWrite(name, text, label) {
       if (busy) return false;
-      busy = true;
-      input.disabled = true;
+      setBusy(true);
       var snap = captureUndo(label);
       try {
         await sb.writeFile(name, text);
       } catch (e) {
         edNote = 'could not save: ' + e.message;
-        busy = false;
-        input.disabled = false;
+        setBusy(false);
         renderEditor();
         return false;
       }
       if (sb.changedSince(snap.core)) pushUndo(snap);
       await refresh();
       notifyViews();
-      input.disabled = false;
-      busy = false;
+      setBusy(false);
       return true;
     }
 
@@ -1646,6 +1562,10 @@
     function writeText(text, cls) {
       if (text === '' || text == null) return;
       write(markup(text), cls);
+    }
+    // a command as the terminal shows it once entered
+    function echo(prompt, line) {
+      write('<span class="gs-echo-prompt">' + esc(prompt) + '</span> ' + esc(line), 'gs-echo');
     }
 
     function renderHints() {
@@ -2019,21 +1939,19 @@
     // on a slide belongs to reveal.js
     async function submit(line, quiet) {
       if (busy) return;
-      busy = true;
-      input.disabled = true;
+      setBusy(true);
       var trimmed = line.trim();
       if (trimmed === 'undo') {
         // never reaches the engine: undo is a sandbox affordance, not git
         doUndo();
         await refresh();
         notifyViews();
-        input.disabled = false;
-        busy = false;
+        setBusy(false);
         if (!quiet) input.focus();
         return;
       }
       var snap = captureUndo(line);
-      write('<span class="gs-echo-prompt">' + esc(host.querySelector('.gs-prompt').textContent) + '</span> ' + esc(line), 'gs-echo');
+      echo(promptText(), line);
       history.push(line);
       histIdx = history.length;
       var r = await sb.run(line);
@@ -2058,8 +1976,7 @@
       await refresh();
       if (want) selectTab(want);
       if (changed && trimmed !== 'reset') notifyViews();
-      input.disabled = false;
-      busy = false;
+      setBusy(false);
       if (!quiet) input.focus();
     }
 
@@ -2129,8 +2046,7 @@
       if (vim) {
         // abandon the commit in progress; the submit waiting on it bows out
         vim.abandon();
-        busy = false;
-        input.disabled = false;
+        setBusy(false);
       }
       out.innerHTML = '';
       input.value = '';
@@ -2304,13 +2220,7 @@
     function scriptRestore(k) {
       var snap = scriptSnaps[k];
       if (!snap) return;
-      sb.restore(snap.core);
-      if (tree) tree.restore(snap.tree);
-      out.innerHTML = snap.outHtml;
-      out.scrollTop = out.scrollHeight;
-      history.length = snap.histLen;
-      histIdx = history.length;
-      tasks.forEach(function (t, i) { t._done = snap.done[i]; t._wasDone = snap.done[i]; });
+      restoreSnap(snap);
       if (undoStack.length > snap.undoLen) undoStack.length = snap.undoLen;
       scriptSnaps.length = k;
       scriptRan = k;
@@ -2374,7 +2284,7 @@
       var gen = ++scriptGen;
       scriptTarget = target;
       // a scripted `git commit` without -m waits in vim; going back gives up on it
-      if (vim && target < scriptStep()) { vim.abandon(); busy = false; input.disabled = false; }
+      if (vim && target < scriptStep()) { vim.abandon(); setBusy(false); }
       scriptChain = (scriptChain || ready).then(function () { return applyStep(target, gen); })
         .catch(function (e) { writeText('{r}The script stopped: ' + e.message + '{/}', 'gs-err'); });
       return scriptChain;
@@ -2474,83 +2384,26 @@
     };
   }
 
-  /* ------------------- helpers for exercise checks ------------------- */
-
-  // oid a branch currently points at, or null
-  function branchOid(graph, name) {
-    var b = (graph.branches || []).filter(function (x) { return x.name === name; })[0];
-    return b ? b.oid : null;
-  }
-
-  // is `target` reachable by walking parents back from `from`?
-  function reaches(graph, from, target) {
-    if (!from || !target) return false;
-    if (from === target) return true;
-    var byOid = {};
-    graph.commits.forEach(function (c) { byOid[c.oid] = c; });
-    var stack = [from];
-    var seen = {};
-    while (stack.length) {
-      var oid = stack.pop();
-      if (oid === target) return true;
-      if (seen[oid]) continue;
-      seen[oid] = true;
-      var c = byOid[oid];
-      if (c) (c.parents || []).forEach(function (p) { stack.push(p); });
-    }
-    return false;
-  }
-
-  // Has branch `name` been merged into branch `into`? Requires a merge the
-  // sandbox actually recorded, not just ancestry — a branch freshly created
-  // from `into`'s tip is already an ancestor of it, and a completed
-  // fast-forward merge leaves the identical graph, so ancestry alone cannot
-  // tell the two apart.
-  function isMerged(graph, name, into) {
-    var recorded = (graph.merges || []).some(function (m) {
-      return m.from === name && m.into === into;
-    });
-    if (!recorded) return false;
-    var fromOid = branchOid(graph, name);
-    var intoOid = branchOid(graph, into);
-    if (!fromOid || !intoOid) return true;
-    return reaches(graph, intoOid, fromOid);
-  }
-
-  // how many commits are reachable from a branch tip
-  function commitCount(graph, name) {
-    var tip = branchOid(graph, name);
-    if (!tip) return 0;
-    var byOid = {};
-    graph.commits.forEach(function (c) { byOid[c.oid] = c; });
-    var stack = [tip], seen = {}, n = 0;
-    while (stack.length) {
-      var oid = stack.pop();
-      if (seen[oid]) continue;
-      seen[oid] = true; n++;
-      var c = byOid[oid];
-      if (c) (c.parents || []).forEach(function (p) { stack.push(p); });
-    }
-    return n;
-  }
-
-  function hasMergeCommit(graph) {
-    return graph.commits.some(function (c) { return (c.parents || []).length > 1; });
-  }
-
   function boot() {
     var pending = root.__gsPending || [];
     pending.forEach(function (p) { mount(p[0], p[1]); });
     root.__gsPending = { push: function (p) { mount(p[0], p[1]); } };
   }
 
+  // The graph helpers live with the `when:` language; they are offered here
+  // too for hand-written `check:` functions.
+  var W = root.GitSandboxWhen || {};
   root.GitSandboxUI = {
     mount: mount,
     boot: boot,
-    branchOid: branchOid,
-    reaches: reaches,
-    isMerged: isMerged,
-    commitCount: commitCount,
-    hasMergeCommit: hasMergeCommit
+    branchOid: W.branchOid,
+    reaches: W.reaches,
+    isMerged: W.isMerged,
+    commitCount: W.commitCount,
+    hasMergeCommit: W.hasMergeCommit
   };
+
+  // Mount the exercises the Quarto filter queued on the page (and any it
+  // queues later). A page without the filter calls mount() itself.
+  boot();
 })(window);

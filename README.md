@@ -429,13 +429,16 @@ exercise to its seeded state and clears the undo history.
   `git add`, and concludes with `git commit`; `git merge --abort` gives up.
   What it does not offer is a side-by-side merge editor.
 - **No `rebase`, `stash`, `cherry-pick` or `revert`.** These
-  could be added to the engine in `src/sandbox-core.js`.
+  could be added to the engine in
+  `_extensions/git-sandbox/resources/sandbox-core.js`.
 
 ## Using it outside Quarto
 
 `example-embed.html` is a plain HTML page with no Quarto and no build step:
-copy the three files from `_extensions/git-sandbox/resources/`, add a
-container, and call `GitSandboxUI.mount()` with the same options in JavaScript.
+copy the files from `_extensions/git-sandbox/resources/`, load the scripts
+in the order the page does, add a container, and call `GitSandboxUI.mount()`
+with the same options in JavaScript. Open it as `example-embed.html?record`
+for a fixed-size frame suited to screen recordings.
 Useful when a platform will take an HTML block or an iframe but not a Quarto
 document.
 
@@ -460,13 +463,13 @@ document.
 
 ```bash
 npm install          # dev dependencies only; the extension itself needs none
-./build.sh           # rebuild _extensions/.../git-sandbox.js from src/
-./build.sh --vendor  # also re-bundle isomorphic-git
-./tests/run.sh       # all seven suites
+./tests/run.sh       # all nine suites
+./build.sh           # only to re-bundle isomorphic-git
 ```
 
-`_extensions/git-sandbox/resources/git-sandbox.js` is generated. Edit `src/`
-and rebuild. See `CONTRIBUTING.md`.
+The sandbox's scripts in `_extensions/git-sandbox/resources/` are the
+source: edit them directly, there is nothing to rebuild. See
+`CONTRIBUTING.md`.
 
 ## Credits
 

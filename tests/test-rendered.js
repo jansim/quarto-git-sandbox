@@ -352,7 +352,7 @@ function outText(win, hostId) {
   check('the guide links to the repository',
     !!win.document.querySelector('a[href="https://github.com/jansim/quarto-git-sandbox"]'));
   check('the guide links to the reveal.js deck', !!win.document.querySelector('a[href="example-revealjs.html"]'));
-  check('guide title present', /Building interactive Git exercises/.test(win.document.title), win.document.title);
+  check('guide title present', /Interactive Git exercises/.test(win.document.title), win.document.title);
   check('copyable block source is shown on the page',
     /```git-sandbox/.test(win.document.body.textContent));
   check('all sandboxes have an accessible label',

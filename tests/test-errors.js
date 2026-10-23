@@ -75,7 +75,7 @@ function render(fixture) {
 
     // a broken block must not take the assets or the good blocks with it
     check('assets still injected alongside broken blocks',
-      /git-sandbox\.js/.test(html) && /isomorphic-git\.bundle\.js/.test(html) &&
+      /sandbox-ui\.js/.test(html) && /isomorphic-git\.bundle\.js/.test(html) &&
       /git-sandbox\.css/.test(html),
       (html.match(/(src|href)="[^"]*git[^"]*"/g) || []).join(' ') || 'no git assets found');
   }
@@ -88,7 +88,7 @@ function render(fixture) {
     // scripts are separate files. Load over file:// so jsdom can fetch them the
     // way a browser would, which also proves asset injection works unembedded.
     check('assets injected as separate files',
-      /<script src="[^"]*git-sandbox\.js"/.test(html) &&
+      /<script src="[^"]*sandbox-ui\.js"/.test(html) &&
       /<script src="[^"]*isomorphic-git\.bundle\.js"/.test(html) &&
       /<link[^>]+git-sandbox\.css/.test(html),
       (html.match(/<script src="[^"]*"/g) || []).slice(0, 6).join(' '));

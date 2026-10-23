@@ -22,25 +22,24 @@ _extensions/git-sandbox/
   git-sandbox.lua      the filter: reads the block, emits a div + config JSON
   yaml.lua             a small YAML subset parser
   resources/
-    git-sandbox.js     GENERATED from src/ by ./build.sh; do not edit
+    sandbox-core.js    in-memory filesystem, git and shell commands, graph model
+    sandbox-when.js    the `when:` mini-language and the graph helpers it uses
+    sandbox-tree.js    the optional learngitbranching-style commit tree
+    sandbox-ui.js      terminal, editor, panels, task list; mounts the boxes
     git-sandbox.css    styling
-    isomorphic-git.bundle.js   GENERATED from vendor/ by ./build.sh --vendor
-    git-sandbox-boot.js        mounts the exercises the filter queued
-src/
-  sandbox-core.js      in-memory filesystem, git and shell commands, graph model
-  sandbox-when.js      the `when:` mini-language
-  sandbox-tree.js      the optional learngitbranching-style commit tree
-  sandbox-ui.js        terminal, staging diagram, commit graph, task list
+    isomorphic-git.bundle.js   GENERATED from vendor/ by ./build.sh
 ```
 
-At render time the filter turns each block into a container plus a
-`window.__gsPending.push([...])` call. The boot script, loaded after the body,
-drains that queue. This keeps a 260 KB library off the critical path while still
-letting per-exercise configuration sit inline where the author wrote it.
+The scripts load in that order, each one a plain browser script (the first
+three also work as Node modules, for the tests). What is in `resources/` is
+what `quarto add` installs, so there is no build step for the sandbox
+itself: edit the files and render.
 
-Edit `src/`, run `./build.sh`, and the concatenated bundle lands in
-`resources/`. The generated file is committed so that `quarto add` works
-without a toolchain.
+At render time the filter turns each block into a container plus a
+`window.__gsPending.push([...])` call. `sandbox-ui.js`, loaded after the
+body, drains that queue. This keeps a 260 KB library off the critical path
+while still letting per-exercise configuration sit inline where the author
+wrote it.
 
 ## Tests
 
@@ -94,7 +93,7 @@ afterwards, and only to fields that should have it (`title`, `done-note`, task
 
 - Two-space indentation in Lua and JavaScript.
 - The browser code is ES5-flavoured on purpose (`var`, no arrow functions in
-  `src/`) so it runs without transpilation in older embedded webviews. Tests may
+  `resources/`) so it runs without transpilation in older embedded webviews. Tests may
   use modern syntax.
 - Comments should explain *why*, not restate the code. If a line looks wrong but
   is deliberate, say why; the `Buffer` polyfill and the `assert` workaround are
@@ -123,6 +122,5 @@ quarto add ryjohnson09/quarto-git-sandbox        # HEAD of main
 quarto add ryjohnson09/quarto-git-sandbox@v1.0.0 # a specific tag
 ```
 
-Two consequences worth keeping in mind: keep `main` releasable at all times, and
-make sure the generated files in `_extensions/git-sandbox/resources/` are
-committed and current, because that is what users install.
+Keep `main` releasable at all times: `_extensions/git-sandbox/resources/` on
+`main` is exactly what users install.

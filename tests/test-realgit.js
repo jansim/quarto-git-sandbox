@@ -25,7 +25,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const git = require('isomorphic-git');
-const Core = require('../src/sandbox-core.js');
+const Core = require('../_extensions/git-sandbox/resources/sandbox-core.js');
 
 const SANDBOX_URL = 'https://example.com/acme/project.git';
 
