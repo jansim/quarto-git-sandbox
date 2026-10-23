@@ -1,6 +1,6 @@
 /* Headless tests for the git sandbox engine. Run: node test-core.js */
 const git = require('isomorphic-git');
-const Core = require('../src/sandbox-core.js');
+const Core = require('../_extensions/git-sandbox/resources/sandbox-core.js');
 
 let pass = 0, fail = 0;
 const failures = [];
