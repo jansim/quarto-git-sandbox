@@ -725,6 +725,43 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check('and catches up when the origin seeds it', circles(bc) === 1, circles(bc));
   }
 
+  /* ---------------- scripted commands, off a slide ---------------- */
+  {
+    const sh = win.document.createElement('div');
+    sh.id = 'scripted';
+    win.document.body.appendChild(sh);
+    const S = win.GitSandboxUI.mount('#scripted', {
+      script: 'git init\n# a comment is dropped\necho a > a.txt\n\ngit add a.txt'
+    });
+    await S.ready;
+    const q = (s) => sh.querySelector(s);
+    const sin = q('.gs-input');
+    const echoes = () => sh.querySelectorAll('.gs-echo').length;
+    check('script: blank lines and comments are dropped', S.script.commands.length === 3, S.script.commands.join('|'));
+    check('script: the counter sits in the prompt line', !!q('.gs-input-row .gs-script-count') && q('.gs-script-count').textContent === '[0/3]');
+    check('script: off a slide the list has a Next button', !q('.gs-script-next').hidden);
+    q('.gs-script-next').click();
+    await S.script.step(1);
+    check('script: Next types the first command', sin.value === 'git init' && q('.gs-script-count').textContent === '[1/3]', sin.value);
+    await S.script.step(2);
+    check('script: the next step runs it', echoes() === 1 && sin.value === '');
+    await S.script.step(6);
+    check('script: a jump runs everything up to it', echoes() === 3 && /a\.txt/.test(q('.gs-stages').textContent));
+    check('script: the counter reaches the end', q('.gs-script-count').textContent === '[3/3]');
+    check('script: Skip and Next are spent at the end', q('.gs-script-skip').disabled && q('.gs-script-next').disabled);
+    await S.script.step(1);
+    check('script: stepping back restores the state before', echoes() === 0 && sin.value === 'git init' &&
+      !/a\.txt/.test(q('.gs-stages').textContent) && !(await S.sandbox.isRepo()));
+    // Enter on the waiting command counts as the script's own step
+    q('.gs-input-row').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 50 && S.script.position() !== 2; i++) await sleep(40);
+    await sleep(30);
+    check('script: Enter on a typed command runs it once', echoes() === 1 && S.script.position() === 2, S.script.position());
+    q('.gs-reset').click();
+    await sleep(60);
+    check('script: Reset starts the script over', S.script.position() === 0 && q('.gs-script-count').textContent === '[0/3]');
+  }
+
   /* ---------------- File Status animations ---------------- */
   {
     // jsdom has no layout and no Web Animations API, so stand in for both:

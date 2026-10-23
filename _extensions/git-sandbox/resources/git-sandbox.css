@@ -39,6 +39,17 @@
   overflow: hidden;
 }
 
+/* Buttons and inputs take their type from the box, as Bootstrap's reboot
+   makes them do on an ordinary Quarto page. reveal.js has no such reset, so
+   without this a slide sizes every tab, button and the prompt differently.
+   :where() keeps it at zero specificity, so every rule below still wins. */
+:where(.gs) :where(button, input, select, textarea) {
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 /* ------------------------------- header ------------------------------ */
 
 .gs-head {
@@ -261,11 +272,144 @@
 .gs-input::placeholder { color: var(--gs-t-dim); opacity: 0.75; font-style: italic; }
 .gs-input:focus::placeholder { opacity: 0.35; }
 
+/* ------------------------- scripted commands ------------------------- */
+
+/* A `script` types its commands into the prompt itself, so the input is
+   not focused and has no caret of its own: this one follows the typing. */
+.gs-input-row { position: relative; }
+.gs-type-caret {
+  position: absolute;
+  top: 50%;
+  width: 0.6em;
+  height: 1.2em;
+  margin-top: -0.6em;
+  background: var(--gs-orange);
+  pointer-events: none;
+  animation: gs-blink 1s steps(1) infinite;
+}
+.gs-type-caret[hidden] { display: none; }
+@keyframes gs-blink { 50% { opacity: 0; } }
+/* measures the typed text so the caret knows where to stand */
+.gs-type-measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  font-family: var(--gs-mono);
+  font-size: 13.5px;
+}
+
+/* [2/5] at the right of the prompt; hovering it opens the list above */
+.gs-script { position: relative; flex: 0 0 auto; }
+.gs-script-count {
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  color: var(--gs-t-dim);
+  background: transparent;
+  border: 1px solid rgba(161, 183, 203, 0.34);
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.gs-script-count:hover, .gs-script.is-open .gs-script-count { color: #FFFFFF; border-color: var(--gs-t-dim); }
+.gs-script-count:focus-visible, .gs-script-btn:focus-visible, .gs-script-item:focus-visible {
+  outline: 3px solid rgba(238, 99, 49, 0.6);
+  outline-offset: 1px;
+}
+/* padding, not margin, under the list, so the pointer can cross the gap
+   between the counter and the list without it closing */
+.gs-script-pop {
+  display: none;
+  position: absolute;
+  right: -6px;
+  bottom: 100%;
+  z-index: 5;
+  padding-bottom: 6px;
+  width: 340px;
+  max-width: calc(100vw - 48px);
+}
+.gs-script.is-open .gs-script-pop { display: block; }
+.gs-script-head, .gs-script-list {
+  background: var(--gs-blue-500);
+  border: 1px solid rgba(161, 183, 203, 0.34);
+}
+.gs-script-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+}
+.gs-script-title {
+  flex: 1 1 auto;
+  font-family: var(--gs-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gs-t-dim);
+}
+.gs-script-btn {
+  font-family: var(--gs-mono);
+  font-size: 12px;
+  color: #FFFFFF;
+  background: rgba(161, 183, 203, 0.16);
+  border: 1px solid rgba(161, 183, 203, 0.34);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.gs-script-btn:hover:not(:disabled) { background: var(--gs-blue-vibrant); border-color: var(--gs-blue-vibrant); }
+.gs-script-btn:disabled { opacity: 0.5; cursor: default; }
+.gs-script-btn[hidden] { display: none; }
+.gs-script-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.reveal .gs ol.gs-script-list { display: block; margin: 0; padding: 4px; }
+.gs-script-list li, .reveal .gs .gs-script-list li { margin: 0; line-height: 1.4; }
+.gs-script-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--gs-t-fg);
+  font-family: var(--gs-mono);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.gs-script-item:hover { background: rgba(161, 183, 203, 0.16); }
+/* doubled up to beat reveal.js's and the host theme's own code colours */
+.gs .gs-script-item code, .reveal .gs .gs-script-item code {
+  font-family: inherit; font-size: inherit; color: inherit; background: none; padding: 0; white-space: pre-wrap; word-break: break-word;
+}
+.gs-script-mark { flex: 0 0 1.4em; text-align: center; color: var(--gs-t-dim); }
+.gs-script-item.is-ran { color: var(--gs-t-dim); }
+.gs-script-item.is-ran .gs-script-mark { color: var(--gs-t-green); }
+.gs-script-item.is-skipped code { text-decoration: line-through; color: var(--gs-t-dim); }
+.gs-script-item.is-current { background: rgba(238, 99, 49, 0.18); color: #FFFFFF; }
+.gs-script-item.is-current .gs-script-mark { color: var(--gs-t-yellow); }
+
+@media (prefers-reduced-motion: reduce) {
+  .gs-type-caret { animation: none; }
+}
+
 /* ------------------------------- vim --------------------------------- */
 
 /* `git commit` without -m swaps the transcript and prompt for this. The
    display rules above would otherwise beat the hidden attribute. */
 .gs-out[hidden], .gs-input-row[hidden], .gs-hints[hidden], .gs-vim[hidden] { display: none; }
+/* no hints: no strip of padding under the prompt either */
+.gs-hints:empty { display: none; }
 
 .gs-vim {
   flex: 1 1 auto;
@@ -1015,7 +1159,11 @@
   100% { background: transparent; }
 }
 .gs-task.is-done .gs-task-txt { color: var(--gs-gray-body); }
-.gs-task code {
+.gs .gs-task code {
+  /* doubled up to beat the host's own code styling (Bootstrap's on a page,
+     reveal.js's on a slide), which would otherwise recolour it */
+  color: var(--gs-blue-500);
+  white-space: nowrap;
   font-family: var(--gs-mono);
   font-size: 0.92em;
   background: var(--gs-off-white);
@@ -1066,6 +1214,10 @@
    slide. */
 .reveal .gs { margin: 12px 0; font-size: 16px; line-height: 1.5; text-align: left; }
 .reveal .gs ul.gs-task-list, .reveal .gs ul.gs-fb-list { display: block; margin: 0; padding: 0; }
+/* reveal.js spaces out list items and zeroes their first child's top
+   margin, which pulls the task rows apart and lifts the checkboxes */
+.reveal .slide .gs li { margin: 0; }
+.reveal .slide .gs li > .gs-task-mark { margin-top: 2px; }
 .reveal .gs .gs-term-wrap { height: 230px; }
 .reveal .gs .gs-panel { max-height: 200px; }
 .reveal .gs .gs-tree-below .gs-tree-scroll { height: 200px; }
@@ -1083,18 +1235,19 @@
 }
 .reveal .gs-fill > .gs-body { display: flex; flex-direction: column; min-height: 0; }
 /* The terminal or editor is what the slide is for, so it gets most of the
-   room; the tasks and the views below make do with a compact strip. */
+   room. The tasks and the views below keep the spacing they have on a page
+   but take a fixed share of the height. */
 .reveal .gs-fill .gs-term-wrap { flex: 1 1 0; height: auto; min-height: 180px; }
 .reveal .gs-fill .gs-tasks { flex: 0 0 auto; max-height: 22%; overflow-y: auto; }
-.reveal .gs-fill .gs-tasks:not(:empty) { padding-top: 8px; padding-bottom: 8px; }
-.reveal .gs-fill .gs-viz { flex: 0 0 auto; padding-top: 6px; padding-bottom: 6px; }
-.reveal .gs-fill .gs-tabs { margin-bottom: 6px; }
+.reveal .gs-fill .gs-viz { flex: 0 0 auto; }
 .reveal .gs-fill .gs-panel { height: 112px; max-height: none; }
+/* the stages fill that area rather than leaving a band of white under them */
+.reveal .gs-fill .gs-panel > .gs-stages { min-height: 100%; }
 .reveal .gs-fill .gs-graph-scroll, .reveal .gs-fill .gs-diff { overflow: visible; }
 
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
-  .gs-input-row, .gs-hints, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
+  .gs-input-row, .gs-hints, .gs-script, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
   .gs-titlebar, .gs-view-editor { display: none; }
   /* the terminal transcript prints even if the editor was showing */
   .gs-view[data-view="terminal"][hidden] { display: flex; }

@@ -38,9 +38,11 @@ function render(fixture) {
   {
     const { html } = render('bad-config.qmd');
 
-    // eight bad blocks, and the duplicate-id pair which should still render
+    // the bad blocks, and the duplicate-id pair which should still render
     const errors = (html.match(/gs-config-error/g) || []).length;
-    check('ten config errors reported', errors === 10, 'found ' + errors);
+    check('eleven config errors reported', errors === 11, 'found ' + errors);
+    check('says a script line must be a command',
+      /(&quot;|")script(&quot;|") line 2 must be a command/.test(html));
     check('a view cannot have its own seed',
       /(&quot;|")seed(&quot;|") cannot be combined with (&quot;|")share(&quot;|")/.test(html));
     check('says tree-view must be true, false or toggle',

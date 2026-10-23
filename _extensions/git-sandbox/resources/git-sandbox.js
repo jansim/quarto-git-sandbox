@@ -3974,6 +3974,16 @@
     };
   }
 
+  // `script`: commands to play back one at a time, as a list or as a block
+  // with one per line. Blank lines and # comments are dropped, as in a seed.
+  function normaliseScript(script) {
+    if (!script) return [];
+    var lines = Array.isArray(script) ? script : String(script).split('\n');
+    return lines
+      .map(function (l) { return String(l).trim(); })
+      .filter(function (l) { return l !== '' && l.charAt(0) !== '#'; });
+  }
+
   function normaliseIntro(intro) {
     if (!intro) return [];
     if (Array.isArray(intro)) return intro;
@@ -4641,6 +4651,7 @@
     // its origin starts empty and catches up when the origin arrives
     if (isOrigin) group.seed = seed;
     var intro = normaliseIntro(config.intro);
+    var script = normaliseScript(config.script);
     // The learngitbranching-style pane: `tree-view: true` shows it beside
     // the box, 'toggle' (the default) puts a button in the header that
     // opens it, and false leaves it out.
@@ -4692,6 +4703,23 @@
               '<input class="gs-input" id="' + (host.id || 'gs') + '-in" type="text" spellcheck="false"' +
               ' autocapitalize="off" autocorrect="off" aria-label="Type a git command"' +
               ' placeholder="type a command and press Enter">' +
+              (script.length
+                // the counter for scripted commands; hovering it opens the list
+                ? '<span class="gs-type-caret" aria-hidden="true" hidden></span>' +
+                  '<span class="gs-type-measure" aria-hidden="true"></span>' +
+                  '<div class="gs-script">' +
+                    '<button type="button" class="gs-script-count" aria-expanded="false"' +
+                    ' aria-label="Scripted commands"></button>' +
+                    '<div class="gs-script-pop" role="group" aria-label="Scripted commands">' +
+                      '<div class="gs-script-head">' +
+                        '<span class="gs-script-title">Commands</span>' +
+                        '<button type="button" class="gs-script-btn gs-script-skip">Skip</button>' +
+                        '<button type="button" class="gs-script-btn gs-script-next" hidden>Next</button>' +
+                      '</div>' +
+                      '<ol class="gs-script-list"></ol>' +
+                    '</div>' +
+                  '</div>'
+                : '') +
             '</form>' +
             // `git commit` without -m opens this, as real git opens vim
             '<div class="gs-vim" hidden>' +
@@ -5846,7 +5874,9 @@
       return done;
     }
 
-    async function submit(line) {
+    // `quiet`: a scripted command, run without taking the keyboard, which
+    // on a slide belongs to reveal.js
+    async function submit(line, quiet) {
       if (busy) return;
       busy = true;
       input.disabled = true;
@@ -5858,7 +5888,7 @@
         notifyViews();
         input.disabled = false;
         busy = false;
-        input.focus();
+        if (!quiet) input.focus();
         return;
       }
       var snap = captureUndo(line);
@@ -5889,7 +5919,7 @@
       if (changed && trimmed !== 'reset') notifyViews();
       input.disabled = false;
       busy = false;
-      input.focus();
+      if (!quiet) input.focus();
     }
 
     // The remote half's heading names the remote shown; with several it is
@@ -5963,6 +5993,7 @@
       }
       out.innerHTML = '';
       input.value = '';
+      resetScript();
       // Tasks checked with `ran "..."` read the command history, so it has to
       // go too or they re-complete themselves on the very next refresh.
       history.length = 0;
@@ -6006,6 +6037,9 @@
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var v = input.value;
+      // Enter on a scripted command that is waiting in the prompt runs it
+      // the scripted way, so the script does not run it a second time
+      if (scriptTyped && v.trim() === script[scriptRan]) { scriptGo(scriptStep() + 1); return; }
       input.value = '';
       if (!v.trim()) return;
       submit(v);
@@ -6029,12 +6063,274 @@
     undoBtn.addEventListener('click', function () { submit('undo'); });
     host.querySelector('.gs-out').addEventListener('click', function () { input.focus(); });
 
+    /* ------------------------ scripted commands ----------------------- */
+
+    // A `script` plays back in steps: step 2k+1 types command k into the
+    // prompt, step 2k+2 runs it. On a reveal.js slide each step is one of
+    // the fragments the filter put beside the box, and the box follows
+    // whichever of them are visible, so the deck's own keys, its URL and
+    // its overview all drive it. Elsewhere the list's Next button does.
+    //
+    // Going back restores the snapshot taken just before the command,
+    // so stepping backwards through a slide is exact time travel.
+    var scriptRan = 0;          // commands passed: run, or skipped
+    var scriptTyped = false;    // is script[scriptRan] waiting in the prompt?
+    var scriptSkipped = {};
+    var scriptSnaps = [];       // scriptSnaps[k]: the state before command k
+    var scriptGen = 0;          // bumped by every move, to cut typing short
+    var scriptTarget = 0;       // the step the latest move is heading for
+    var scriptChain = null;     // moves run one after another, after mount
+    var scriptNode = host.querySelector('.gs-script');
+    var countBtn = host.querySelector('.gs-script-count');
+    var scriptList = host.querySelector('.gs-script-list');
+    var skipBtn = host.querySelector('.gs-script-skip');
+    var nextBtn = host.querySelector('.gs-script-next');
+    var caretNode = host.querySelector('.gs-type-caret');
+    var measureNode = host.querySelector('.gs-type-measure');
+    var hookSteps = null;
+    var stepFrags = host.id
+      ? Array.prototype.slice.call(document.querySelectorAll('.gs-step[data-gs-for="' + host.id + '"]'))
+      : [];
+
+    function scriptStep() { return scriptRan * 2 + (scriptTyped ? 1 : 0); }
+    function deck() { return stepFrags.length && root.Reveal && root.Reveal.on ? root.Reveal : null; }
+
+    function resetScript() {
+      scriptGen++;
+      scriptTarget = 0;
+      scriptRan = 0;
+      scriptTyped = false;
+      scriptSkipped = {};
+      scriptSnaps = [];
+      if (script.length) renderScript();
+    }
+
+    function renderScript() {
+      if (!script.length) return;
+      var shown = scriptRan + (scriptTyped ? 1 : 0);
+      countBtn.textContent = '[' + shown + '/' + script.length + ']';
+      countBtn.setAttribute('aria-label', 'Scripted command ' + shown + ' of ' + script.length + '; show the list');
+      scriptList.innerHTML = script.map(function (c, i) {
+        var state = i < scriptRan ? (scriptSkipped[i] ? 'skipped' : 'ran')
+          : (i === scriptRan && scriptTyped ? 'current' : 'next');
+        var mark = { ran: '✓', skipped: '↷', current: '▸', next: String(i + 1) }[state];
+        var label = { ran: 'ran', skipped: 'skipped', current: 'in the prompt', next: 'not yet run' }[state];
+        return '<li><button type="button" class="gs-script-item is-' + state + '" data-i="' + i + '"' +
+          ' title="Jump to this command">' +
+          '<span class="gs-script-mark" aria-hidden="true">' + mark + '</span>' +
+          '<code>' + esc(c) + '</code><span class="gs-sr"> (' + label + ')</span></button></li>';
+      }).join('');
+      // skip the command in the prompt, or else the one up next
+      skipBtn.disabled = scriptRan >= script.length;
+      nextBtn.disabled = scriptRan >= script.length;
+      var cur = scriptList.querySelector('.is-current');
+      if (cur && cur.scrollIntoView && scriptNode.classList.contains('is-open')) cur.scrollIntoView({ block: 'nearest' });
+    }
+
+    // the fake caret that follows the typing, since the input is not focused
+    function placeCaret() {
+      measureNode.textContent = input.value;
+      caretNode.style.left = (input.offsetLeft + 2 + measureNode.offsetWidth - input.scrollLeft) + 'px';
+    }
+    function showCaret(on) {
+      caretNode.hidden = !on;
+      if (on) placeCaret();
+    }
+
+    function reducedMotion() {
+      return !!(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
+    function typeOut(cmd, gen) {
+      input.value = '';
+      if (reducedMotion()) { input.value = cmd; showCaret(true); return Promise.resolve(); }
+      showCaret(true);
+      // long commands type faster, so none takes much more than a second
+      var per = Math.max(18, Math.min(60, 1400 / cmd.length));
+      return new Promise(function (resolve) {
+        var i = 0;
+        (function tick() {
+          if (gen !== scriptGen) { resolve(); return; }
+          input.value = cmd.slice(0, ++i);
+          input.scrollLeft = input.scrollWidth;
+          placeCaret();
+          if (i >= cmd.length) { resolve(); return; }
+          setTimeout(tick, per * (0.6 + Math.random() * 0.8));
+        })();
+      });
+    }
+
+    function scriptRestore(k) {
+      var snap = scriptSnaps[k];
+      if (!snap) return;
+      sb.restore(snap.core);
+      if (tree) tree.restore(snap.tree);
+      out.innerHTML = snap.outHtml;
+      out.scrollTop = out.scrollHeight;
+      history.length = snap.histLen;
+      histIdx = history.length;
+      tasks.forEach(function (t, i) { t._done = snap.done[i]; t._wasDone = snap.done[i]; });
+      if (undoStack.length > snap.undoLen) undoStack.length = snap.undoLen;
+      scriptSnaps.length = k;
+      scriptRan = k;
+      // a command stepped back over can be run this time
+      for (var i = k; i < script.length; i++) delete scriptSkipped[i];
+    }
+
+    async function waitIdle() {
+      while (busy) await new Promise(function (r) { setTimeout(r, 40); });
+    }
+
+    async function applyStep(target, gen) {
+      // only the latest move matters: it says where to end up
+      if (gen !== scriptGen) return;
+      var wantRan = Math.floor(target / 2);
+      var wantTyped = target % 2 === 1;
+      var forward = target > scriptStep();
+      if (wantRan < scriptRan) {
+        scriptRestore(wantRan);
+        scriptTyped = false;
+        input.value = '';
+        showCaret(false);
+        await refresh();
+        notifyViews();
+      }
+      while (scriptRan < wantRan) {
+        if (gen !== scriptGen) return;
+        var k = scriptRan;
+        await waitIdle();
+        var snap = captureUndo(script[k]);
+        snap.undoLen = undoStack.length;
+        scriptSnaps[k] = snap;
+        input.value = '';
+        showCaret(false);
+        scriptTyped = false;
+        scriptRan = k + 1;
+        renderScript();
+        if (!scriptSkipped[k]) await submit(script[k], true);
+      }
+      if (gen !== scriptGen) return;
+      if (wantTyped) {
+        var cmd = script[wantRan];
+        var already = scriptTyped && input.value === cmd;
+        scriptTyped = true;
+        renderScript();
+        if (!already) {
+          if (forward) await typeOut(cmd, gen);
+          else { input.value = cmd; showCaret(true); }
+        }
+      } else {
+        if (scriptTyped) input.value = '';
+        scriptTyped = false;
+        showCaret(false);
+      }
+      renderScript();
+    }
+
+    // queue a move to `target`; each move waits for the last to finish
+    function scriptMove(target) {
+      target = Math.max(0, Math.min(script.length * 2, target));
+      var gen = ++scriptGen;
+      scriptTarget = target;
+      // a scripted `git commit` without -m waits in vim; going back gives up on it
+      if (vim && target < scriptStep()) { vim.abandon(); busy = false; input.disabled = false; }
+      scriptChain = (scriptChain || ready).then(function () { return applyStep(target, gen); })
+        .catch(function (e) { writeText('{r}The script stopped: ' + e.message + '{/}', 'gs-err'); });
+      return scriptChain;
+    }
+
+    // follow the fragments: how many of this box's are showing is the step
+    function followDeck() {
+      var n = 0;
+      stepFrags.forEach(function (f) { if (f.classList.contains('visible')) n++; });
+      if (n !== scriptTarget) scriptMove(n);
+    }
+
+    // a move asked for from the box itself; on a slide it goes through
+    // reveal.js, so the deck's fragments stay the record of where we are
+    function scriptGo(target) {
+      target = Math.max(0, Math.min(script.length * 2, target));
+      var R = deck();
+      if (R && R.navigateFragment) {
+        var idx = target === 0 ? -1 : Number(stepFrags[target - 1].getAttribute('data-fragment-index'));
+        if (!isNaN(idx)) {
+          R.navigateFragment(idx);
+          followDeck();
+          return;
+        }
+      }
+      scriptMove(target);
+    }
+
+    if (script.length) {
+      var openPop = function (on) {
+        scriptNode.classList.toggle('is-open', on);
+        countBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+      };
+      countBtn.addEventListener('click', function () { openPop(!scriptNode.classList.contains('is-open')); });
+      scriptNode.addEventListener('mouseenter', function () { openPop(true); });
+      scriptNode.addEventListener('mouseleave', function () { openPop(false); });
+      scriptNode.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { openPop(false); countBtn.focus(); }
+      });
+      // keep focus off the buttons afterwards: on a slide Space and the
+      // arrows belong to reveal.js, and a focused button would take them
+      var done = function () { if (deck() && document.activeElement) document.activeElement.blur(); };
+      scriptList.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('.gs-script-item') : null;
+        if (!b) return;
+        var i = Number(b.getAttribute('data-i'));
+        // jumping to a command lines it up in the prompt, running the ones
+        // before it that have not run yet
+        delete scriptSkipped[i];
+        scriptGo(i * 2 + 1);
+        done();
+      });
+      skipBtn.addEventListener('click', function () {
+        var k = scriptRan;
+        if (k >= script.length) return;
+        scriptSkipped[k] = true;
+        // on to the next command, typed and waiting; past the last, the end
+        scriptGo(k + 1 < script.length ? (k + 1) * 2 + 1 : script.length * 2);
+        done();
+      });
+      nextBtn.addEventListener('click', function () { scriptGo(scriptStep() + 1); });
+      input.addEventListener('focus', function () { showCaret(false); });
+      input.addEventListener('input', function () { if (scriptTyped && input.value !== script[scriptRan]) showCaret(false); });
+
+      if (stepFrags.length) {
+        hookSteps = function () {
+          if (!deck() || hookSteps.done) return;
+          hookSteps.done = true;
+          ['ready', 'slidechanged', 'fragmentshown', 'fragmenthidden'].forEach(function (ev) {
+            root.Reveal.on(ev, followDeck);
+          });
+          followDeck();
+        };
+      } else {
+        nextBtn.hidden = false;
+      }
+    }
+
     renderHints();
     var ready = doReset(true);
+    if (hookSteps) {
+      hookSteps();
+      root.addEventListener('load', hookSteps);
+    }
     self.refresh = function () { return ready.then(refresh); };
     self.note = function (text) { writeText(text); };
 
-    return { sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks, tree: tree };
+    return {
+      sandbox: sb, refresh: refresh, run: submit, ready: ready, tasks: tasks, tree: tree,
+      // the scripted commands: step(n) moves to step n (2k+1 types command
+      // k, 2k+2 runs it) and resolves once it is there
+      script: {
+        commands: script,
+        step: function (n) { return scriptMove(n); },
+        position: function () { return scriptStep(); }
+      }
+    };
   }
 
   /* ------------------- helpers for exercise checks ------------------- */

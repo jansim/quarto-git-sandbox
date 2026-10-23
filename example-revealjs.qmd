@@ -63,7 +63,45 @@ tasks:
     when: on main and merged idea into main
 ```
 
-## How the second slide was written
+## Commands that type themselves
+
+```git-sandbox
+id: deck-script
+title: A scripted demo
+prompt: "~/demo $"
+tree-view: toggle
+panel-tabs: [files, history]
+script: |
+  git init
+  echo "# Notes" > notes.md
+  git status
+  git add notes.md
+  git commit -m "Start the notes"
+  git log --oneline
+```
+
+## How the scripted slide was written {.smaller}
+
+`script` lists commands to play back. Each one takes two steps through
+the slide: the first types it into the prompt, the second runs it.
+Stepping back takes it back again.
+
+````markdown
+```git-sandbox
+id: deck-script
+title: A scripted demo
+script: |
+  git init
+  echo "# Notes" > notes.md
+  git status
+```
+````
+
+The counter at the right of the prompt shows which command is up. Hover
+it for the whole list: click a command to jump to it, or skip the one
+waiting in the prompt.
+
+## How the second slide was written {.smaller}
 
 `share` points a box at an earlier exercise's repository. The view has
 its own title, tasks and layout, and no `seed`: the repository comes from

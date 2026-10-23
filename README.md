@@ -114,6 +114,7 @@ tasks:
 | `editor` | `false` removes the Editor tab, leaving a terminal-only box. Default `true`. |
 | `panels` | The views below the terminal (File Status, Changes, History, Remote). `true` shows them, `false` leaves them out, and `toggle` (the default) shows them with a chevron that folds them away. |
 | `share` | The `id` of another exercise whose repository this box is a view of: same files and history, its own title, tasks and layout. Takes no `seed`. |
+| `script` | Commands to play back one at a time, for live demos; see [Scripted commands on slides](#scripted-commands-on-slides). |
 | `panel-tabs` | Which of those views to offer, e.g. `[files, history]`. Any of `files`, `changes`, `history`, `remote`; all four by default. The first one listed opens first. |
 
 Two notes on quoting, because both bite:
@@ -126,6 +127,38 @@ Two notes on quoting, because both bite:
 
 `seed` failures are loud. If a seed command fails, the exercise says so rather
 than dropping the learner into a half-built repository.
+
+### Scripted commands on slides
+
+In a reveal.js presentation, `script` lists commands for the box to type
+and run as you step through the slide. Each command takes two steps: the
+first types it into the prompt, the second runs it. Stepping back undoes
+both, restoring the repository exactly as it was.
+
+````markdown
+```git-sandbox
+title: A scripted demo
+script: |
+  git init
+  echo "# Notes" > notes.md
+  git add notes.md
+  git commit -m "Start the notes"
+```
+````
+
+The steps are ordinary reveal.js fragments, so the arrow keys, the
+clicker, the slide URL and arriving at the slide from the one after it all
+work as they do for any fragment. A counter at the right of the prompt
+shows `[2/4]`, the command in the prompt (or the last one run) out of
+all of them. Hover it for the full list: click a command to jump to it,
+running any before it that have not run, or **Skip** the one waiting in
+the prompt to move on without running it. Pressing Enter on a typed
+command runs it as the next step would.
+
+You can still type into the box between steps. Outside a presentation the
+list has a **Next** button that steps through the script instead.
+Give `git commit` a `-m`: without one, the script waits in vim until
+someone saves.
 
 ### Seeding a remote
 
