@@ -90,7 +90,8 @@ tasks:
     when: commits >= 3
 ```
 
-::: {.callout-note collapse="true" appearance="simple" title="The block for this box"}
+The block that made this box:
+
 ````markdown
 ```git-sandbox
 id: anatomy
@@ -121,7 +122,6 @@ tasks:
     when: commits >= 3
 ```
 ````
-:::
 
 ## A minimal exercise
 
@@ -269,7 +269,8 @@ tasks:
     when: not branch forecast and ran /git\s+branch\s+-[dD]/
 ```
 
-::: {.callout-note collapse="true" appearance="simple" title="The seed"}
+The seed:
+
 ```yaml
 seed: |
   git init
@@ -285,7 +286,6 @@ seed: |
   git commit -m "Tune the forecast parameters"
   git checkout main
 ```
-:::
 
 If a seed command fails, the box shows an error, so learners never start
 from a half-built repository. **Reset** runs the seed again.
@@ -368,7 +368,8 @@ tasks:
     when: commits on main >= 3 and pushed
 ```
 
-::: {.callout-note collapse="true" appearance="simple" title="The seed"}
+The seed:
+
 ```yaml
 seed: |
   git init
@@ -383,7 +384,6 @@ seed: |
   git push                                 # the colleague's commit
   rewind 1                                 # gone locally, still on the remote
 ```
-:::
 
 ### The commit tree
 
