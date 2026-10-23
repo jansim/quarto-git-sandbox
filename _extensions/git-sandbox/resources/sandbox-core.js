@@ -477,12 +477,14 @@
     var cwd = dir;
     var prevCwd = dir;
 
-    var base = { fs: fs, dir: dir };
-    function opts(extra) {
-      var o = { fs: fs, dir: dir };
+    // isomorphic-git options for the local repository, or with ropts the
+    // mock remote's bare one
+    function withFs(o, extra) {
       for (var k in extra) o[k] = extra[k];
       return o;
     }
+    function opts(extra) { return withFs({ fs: fs, dir: dir }, extra); }
+    function ropts(extra) { return withFs({ fs: fs, gitdir: remoteGitdir }, extra); }
 
     function abs(p) {
       if (!p) return cwd;
@@ -580,6 +582,11 @@
       catch (e) { return false; }
     }
 
+    // the commit a ref names, or null (no such ref, or no commit yet)
+    async function refOid(ref) {
+      try { return await gitlib.resolveRef(opts({ ref: ref })); } catch (e) { return null; }
+    }
+
     async function currentBranch() {
       try { return (await gitlib.currentBranch(opts({ fullname: false }))) || null; }
       catch (e) { return null; }
@@ -593,8 +600,7 @@
     async function headLine() {
       var br = await currentBranch();
       if (br) return 'On branch ' + br;
-      var oid = null;
-      try { oid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+      var oid = await refOid('HEAD');
       if (!oid) return 'On branch ' + defaultBranch;
       if (!detachPoint) detachPoint = oid;
       return 'HEAD detached ' + (oid === detachPoint ? 'at ' : 'from ') + detachPoint.slice(0, 7);
@@ -606,8 +612,7 @@
     async function resolveCommit(spec) {
       var m = /^(.+?)((?:[~^]\d*)*)$/.exec(spec);
       if (!m) return null;
-      var oid = null;
-      try { oid = await gitlib.resolveRef(opts({ ref: m[1] })); } catch (e) {}
+      var oid = await refOid(m[1]);
       if (!oid && /^[0-9a-f]{4,40}$/i.test(m[1])) {
         try { oid = await gitlib.expandOid(opts({ oid: m[1].toLowerCase() })); } catch (e) {}
       }
@@ -633,8 +638,8 @@
     // replace, because the two commits hold different versions of them.
     // isomorphic-git's checkout overwrites these without a word; git refuses.
     async function overwrittenBy(oid, st) {
-      var headOid = null;
-      try { headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) { return []; }
+      var headOid = await refOid('HEAD');
+      if (!headOid) return [];
       var changed = st.staged.map(function (x) { return x.file; })
         .concat(st.modified, st.deleted, st.stagedDeleted);
       async function blobAt(commit, f) {
@@ -659,9 +664,7 @@
       var kept = {};
       var names = await gitlib.listBranches(opts());
       for (var i = 0; i < names.length; i++) {
-        var tip = null;
-        try { tip = await gitlib.resolveRef(opts({ ref: names[i] })); } catch (e) { continue; }
-        var r = await reachableFrom(tip, opts);
+        var r = await reachableFrom(await refOid(names[i]), opts);
         for (var k in r) kept[k] = true;
       }
       var out = [];
@@ -689,22 +692,25 @@
         ' git branch <new-branch-name> ' + oldOid.slice(0, 7) + '\n\n';
     }
 
-    // list tracked+untracked files in the workdir (excluding .git)
-    async function listFiles() {
-      var out = [];
+    // Working files (not .git) as path -> bytes; their names are what the
+    // learner sees with `ls -a`, and comparing the bytes tells afterwards
+    // which ones a merge touched.
+    function workdirBytes() {
+      var out = {};
       var prefix = dir + '/';
       fs._store.forEach(function (v, k) {
-        if (k.indexOf(prefix) !== 0) return;
-        if (k.indexOf(dir + '/.git') === 0) return;
-        if (v.type !== 'file') return;
-        out.push(k.slice(prefix.length));
+        if (k.indexOf(prefix) !== 0 || k.indexOf(dir + '/.git/') === 0 || v.type !== 'file') return;
+        out[k.slice(prefix.length)] = v.content;
       });
-      return out.sort();
+      return out;
     }
+
+    // tracked and untracked working files, .gitignore and ignored ones too
+    async function listFiles() { return Object.keys(workdirBytes()).sort(); }
 
     // Every file and folder under the workdir, .git included, as
     // [{ path, type: 'file' | 'dir' }] relative to it. The editor's file
-    // browser needs folders (empty ones too) and hidden files, which
+    // browser needs folders (empty ones too) and git's own files, which
     // listFiles leaves out on purpose.
     async function listTree() {
       var out = [];
@@ -718,15 +724,14 @@
 
     /* ------------------------------ remote -------------------------- */
 
-    // options builder for commands that read the remote's bare repo
-    function ropts(extra) {
-      var o = { fs: fs, gitdir: remoteGitdir };
-      for (var k in extra) o[k] = extra[k];
-      return o;
-    }
-
     async function remoteBranchOid(name) {
       try { return (await fs.promises.readFile(remoteGitdir + '/refs/heads/' + name, 'utf8')).trim(); }
+      catch (e) { return null; }
+    }
+
+    // the branch the remote's HEAD names, or null
+    async function remoteDefault() {
+      try { return (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); }
       catch (e) { return null; }
     }
 
@@ -767,6 +772,17 @@
       return seen;
     }
 
+    // How many commits each side has that the other lacks; each oid is read
+    // through its own options builder (opts local, ropts the remote).
+    async function aheadBehind(mine, mineOpts, theirs, theirsOpts) {
+      var a = mine ? await reachableFrom(mine, mineOpts) : {};
+      var b = await reachableFrom(theirs, theirsOpts);
+      return {
+        ahead: Object.keys(a).filter(function (o) { return !b[o]; }).length,
+        behind: Object.keys(b).filter(function (o) { return !a[o]; }).length
+      };
+    }
+
     // remote.origin.url, or null when this repository has no origin
     async function originUrl() {
       if (!(await isRepo())) return null;
@@ -788,10 +804,7 @@
       return m ? m[1] : null;
     }
 
-    async function trackingOid(name) {
-      try { return await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + name })); }
-      catch (e) { return null; }
-    }
+    function trackingOid(name) { return refOid('refs/remotes/origin/' + name); }
 
     // the branches `git fetch` has recorded from origin, sorted; not
     // origin/HEAD, which only points at one of them
@@ -860,11 +873,9 @@
       var theirs = await trackingOid(up);
       if (!theirs) return ['Your branch is based on ' + name + ', but the upstream is gone.',
         '  (use "git branch --unset-upstream" to fixup)'];
-      var mine;
-      try { mine = await gitlib.resolveRef(opts({ ref: branch })); } catch (e) { return []; }
-      var a = await reachableFrom(mine, opts), b = await reachableFrom(theirs, opts);
-      var ahead = Object.keys(a).filter(function (o) { return !b[o]; }).length;
-      var behind = Object.keys(b).filter(function (o) { return !a[o]; }).length;
+      var mine = await refOid(branch);
+      if (!mine) return [];
+      var ab = await aheadBehind(mine, opts, theirs, opts), ahead = ab.ahead, behind = ab.behind;
       var n = function (k) { return k + ' commit' + (k === 1 ? '' : 's'); };
       if (!ahead && !behind) return ['Your branch is up to date with ' + name + '.'];
       if (!behind) return ['Your branch is ahead of ' + name + ' by ' + n(ahead) + '.',
@@ -928,16 +939,12 @@
       };
     }
 
-    // Working files (not .git) as path -> bytes, to tell afterwards which
-    // ones a merge touched.
-    function workdirBytes() {
-      var out = {};
-      var prefix = dir + '/';
-      fs._store.forEach(function (v, k) {
-        if (k.indexOf(prefix) !== 0 || k.indexOf(dir + '/.git/') === 0 || v.type !== 'file') return;
-        out[k.slice(prefix.length)] = v.content;
-      });
-      return out;
+    // A merge or pull cannot start while another is under way
+    function mergeBlocker(st, verb) {
+      if (st.conflicted.length) return unmergedError(verb);
+      if (!st.merging) return null;
+      return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
+        'Please, commit your changes before you merge.', ok: false };
     }
 
     function sameBytes(a, b) {
@@ -1113,11 +1120,10 @@
       var refEntries = [];
 
       for (var i = 0; i < branches.length; i++) {
-        try {
-          var oid = await gitlib.resolveRef(opts({ ref: branches[i] }));
-          refs[branches[i]] = oid;
-          refEntries.push({ name: branches[i], oid: oid, isHead: branches[i] === head });
-        } catch (e) { /* unborn branch */ }
+        var oid = await refOid(branches[i]);
+        if (!oid) continue;   // unborn branch
+        refs[branches[i]] = oid;
+        refEntries.push({ name: branches[i], oid: oid, isHead: branches[i] === head });
       }
 
       // remote-tracking refs (origin/*) appear as grey pills, like real git log
@@ -1126,17 +1132,13 @@
         // default branch is would only crowd the graph
         var tracked = await trackingNames();
         for (var t = 0; t < tracked.length; t++) {
-          try {
-            var toid = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + tracked[t] }));
-            refEntries.push({ name: 'origin/' + tracked[t], oid: toid, remote: true });
-          } catch (e) { /* dangling tracking ref */ }
+          var toid = await trackingOid(tracked[t]);
+          if (toid) refEntries.push({ name: 'origin/' + tracked[t], oid: toid, remote: true });
         }
       }
 
       // include HEAD in case it is detached
-      var headOid = null;
-      try { headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
-      catch (e) { /* no commits yet */ }
+      var headOid = await refOid('HEAD');
 
       var commits = await buildGraph(refEntries, headOid ? [headOid] : [], opts);
 
@@ -1171,12 +1173,9 @@
         var remoteOid = await remoteBranchOid(branch);
         if (remoteOid) {
           tracked = true;
-          var localOid = null;
-          try { localOid = await gitlib.resolveRef(opts({ ref: branch })); } catch (e) {}
-          var localSet = localOid ? await reachableFrom(localOid, opts) : {};
-          var remoteSet = await reachableFrom(remoteOid, ropts);
-          Object.keys(localSet).forEach(function (o) { if (!remoteSet[o]) ahead++; });
-          Object.keys(remoteSet).forEach(function (o) { if (!localSet[o]) behind++; });
+          var ab = await aheadBehind(await refOid(branch), opts, remoteOid, ropts);
+          ahead = ab.ahead;
+          behind = ab.behind;
         }
       }
       return {
@@ -1308,7 +1307,8 @@
       if (!match) return false;
       try { await fs.promises.stat(abs(spec)); return true; } catch (e) {}
       var pool = await gitlib.listFiles(opts());
-      try { pool = pool.concat(Object.keys(await flatTree(await gitlib.resolveRef(opts({ ref: 'HEAD' }))))); } catch (e) {}
+      var head = await refOid('HEAD');
+      if (head) pool = pool.concat(Object.keys(await flatTree(head)));
       return pool.some(match);
     }
 
@@ -1396,10 +1396,9 @@
     async function makeCommit(msg, st) {
       var o = { message: msg, author: { name: author.name, email: author.email } };
       var merge = await mergeState();
-      var root = false;
-      try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) { root = true; }
+      var parent = await refOid('HEAD');
       // concluding a conflicted merge: the commit gets both parents
-      if (merge) o.parent = [await gitlib.resolveRef(opts({ ref: 'HEAD' })), merge.oid];
+      if (merge) o.parent = [parent, merge.oid];
       var sha = await gitlib.commit(opts(o));
       var branch = await currentBranch();
       if (merge) {
@@ -1408,7 +1407,7 @@
       }
       var nFiles = st.staged.length + st.stagedDeleted.length;
       return {
-        out: '[' + (branch || 'detached HEAD') + (root ? ' (root-commit)' : '') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
+        out: '[' + (branch || 'detached HEAD') + (parent ? '' : ' (root-commit)') + ' ' + sha.slice(0, 7) + '] ' + msg.split('\n')[0] + '\n ' + nFiles + ' file' + (nFiles === 1 ? '' : 's') + ' changed',
         ok: true
       };
     }
@@ -1572,9 +1571,7 @@
           var lines = [await headLine()];
           var stBranch = await currentBranch();
           if (stBranch) lines = lines.concat(await trackingLines(stBranch));
-          var anyCommit = true;
-          try { await gitlib.resolveRef(opts({ ref: 'HEAD' })); }
-          catch (e) { anyCommit = false; }
+          var anyCommit = !!(await refOid('HEAD'));
           if (!anyCommit) lines.push('', 'No commits yet');
           if (st.conflicted.length) {
             lines.push('You have unmerged paths.',
@@ -1782,11 +1779,7 @@
             if (rest[lf].charAt(0) === '-') continue;
             var tn = trackingName(rest[lf]);
             logFrom = (tn && await trackingOid(tn)) || await resolveCommit(rest[lf]);
-            if (!logFrom) {
-              return { out: "fatal: ambiguous argument '" + rest[lf] + "': unknown revision or path not in the working tree.\n" +
-                "Use '--' to separate paths from revisions, like this:\n" +
-                "'git <command> [<revision>...] -- [<file>...]'", ok: false };
-            }
+            if (!logFrom) return ambiguous(rest[lf]);
             break;
           }
           var commits;
@@ -1997,8 +1990,7 @@
             }
           }
           var wasBranch = await currentBranch();
-          var wasOid = null;
-          try { wasOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          var wasOid = await refOid('HEAD');
           if (create && !newStart) {
             // a new branch right here: nothing to check out, and it works
             // before the first commit too
@@ -2078,11 +2070,8 @@
             if (!inMerge.merging) return { out: 'fatal: There is no merge in progress (MERGE_HEAD missing).', ok: false };
             return gitCommand(['commit']);
           }
-          if (inMerge.conflicted.length) return unmergedError('Merging');
-          if (inMerge.merging) {
-            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
-              'Please, commit your changes before you merge.', ok: false };
-          }
+          var unfinished = mergeBlocker(inMerge, 'Merging');
+          if (unfinished) return unfinished;
           var theirs = rest.filter(function (a) { return a.charAt(0) !== '-'; })[0];
           if (!theirs) return { out: 'usage: git merge <branch>', ok: false };
           var ours = await currentBranch();
@@ -2172,8 +2161,7 @@
             return { out: "fatal: destination path '.' already exists and is not an empty directory.", ok: false };
           }
           var rbranches = await listRemoteBranchNames();
-          var rhead = null;
-          try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+          var rhead = await remoteDefault();
           if (rbranches.indexOf(rhead) === -1) rhead = rbranches[0] || rhead || defaultBranch;
           await gitlib.init(opts({ defaultBranch: rhead }));
           await gitlib.addRemote(opts({ remote: 'origin', url: curl }));
@@ -2251,8 +2239,7 @@
           var updated = [];
           for (var fi = 0; fi < rnames.length; fi++) {
             var rOid = await remoteBranchOid(rnames[fi]);
-            var cur = null;
-            try { cur = await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + rnames[fi] })); } catch (e) {}
+            var cur = await refOid('refs/remotes/origin/' + rnames[fi]);
             if (cur === rOid) continue;
             await setTrackingRef(rnames[fi], rOid);
             updated.push(cur
@@ -2262,8 +2249,7 @@
           // like git 2.48+, the first fetch also records which branch is the
           // remote's default, as origin/HEAD (silently)
           if (!(await originHead())) {
-            var rhead = null;
-            try { rhead = (await fs.promises.readFile(remoteGitdir + '/HEAD', 'utf8')).replace(/^ref: refs\/heads\//, '').trim(); } catch (e) {}
+            var rhead = await remoteDefault();
             if (rhead && rnames.indexOf(rhead) !== -1) {
               await gitlib.writeRef(opts({ ref: 'refs/remotes/origin/HEAD', value: 'refs/remotes/origin/' + rhead, symbolic: true, force: true }));
             }
@@ -2278,12 +2264,8 @@
           if (rest.indexOf('--rebase') !== -1 || rest.indexOf('-r') !== -1) {
             return { out: 'This sandbox has no rebase, so `git pull` always merges.\nRun `git pull` without --rebase.', ok: false };
           }
-          var inMerge2 = await statusModel();
-          if (inMerge2.conflicted.length) return unmergedError('Pulling');
-          if (inMerge2.merging) {
-            return { out: 'fatal: You have not concluded your merge (MERGE_HEAD exists).\n' +
-              'Please, commit your changes before you merge.', ok: false };
-          }
+          var unfinished2 = mergeBlocker(await statusModel(), 'Pulling');
+          if (unfinished2) return unfinished2;
           var lbr = await currentBranch();
           if (!lbr) return { out: 'fatal: you are not currently on a branch.', ok: false };
           var pwords = rest.filter(function (a) { return a.charAt(0) !== '-'; });
@@ -2371,8 +2353,7 @@
             if (resetTo) before.shift();
           }
           var resetPaths = before.concat(after);
-          var headNow = null;
-          try { headNow = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          var headNow = await refOid('HEAD');
           if (resetPaths.length) {
             // a word before `--` that is neither a commit nor a known path
             if (!seenDashes && !(await knownPath(before[0] || resetPaths[0]))) return ambiguous(before[0] || resetPaths[0]);
@@ -2412,8 +2393,7 @@
             if (!sourceOid) return { out: 'fatal: could not resolve ' + source, ok: false };
           }
           var unresolved = (await statusModel()).conflicted.map(function (c) { return c.file; });
-          var headOid2 = null;
-          try { headOid2 = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+          var headOid2 = await refOid('HEAD');
           if (staged) {
             // before the first commit, unstaging takes the file out of the index
             var unstaged = await unstagePaths(rPaths, sourceOid || headOid2, 'restore');
@@ -2498,8 +2478,7 @@
     // or null when there is no repository yet.
     async function diffModel() {
       if (!(await isRepo())) return null;
-      var headOid = null;
-      try { headOid = await gitlib.resolveRef(opts({ ref: 'HEAD' })); } catch (e) {}
+      var headOid = await refOid('HEAD');
       var matrix = await gitlib.statusMatrix(opts());
       var files = [];
       for (var r = 0; r < matrix.length; r++) {
@@ -2726,10 +2705,7 @@
           await gitlib.writeRef(opts({ ref: 'refs/heads/' + rbr, value: roid, force: true }));
           // keep the tracking ref in step so the learner discovers the newer
           // remote commits with `git fetch`, not automatically
-          try {
-            await gitlib.resolveRef(opts({ ref: 'refs/remotes/origin/' + rbr }));
-            await setTrackingRef(rbr, roid);
-          } catch (e) { /* no tracking ref yet */ }
+          if (await trackingOid(rbr)) await setTrackingRef(rbr, roid);
           await gitlib.checkout(opts({ ref: rbr, force: true }));
           return { out: '', ok: true, silentNote: 'rewound ' + rbr + ' by ' + back };
         }
@@ -2876,7 +2852,6 @@
 
     async function reset(seed) {
       fs = createMemFS();
-      base.fs = fs;
       repoReady = false;
       remoteUrl = null;
       prevHead = null;

@@ -43,23 +43,24 @@ end
 --------------------------------------------------------------- dependencies
 
 local deps_added = false
+local function res(f) return pandoc.path.join({ script_dir, 'resources', f }) end
 
 local function add_dependencies()
   if deps_added then return end
   deps_added = true
-  local res = function (f) return pandoc.path.join({ script_dir, 'resources', f }) end
+  local scripts = {}
+  -- isomorphic-git first, then the sandbox modules in dependency order; the
+  -- last one mounts the exercises queued on the page. All after the body so
+  -- a 260 KB library never blocks first paint.
+  for _, f in ipairs({ 'isomorphic-git.bundle.js', 'sandbox-core.js', 'sandbox-when.js',
+                       'sandbox-tree.js', 'sandbox-ui.js' }) do
+    scripts[#scripts + 1] = { path = res(f), afterBody = true }
+  end
   quarto.doc.addHtmlDependency({
     name = 'git-sandbox',
-    version = '1.0.0',
+    version = '1.1.0',
     stylesheets = { res('git-sandbox.css') },
-    scripts = {
-      -- isomorphic-git first, then the sandbox, then the boot call that drains
-      -- the queue each exercise pushed onto. All after the body so a 260 KB
-      -- library never blocks first paint.
-      { path = res('isomorphic-git.bundle.js'), afterBody = true },
-      { path = res('git-sandbox.js'), afterBody = true },
-      { path = res('git-sandbox-boot.js'), afterBody = true }
-    }
+    scripts = scripts
   })
 end
 
@@ -114,13 +115,21 @@ end
 
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
-  seed = true, tasks = true, ['done-note'] = true, ['done_note'] = true,
-  donenote = true, ['tree-view'] = true, ['tree_view'] = true,
-  editor = true, panels = true, ['panel-tabs'] = true, ['panel_tabs'] = true,
-  share = true, script = true
+  seed = true, tasks = true, ['done-note'] = true, ['tree-view'] = true,
+  editor = true, panels = true, ['panel-tabs'] = true, share = true, script = true
 }
 local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
+
+-- `done_note` is read as `done-note`, and so on
+local function dash_keys(tbl)
+  for i, k in ipairs(tbl.__keys or {}) do
+    local d = k:gsub('_', '-')
+    if d ~= k then
+      tbl[d], tbl[k], tbl.__keys[i] = tbl[k], nil, d
+    end
+  end
+end
 
 local function check_keys(tbl, allowed, where, problems)
   for _, k in ipairs(tbl.__keys or {}) do
@@ -174,7 +183,6 @@ local function build_config(cfg, problems)
   -- Returns true, false, 'toggle' (when allowed), or nil if unset or bad.
   local function switch(key, allow_toggle)
     local raw = cfg[key]
-    if raw == nil then raw = cfg[key:gsub('-', '_')] end
     if raw == nil or raw == '' then return nil end
     local v = tostring(raw):lower()
     if v == 'true' or v == 'yes' or v == 'on' then return true end
@@ -195,7 +203,6 @@ local function build_config(cfg, problems)
   if editor ~= nil then out.editor = editor end
 
   local tabs = cfg['panel-tabs']
-  if tabs == nil then tabs = cfg['panel_tabs'] end
   if tabs ~= nil and tabs ~= '' then
     out.panelTabs = {}
     for _, t in ipairs(as_array(tabs)) do
@@ -211,7 +218,7 @@ local function build_config(cfg, problems)
     end
   end
 
-  local note = cfg['done-note'] or cfg['done_note'] or cfg.donenote
+  local note = cfg['done-note']
   if note and note ~= '' then out.doneNote = markdown_inline(note) end
 
   out.tasks = {}
@@ -286,6 +293,7 @@ function CodeBlock(el)
     return error_block({ 'The exercise options must be a set of "key: value" lines.' })
   end
 
+  dash_keys(cfg)
   check_keys(cfg, BLOCK_KEYS, 'the exercise options', problems)
   local config = build_config(cfg, problems)
 

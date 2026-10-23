@@ -17,11 +17,12 @@ global.navigator = win.navigator;
 // expose libs the way the CDN script tags will
 win.git = git;
 win.Buffer = Buffer; // the shipped bundle provides this in the browser
-win.GitSandboxCore = require('../src/sandbox-core.js');
-win.GitSandboxTree = require('../src/sandbox-tree.js');
+win.GitSandboxCore = require('../_extensions/git-sandbox/resources/sandbox-core.js');
+win.GitSandboxTree = require('../_extensions/git-sandbox/resources/sandbox-tree.js');
+win.GitSandboxWhen = require('../_extensions/git-sandbox/resources/sandbox-when.js');
 
 // evaluate the UI file in the jsdom window context
-const uiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'sandbox-ui.js'), 'utf8');
+const uiSrc = fs.readFileSync(path.join(__dirname, '..', '_extensions', 'git-sandbox', 'resources', 'sandbox-ui.js'), 'utf8');
 new Function('window', 'document', uiSrc)(win, win.document);
 
 let pass = 0, fail = 0;

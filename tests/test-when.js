@@ -1,8 +1,8 @@
 /* Tests for the `when:` mini-language, evaluated against real repository
    state built by the sandbox engine. Run: node test-when.js */
 const git = require('isomorphic-git');
-const Core = require('../src/sandbox-core.js');
-const W = require('../src/sandbox-when.js');
+const Core = require('../_extensions/git-sandbox/resources/sandbox-core.js');
+const W = require('../_extensions/git-sandbox/resources/sandbox-when.js');
 
 let pass = 0, fail = 0;
 const failures = [];
