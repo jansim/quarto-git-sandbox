@@ -66,6 +66,13 @@ title: Bad editor
 editor: toggle
 ```
 
+## A VS Code view that is not true or false
+
+```git-sandbox
+title: Bad vscode
+vscode: toggle
+```
+
 ## A panel that does not exist
 
 ```git-sandbox

@@ -64,6 +64,41 @@ local function add_dependencies()
   })
 end
 
+-- The VS Code view is several megabytes in resources/vscode/. It is
+-- copied next to the page only when an exercise asks for it (`vscode:
+-- true`), and the browser only fetches it when a learner opens that tab.
+local vscode_added = false
+local function list_files(dir, prefix, out)
+  for _, name in ipairs(pandoc.system.list_directory(dir)) do
+    local full = pandoc.path.join({ dir, name })
+    local rel = prefix == '' and name or (prefix .. '/' .. name)
+    -- only folders can be listed
+    if pcall(pandoc.system.list_directory, full) then
+      list_files(full, rel, out)
+    else
+      out[#out + 1] = { name = rel, path = full }
+    end
+  end
+  return out
+end
+
+local function add_vscode_dependency()
+  if vscode_added then return end
+  vscode_added = true
+  local ok, files = pcall(list_files, res('vscode'), 'vscode', {})
+  if not ok or #files == 0 then
+    warn('the VS Code view is missing from resources/vscode/; build it with ' ..
+         '`cd vscode && npm install && npm run build`')
+    files = {}
+  end
+  quarto.doc.addHtmlDependency({
+    name = 'git-sandbox-vscode',
+    version = '1.1.0',
+    scripts = { { path = res('sandbox-vscode.js'), afterBody = true } },
+    resources = files
+  })
+end
+
 -------------------------------------------------------------------- helpers
 
 local function is_array(t)
@@ -116,7 +151,8 @@ end
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['tree-view'] = true,
-  editor = true, panels = true, ['panel-tabs'] = true, share = true, script = true
+  editor = true, panels = true, ['panel-tabs'] = true, share = true, script = true,
+  vscode = true
 }
 local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
@@ -201,6 +237,9 @@ local function build_config(cfg, problems)
   if panels ~= nil then out.panels = panels end
   local editor = switch('editor', false)
   if editor ~= nil then out.editor = editor end
+  -- off unless asked for: it is a big download, if only on first use
+  local vscode = switch('vscode', false)
+  if vscode ~= nil then out.vscode = vscode end
 
   local tabs = cfg['panel-tabs']
   if tabs ~= nil and tabs ~= '' then
@@ -327,6 +366,7 @@ function CodeBlock(el)
   end
 
   add_dependencies()
+  if config.vscode then add_vscode_dependency() end
 
   local json = quarto.json.encode(config)
   -- The tree pane needs room beside the box, so let the exercise run on

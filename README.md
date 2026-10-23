@@ -60,9 +60,9 @@ filters:
 ```
 
 `example.qmd` in this repository is an author's guide built with the extension itself:
-six working boxes, each paired with the block that produced it, from a tour
-of the panels through branching, merging, pushing to a remote, and the
-optional commit tree.
+working boxes, each paired with the block that produced it, from a tour
+of the panels through branching, merging, pushing to a remote, the
+optional commit tree and the optional VS Code view.
 Render it to see everything working:
 
 ```bash
@@ -112,6 +112,7 @@ tasks:
 | `tasks` | The checklist. Each needs a `text:` and a `when:`. |
 | `tree-view` | The commit tree beside the box, drawn like [Learn Git Branching](https://learngitbranching.js.org/). `true` shows it, `false` leaves it out, and `toggle` (the default) puts a button in the header that opens it. |
 | `editor` | `false` removes the Editor tab, leaving a terminal-only box. Default `true`. |
+| `vscode` | `true` adds a VS Code tab: the real VS Code workbench on the box's repository; see [The VS Code view](#the-vs-code-view). Default `false`. |
 | `panels` | The views below the terminal (File Status, Changes, History, Remote). `true` shows them, `false` leaves them out, and `toggle` (the default) shows them with a chevron that folds them away. |
 | `share` | The `id` of another exercise whose repository this box is a view of: same files and history, its own title, tasks and layout. Takes no `seed`. |
 | `script` | Commands to play back one at a time, for live demos; see [Scripted commands on slides](#scripted-commands-on-slides). |
@@ -257,6 +258,55 @@ In Quarto the exercise widens into the right margin (`column-page-right`)
 to make room for the pane. When the box is narrower than 760 px, the pane
 moves below it instead. With `GitSandboxUI.mount()` the option is
 `treeView: true`.
+
+### The VS Code view
+
+`vscode: true` adds a **VS Code** tab beside Terminal and Editor. It opens
+the real VS Code workbench
+([monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api)),
+cut down to what working with git needs: the explorer, editors and diffs,
+search, the Source Control view and the integrated terminal. There are no
+extensions, no marketplace and no debugger.
+
+```yaml
+vscode: true
+```
+
+It works on the box's own repository, and everything it does goes through
+the box:
+
+- **Source Control** lists Staged Changes, Changes and, during a merge,
+  Merge Changes, with VS Code's usual buttons to stage, unstage, discard,
+  open a file or its diff, and commit from the message box (Ctrl+Enter).
+  Each click runs the git command it stands for (`git add load.R`,
+  `git restore --staged load.R`, `git commit -m "…"`), which appears in
+  the box's terminal and in VS Code's **Git** output channel. So tasks
+  tick, **Undo** takes the click back, and the panels below keep up.
+- The **...** menu has Pull, Push, Fetch, Checkout to..., Create Branch...
+  and Merge...; the status bar shows the branch (click it to switch) and,
+  with a remote, how far ahead and behind it is (click to sync).
+- The **explorer** colours and letters changed files (`M`, `U`, `A`,
+  `D`, `!`), and the editor's gutter marks changed lines.
+- The **terminal** is the box's shell: the same commands, with history,
+  Tab completion and a git-aware prompt. `git commit` without `-m` opens
+  the message in an editor tab instead of vim, as with `core.editor` set
+  to `code --wait`; the ✓ in its title bar commits.
+- Saving, creating, renaming or deleting files in VS Code changes the
+  working directory like any command, with an undo entry.
+
+The workbench is several megabytes, so nothing of it loads until a learner
+first opens the tab (about 3.4 MB compressed, cached after that). Quarto
+only copies it next to pages that use `vscode: true`. The button beside
+**Undo** lets it fill the window.
+
+VS Code's services are global, so a page has one workbench: opening the
+VS Code tab of another box moves it there and onto that box's repository.
+Its explorer keeps the folder name of the box that opened it first.
+
+It needs the page served over http(s), not opened as a file, and does not
+survive `embed-resources: true`, which cannot inline files a page fetches
+later. On reveal.js slides it is better left out: the pane is taller than
+most slides.
 
 ## Conditions: the `when:` language
 
@@ -442,10 +492,18 @@ for a fixed-size frame suited to screen recordings.
 Useful when a platform will take an HTML block or an iframe but not a Quarto
 document.
 
+For the VS Code view, also load `sandbox-vscode.js` and keep the `vscode/`
+folder beside it; then pass `vscode: true` to `mount()`. The loader looks
+for `vscode/workbench.js` next to itself; set
+`window.GitSandboxVSCodeBase` to a URL ending in `/` to serve it from
+elsewhere.
+
 ## Notes for platform and LMS embedding
 
 - **Page weight.** The Git engine is 260 KB (80 KB gzipped) and loads after the
-  body, so it never blocks first paint. With `embed-resources: true` a lesson
+  body, so it never blocks first paint. The optional VS Code view adds a
+  2 KB loader; its 3.4 MB (compressed) workbench is fetched only when a
+  learner opens the tab. With `embed-resources: true` a lesson
   becomes a single self-contained file of roughly 2 MB, much of it embedded
   fonts. It is worth dropping the font `<link>` if your platform already serves Open
   Sans and Source Code Pro.
@@ -463,13 +521,15 @@ document.
 
 ```bash
 npm install          # dev dependencies only; the extension itself needs none
-./tests/run.sh       # all nine suites
+./tests/run.sh       # all ten suites
 ./build.sh           # only to re-bundle isomorphic-git
+(cd vscode && npm install && npm run build)   # only to rebuild the VS Code view
 ```
 
 The sandbox's scripts in `_extensions/git-sandbox/resources/` are the
-source: edit them directly, there is nothing to rebuild. See
-`CONTRIBUTING.md`.
+source: edit them directly, there is nothing to rebuild. The VS Code view
+is the exception: its source is in `vscode/src/`, and
+`resources/vscode/` is built from it. See `CONTRIBUTING.md`.
 
 ## Credits
 

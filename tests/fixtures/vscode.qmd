@@ -1,0 +1,29 @@
+---
+title: "VS Code view"
+format: html
+filters:
+  - git-sandbox
+---
+
+```git-sandbox
+id: in-vscode
+title: Commit from VS Code
+prompt: "~/sales-analysis $"
+vscode: true
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the README"
+  echo "x <- 1" > analysis.R
+tasks:
+  - text: Stage `analysis.R`
+    when: staged
+  - text: Commit it
+    when: commits >= 2
+```
+
+```git-sandbox
+id: plain
+title: A box without the VS Code view
+```

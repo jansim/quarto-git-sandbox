@@ -451,6 +451,46 @@ panel-tabs: [history]
 A box with `share` has no `seed` of its own. **Reset** in either box
 starts the shared repository over.
 
+### In VS Code
+
+`vscode: true` adds a **VS Code** tab: the real VS Code workbench, with
+its explorer, editor, Source Control view and integrated terminal, working
+on the box's repository. Clicks in Source Control run the same git commands
+a learner would type, so tasks tick, **Undo** takes them back, and the
+panels below keep up. The workbench is a few megabytes, fetched only when
+someone opens the tab; the button beside **Undo** lets it fill the window.
+
+```git-sandbox
+id: vscode-flow
+title: The same loop, in VS Code
+prompt: "~/sales-analysis $"
+vscode: true
+intro: |
+  Open the {y}VS Code{/} tab above. Its terminal runs the same commands as
+  this one, and its Source Control view runs them for you.
+done-note: Every click in Source Control was a git command. They are all in this box's terminal.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  echo "sales <- read_csv('sales.csv')" > load.R
+tasks:
+  - text: In VS Code's Source Control view, stage `load.R` with its **+** button
+    when: staged
+  - text: Write a message in the box above the changes and commit with **Ctrl+Enter**
+    when: commits >= 2
+  - text: Open `README.md` in the explorer, add a line, save, and find the change in Source Control
+    when: commits >= 2 and not clean
+```
+
+````markdown
+```git-sandbox
+title: The same loop, in VS Code
+vscode: true
+```
+````
+
 ## Showing less
 
 Each part of the box beyond the terminal can be removed or folded away:

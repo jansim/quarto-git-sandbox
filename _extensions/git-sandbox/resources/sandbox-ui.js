@@ -14,6 +14,7 @@
   var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
   var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
   var ICON_PLUS = icon('M8 3v10M3 8h10');
+  var ICON_EXPAND = icon('M3 6.5V3h3.5M13 6.5V3H9.5M3 9.5V13h3.5M13 9.5V13H9.5');
   // a small commit graph: two branches off a trunk
   var ICON_TREE = '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
     '<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
@@ -742,6 +743,10 @@
     var treeShown = treeMode === true;
     // The editor tab (and with it the tab strip) can be turned off.
     var editorOn = config.editor !== false && config.editor !== 'false';
+    // `vscode: true` adds a VS Code tab: the real workbench (explorer,
+    // editor, source control, terminal) on this box's repository. Its
+    // bundle is only fetched when the tab is first opened.
+    var vscodeOn = config.vscode === true || config.vscode === 'true';
     // The panels below the terminal: the same three modes, here 'toggle'
     // starts open with a chevron to fold them. `panelTabs` picks which
     // panels there are at all.
@@ -758,17 +763,27 @@
         // The workspace tabs live in the title bar and open onto the dark
         // pane below it: the terminal and the file editor share that pane,
         // one at a time, like tabs in a code editor.
-        (editorOn
+        (editorOn || vscodeOn
           ? '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
               '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
                 '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
-              '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
-                '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
-                '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
+              (editorOn
+                ? '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+                    '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+                    '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>'
+                : '') +
+              (vscodeOn
+                ? '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="vscode">' +
+                    '<span class="gs-wtab-icon" aria-hidden="true">&lt;/&gt;</span>VS Code</button>'
+                : '') +
             '</div>'
           : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state"></span>' +
+        (vscodeOn
+          ? '<button type="button" class="gs-vsc-full" aria-pressed="false" aria-label="Fill the window"' +
+            ' title="Fill the window" hidden>' + ICON_EXPAND + '</button>'
+          : '') +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
         (treeMode === 'toggle'
@@ -842,6 +857,12 @@
               '<div class="gs-ed-empty"></div>' +
             '</div>' +
           '</div>' +
+          (vscodeOn
+            ? '<div class="gs-view gs-view-vscode" role="tabpanel" data-view="vscode" hidden>' +
+                '<div class="gs-vsc"></div>' +
+                '<div class="gs-vsc-msg" role="status"></div>' +
+              '</div>'
+            : '') +
         '</div>' +
         '<div class="gs-tasks"></div>' +
         '<div class="gs-viz"' + (panelMode === false ? ' hidden' : '') + '>' +
@@ -990,18 +1011,23 @@
       tasks.forEach(function (t, i) { t._done = snap.done[i]; t._wasDone = snap.done[i]; });
     }
 
+    // returns what it printed
     function doUndo() {
+      var said;
       if (!canUndo()) {
         echo(promptText(), 'undo');
-        writeText(undoStack.length
+        said = undoStack.length
           ? 'The last change was made in another view of this repository. Undo it there.'
-          : 'Nothing to undo.');
-        return;
+          : 'Nothing to undo.';
+        writeText(said);
+        return said;
       }
       var entry = undoStack.pop();
       restoreSnap(entry);
       echo(entry.prompt, 'undo');
-      writeText('Undid: {y}' + entry.line + '{/}');
+      said = 'Undid: {y}' + entry.line + '{/}';
+      writeText(said);
+      return said;
     }
 
     /* ------------------------------ tabs ------------------------------ */
@@ -1204,14 +1230,104 @@
       activate(viewButtons, viewPanes, name, true);
       // lets narrow screens give the stacked file tree + editor more room
       host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
+      host.querySelector('.gs-term-wrap').classList.toggle('is-vscode', name === 'vscode');
+      if (vscFullBtn) vscFullBtn.hidden = name !== 'vscode';
+      if (name !== 'vscode' && vscFull) setVSCodeFull(false);
+      if (name === 'vscode') openVSCode();
       if (!focus) return;
       if (name === 'terminal') input.focus();
-      else if (openFile) edText.focus();
+      else if (name === 'editor' && openFile) edText.focus();
     }
 
     Object.keys(viewButtons).forEach(function (k) {
       viewButtons[k].addEventListener('click', function () { selectView(k, true); });
     });
+
+    /* --------------------------- VS Code view -------------------------- */
+
+    // The workbench is one per page (its services are global), so it moves
+    // to whichever box opened it last and works on that box's repository.
+    // Everything it does goes through this box: commands from its terminal
+    // and Source Control view run like typed ones (task ticks, undo, the
+    // panels below), and file edits get undo entries like the Editor tab's.
+    var vscPane = host.querySelector('.gs-vsc');
+    var vscMsg = host.querySelector('.gs-vsc-msg');
+    var vscFullBtn = host.querySelector('.gs-vsc-full');
+    var vscFull = false;
+    var vscLoading = false;
+    // called after every refresh, so VS Code sees what any view changed
+    var refreshHooks = [];
+
+    function setVSCodeFull(on) {
+      vscFull = on;
+      host.classList.toggle('gs-vsc-is-full', on);
+      vscFullBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      vscFullBtn.title = on ? 'Back into the page' : 'Fill the window';
+      vscFullBtn.setAttribute('aria-label', vscFullBtn.title);
+    }
+    if (vscFullBtn) vscFullBtn.addEventListener('click', function () { setVSCodeFull(!vscFull); });
+
+    function openVSCode() {
+      if (vscLoading) return;
+      vscLoading = true;
+      vscMsg.hidden = false;
+      vscMsg.textContent = 'Loading VS Code…';
+      var load = root.GitSandboxVSCode ? Promise.resolve(root.GitSandboxVSCode)
+        : root.GitSandboxVSCodeLoad ? root.GitSandboxVSCodeLoad()
+        : Promise.reject(new Error('sandbox-vscode.js is not on this page.'));
+      load
+        .then(function (vsc) { return vsc.attach(vscPane, vscBinding); })
+        .then(function () { vscMsg.hidden = true; }, function (e) {
+          vscMsg.textContent = 'VS Code could not start: ' + (e && e.message ? e.message : e);
+        })
+        .then(function () { vscLoading = false; });
+    }
+
+    // Runs `fn` once nothing else is running. fn must claim `busy` before
+    // its first await, as submit() does, or two callers could both start.
+    async function whenIdle(fn) {
+      for (;;) {
+        await waitIdle();
+        if (!busy) return fn();
+      }
+    }
+
+    var vscBinding = {
+      get sandbox() { return sb; },
+      // the folder VS Code shows: the last part of the prompt's path
+      name: (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/').pop().replace(/^~$/, '') || 'project',
+      prompt: promptText,
+      // A command line, run as if typed here. `io.write(text, ok)` receives
+      // the output, `io.clear()` a `clear`, and `io.editor(file, text)`
+      // replaces vim for `git commit` without -m (resolve with the saved
+      // message, or undefined to drop it). Resolves with { out, ok }.
+      run: function (line, io) {
+        return whenIdle(function () { return submit(line, true, io || {}); });
+      },
+      // A file change made in VS Code (save, new file, delete, rename):
+      // an undo entry and a refresh, as for the Editor tab.
+      mutate: function (label, fn) {
+        return whenIdle(async function () {
+          setBusy(true);
+          var snap = captureUndo(label);
+          try {
+            return await fn(sb);
+          } finally {
+            if (sb.changedSince(snap.core)) pushUndo(snap);
+            await refresh();
+            notifyViews();
+            setBusy(false);
+          }
+        });
+      },
+      onRefresh: function (fn) {
+        refreshHooks.push(fn);
+        return function () {
+          var i = refreshHooks.indexOf(fn);
+          if (i !== -1) refreshHooks.splice(i, 1);
+        };
+      }
+    };
 
     /* ------------------------- file editor ---------------------------- */
 
@@ -1733,6 +1849,9 @@
       // a stopped merge shows as (main|MERGING), as git's own prompt does
       host.querySelector('.gs-prompt').textContent =
         sb.pwd() + (br ? ' (' + br + (status.merging ? '|MERGING' : '') + ')' : '') + ' $';
+      refreshHooks.slice().forEach(function (fn) {
+        try { fn(); } catch (e) { if (root.console) root.console.error(e); }
+      });
     }
 
     // The history graph, with the contents of each opened commit laid out
@@ -1969,18 +2088,21 @@
 
     // `quiet`: a scripted command, run without taking the keyboard, which
     // on a slide belongs to reveal.js
-    async function submit(line, quiet) {
+    // `io`: the command came from elsewhere (VS Code's terminal or Source
+    // Control view), which wants the output too; see vscBinding.run.
+    async function submit(line, quiet, io) {
       if (busy) return;
       setBusy(true);
       var trimmed = line.trim();
       if (trimmed === 'undo') {
         // never reaches the engine: undo is a sandbox affordance, not git
-        doUndo();
+        var said = doUndo();
+        if (io && io.write) io.write(said, true);
         await refresh();
         notifyViews();
         setBusy(false);
         if (!quiet) input.focus();
-        return;
+        return { out: said, ok: true };
       }
       var snap = captureUndo(line);
       echo(promptText(), line);
@@ -1988,15 +2110,31 @@
       histIdx = history.length;
       var r = await sb.run(line);
       if (r.editor) {
-        var saved = await openVim(r.editor.file, r.editor.text);
+        var saved;
+        if (io && io.editor) {
+          // Reset abandons this as it would vim
+          vim = { abandon: function () { if (io.abandon) io.abandon(); } };
+          try { saved = await io.editor(r.editor.file, r.editor.text); }
+          finally { vim = null; }
+        } else {
+          saved = await openVim(r.editor.file, r.editor.text);
+        }
         // Reset closes the editor from underneath us and starts afresh
         if (saved === undefined) return;
         r = await sb.finishCommit(saved);
       }
-      if (trimmed === 'clear') { out.innerHTML = ''; }
-      else if (trimmed === 'help') { writeText(helpText()); }
-      else if (trimmed === 'reset') { await doReset(); }
-      else { writeText(r.out, r.ok ? '' : 'gs-err'); }
+      if (trimmed === 'clear') {
+        out.innerHTML = '';
+        if (io && io.clear) io.clear();
+      } else if (trimmed === 'help') {
+        writeText(helpText());
+        if (io && io.write) io.write(helpText(), true);
+      } else if (trimmed === 'reset') {
+        await doReset();
+      } else {
+        writeText(r.out, r.ok ? '' : 'gs-err');
+        if (io && io.write) io.write(r.out, r.ok);
+      }
       // a merge that stops on conflicts fails but still changes the repo,
       // and undoing it is the quickest way back out
       var changed = sb.changedSince(snap.core);
@@ -2010,6 +2148,7 @@
       if (changed && trimmed !== 'reset') notifyViews();
       setBusy(false);
       if (!quiet) input.focus();
+      return { out: r.out, ok: r.ok };
     }
 
     // The remote half's heading names the remote shown; with several it is

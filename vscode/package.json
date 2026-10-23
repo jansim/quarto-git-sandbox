@@ -1,0 +1,50 @@
+{
+  "name": "quarto-git-sandbox-vscode",
+  "private": true,
+  "type": "module",
+  "description": "Builds the optional VS Code view (resources/vscode/), loaded only when a learner opens it.",
+  "license": "MIT",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@codingame/monaco-vscode-api": "37.6.1",
+    "@codingame/monaco-vscode-configuration-service-override": "37.6.1",
+    "@codingame/monaco-vscode-css-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-dialogs-service-override": "37.6.1",
+    "@codingame/monaco-vscode-editor-api": "37.6.1",
+    "@codingame/monaco-vscode-explorer-service-override": "37.6.1",
+    "@codingame/monaco-vscode-git-base-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-html-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-javascript-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-json-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-keybindings-service-override": "37.6.1",
+    "@codingame/monaco-vscode-languages-service-override": "37.6.1",
+    "@codingame/monaco-vscode-lifecycle-service-override": "37.6.1",
+    "@codingame/monaco-vscode-log-service-override": "37.6.1",
+    "@codingame/monaco-vscode-markdown-basics-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-model-service-override": "37.6.1",
+    "@codingame/monaco-vscode-notifications-service-override": "37.6.1",
+    "@codingame/monaco-vscode-output-service-override": "37.6.1",
+    "@codingame/monaco-vscode-python-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-r-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-scm-service-override": "37.6.1",
+    "@codingame/monaco-vscode-search-service-override": "37.6.1",
+    "@codingame/monaco-vscode-shellscript-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-storage-service-override": "37.6.1",
+    "@codingame/monaco-vscode-terminal-service-override": "37.6.1",
+    "@codingame/monaco-vscode-textmate-service-override": "37.6.1",
+    "@codingame/monaco-vscode-theme-defaults-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-theme-service-override": "37.6.1",
+    "@codingame/monaco-vscode-theme-seti-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-typescript-basics-default-extension": "37.6.1",
+    "@codingame/monaco-vscode-view-status-bar-service-override": "37.6.1",
+    "@codingame/monaco-vscode-workbench-service-override": "37.6.1",
+    "@codingame/monaco-vscode-working-copy-service-override": "37.6.1",
+    "@codingame/monaco-vscode-yaml-default-extension": "37.6.1",
+    "vscode": "npm:@codingame/monaco-vscode-extension-api@37.6.1"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  }
+}

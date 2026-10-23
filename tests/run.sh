@@ -12,6 +12,8 @@
 # 7. test-rendered the extension's real rendered output, driven end to end
 # 8. test-revealjs  the same inside a reveal.js deck, views shared across slides
 # 9. test-realgit  the sandbox's terminal output against the real git binary's
+# 10. test-vscode  the VS Code view, rendered and driven in Chromium (needs
+#                  `npx playwright install chromium`; skipped without it)
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -50,6 +52,9 @@ node tests/test-revealjs.js example-revealjs.html 2>/dev/null | tail -8 || fail=
 step "test-realgit (output compared with real git)"
 # no tail: on failure every mismatch should reach the CI log
 node tests/test-realgit.js || fail=1
+
+step "test-vscode (the VS Code view in a browser)"
+node tests/test-vscode.js || fail=1
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then

@@ -40,7 +40,7 @@ function render(fixture) {
 
     // the bad blocks, and the duplicate-id pair which should still render
     const errors = (html.match(/gs-config-error/g) || []).length;
-    check('eleven config errors reported', errors === 11, 'found ' + errors);
+    check('twelve config errors reported', errors === 12, 'found ' + errors);
     check('says a script line must be a command',
       /(&quot;|")script(&quot;|") line 2 must be a command/.test(html));
     check('a view cannot have its own seed',
@@ -49,6 +49,9 @@ function render(fixture) {
       /(&quot;|")tree-view(&quot;|") must be true, false or toggle, got (&quot;|")sometimes(&quot;|")/.test(html));
     check('says editor must be true or false (no toggle)',
       /(&quot;|")editor(&quot;|") must be true or false, got (&quot;|")toggle(&quot;|")/.test(html));
+    check('says vscode must be true or false',
+      /(&quot;|")vscode(&quot;|") must be true or false, got (&quot;|")toggle(&quot;|")/.test(html));
+    check('no VS Code files for a page that does not ask for them', !/sandbox-vscode\.js/.test(html));
     check('names an unknown panel',
       /(&quot;|")panel-tabs(&quot;|") lists (&quot;|")graph(&quot;|"); the panels are files, changes, history, remote/.test(html));
 

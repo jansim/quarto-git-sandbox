@@ -25,4 +25,7 @@ jobs:
 
       - run: npm install
 
+      # for tests/test-vscode.js, which drives the VS Code view in a browser
+      - run: npx playwright install --with-deps chromium
+
       - run: ./tests/run.sh

@@ -28,6 +28,14 @@ _extensions/git-sandbox/
     sandbox-ui.js      terminal, editor, panels, task list; mounts the boxes
     git-sandbox.css    styling
     isomorphic-git.bundle.js   GENERATED from vendor/ by ./build.sh
+    sandbox-vscode.js  loads the VS Code view on demand
+    vscode/            GENERATED from vscode/src/ (see below)
+vscode/
+  src/main.js          boots the workbench; GitSandboxVSCode.attach()
+  src/session.js       which box VS Code is bound to
+  src/files.js         the box's in-memory files as VS Code's file://
+  src/git.js           Source Control, explorer decorations, Git commands
+  src/terminal.js      the integrated terminal's line editing
 ```
 
 The scripts load in that order, each one a plain browser script (the first
@@ -40,6 +48,31 @@ At render time the filter turns each block into a container plus a
 body, drains that queue. This keeps a 260 KB library off the critical path
 while still letting per-exercise configuration sit inline where the author
 wrote it.
+
+## The VS Code view
+
+`vscode: true` boxes get the real VS Code workbench, built from
+[monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api). It is
+the one part of the extension with a build step, because VS Code ships as
+thousands of ES modules:
+
+```bash
+cd vscode
+npm install
+npm run build        # writes _extensions/git-sandbox/resources/vscode/
+```
+
+Commit the rebuilt `resources/vscode/` with the change to `vscode/src/`:
+like the isomorphic-git bundle, it is what `quarto add` installs. The
+`@codingame/*` packages are pinned to one exact version; bump them all
+together.
+
+The workbench never changes the repository itself. Every git action is a
+command line run through the box (`vscBinding.run` in `sandbox-ui.js`),
+and every file change goes through `vscBinding.mutate`, so tasks, Undo and
+the panels see VS Code's work exactly as they see typed commands. Keep it
+that way: a learner should always be able to find, in the box's terminal,
+the command a click stood for.
 
 ## Tests
 
@@ -58,8 +91,12 @@ wrote it.
 | `tests/test-rendered.js` | The real rendered `example.qmd`, driven end to end |
 | `tests/test-revealjs.js` | The rendered `example-revealjs.qmd`: boxes on reveal.js slides, one repository shared across two |
 | `tests/test-realgit.js` | The same commands run in the sandbox and through the real `git` binary, with the terminal output compared |
+| `tests/test-vscode.js` | The VS Code view in Chromium: loaded only on demand, then the terminal, Source Control and commit driven for real |
 
 The UI and end-to-end suites use jsdom, so they run in CI without a browser.
+`test-vscode.js` is the exception: it needs Playwright's Chromium
+(`npx playwright install chromium`) and says it skipped the browser half
+when that is missing.
 `test-rendered.js` loads the actual rendered HTML, executes its real scripts,
 and completes the exercises by submitting the form. If it passes, the
 lesson works.

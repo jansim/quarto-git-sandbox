@@ -1,5 +1,5 @@
 /* End-to-end: load the RENDERED example.html (the author's guide) in jsdom,
-   execute its real inlined scripts, and drive all seven demo boxes to
+   execute its real inlined scripts, and drive the demo boxes to
    completion.
    Run: node test-rendered.js ../example.html */
 const fs = require('fs');
@@ -87,9 +87,9 @@ function outText(win, hostId) {
 
   // whichever ids the page used (hand-written qmd or the extension)
   const ALL_IDS = Array.from(win.document.querySelectorAll('.git-sandbox')).map(d => d.id);
-  check('page has eight demo boxes', ALL_IDS.length === 8, JSON.stringify(ALL_IDS));
+  check('page has nine demo boxes', ALL_IDS.length === 9, JSON.stringify(ALL_IDS));
   // later additions are looked up by id; the original six by position
-  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow' && id !== 'tree-flow-view');
+  const IDS = ALL_IDS.filter(id => id !== 'conflict-flow' && id !== 'tree-flow-view' && id !== 'vscode-flow');
   const [ID1, ID2, ID3, ID4, ID5, ID6] = IDS;
 
   for (const id of ALL_IDS) {
@@ -97,6 +97,13 @@ function outText(win, hostId) {
     check(id + ' mounted', !!win.document.querySelector('#' + id + ' .gs-input'));
     check(id + ' loading placeholder replaced',
       !/Loading the Git sandbox/.test(win.document.querySelector('#' + id).textContent));
+  }
+  {
+    // the workbench itself needs a real browser: see test-vscode.js
+    const tabs = Array.from(win.document.querySelectorAll('.gs-wtab[data-view="vscode"]'))
+      .map(b => b.closest('.git-sandbox').id);
+    check('only vscode-flow has a VS Code tab', JSON.stringify(tabs) === '["vscode-flow"]', JSON.stringify(tabs));
+    check('the VS Code loader is on the page', typeof win.GitSandboxVSCodeLoad === 'function');
   }
 
   /* ---------------- box 1: anatomy tour ---------------- */
