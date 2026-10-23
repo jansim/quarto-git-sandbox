@@ -4446,6 +4446,33 @@
     return node.offsetWidth && r.width ? r.width / node.offsetWidth : 1;
   }
 
+  // The browser's zoom level (1 at 100%). reveal.js scales each slide to
+  // fit the window, which cancels out zooming in or out, so a box on a
+  // slide sizes its text by this instead (--gs-zoom in the CSS). There is
+  // no API for it: Chrome reports it as outerWidth / innerWidth, and every
+  // browser folds it into devicePixelRatio, on top of the screen's own
+  // density. The first reading fixes that density; later ones divide by it.
+  var ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+  var SCREEN_DPRS = [1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3, 4];
+  var screenDpr = null;
+  function nearest(list, x, tol) {
+    for (var i = 0; i < list.length; i++) if (Math.abs(list[i] - x) <= tol * list[i]) return list[i];
+    return null;
+  }
+  function browserZoom() {
+    var dpr = root.devicePixelRatio || 1;
+    // A docked devtools pane or a sidebar also widens outerWidth, so only
+    // trust the ratio when it is one of the browser's zoom steps and leaves
+    // a screen density that exists. A ratio of 1 says nothing: browsers
+    // that report outerWidth in zoomed pixels always give 1.
+    var ratio = root.outerWidth && root.innerWidth ? root.outerWidth / root.innerWidth : 1;
+    var step = nearest(ZOOM_STEPS, ratio, 0.02);
+    var fromRatio = step && step !== 1 && nearest(SCREEN_DPRS, dpr / step, 0.02) ? step : null;
+    if (screenDpr === null) screenDpr = dpr / (fromRatio || 1);
+    var z = fromRatio || dpr / screenDpr;
+    return Math.min(4, Math.max(0.5, Math.round(z * 100) / 100));
+  }
+
   // Show files travelling between the columns after a re-render, so
   // `git add` visibly carries a file from the working directory to the
   // staging area and `git commit` turns the staged files into a commit in
@@ -5074,6 +5101,8 @@
     if (slide) {
       host.classList.add('gs-fill');
       var fillSlide = function () {
+        var zoom = browserZoom();
+        if (host.style.getPropertyValue('--gs-zoom') !== String(zoom)) host.style.setProperty('--gs-zoom', String(zoom));
         // offsets are only real while the slide is displayed
         if (!host.offsetParent) return;
         var deck = root.Reveal && root.Reveal.getConfig ? root.Reveal.getConfig() : null;
@@ -5091,6 +5120,9 @@
       fillSlide();
       hookDeck();
       root.addEventListener('load', function () { hookDeck(); fillSlide(); });
+      // zooming resizes the window, but reveal.js only reports a resize
+      // when its own scale changes
+      root.addEventListener('resize', fillSlide);
     }
 
     /* ------------------------ workspace views ------------------------- */

@@ -170,6 +170,17 @@ async function waitFor(fn, ms, label) {
   await waitFor(() => count() === '[6/6]' && !sin.disabled, 8000, 'arriving backwards');
   check('arriving backwards runs every command', /git log --oneline$/.test(echoes()[echoes().length - 1]), echoes().join('|'));
 
+  // browser zoom: reveal.js scales the slide back to fit, so the boxes
+  // take the zoom level from devicePixelRatio and size their text by it
+  check('a slide box starts at 100% zoom', $('#deck-repo').style.getPropertyValue('--gs-zoom') === '1',
+    $('#deck-repo').style.getPropertyValue('--gs-zoom'));
+  Object.defineProperty(win, 'devicePixelRatio', { get: () => 1.5, configurable: true });
+  win.dispatchEvent(new win.Event('resize'));
+  check('zooming to 150% scales the slide box text', $('#deck-repo').style.getPropertyValue('--gs-zoom') === '1.5',
+    $('#deck-repo').style.getPropertyValue('--gs-zoom'));
+  Object.defineProperty(win, 'devicePixelRatio', { get: () => 1, configurable: true });
+  win.dispatchEvent(new win.Event('resize'));
+
   check('no script errors on the page', ourErrors.length === 0, ourErrors.join('\n     '));
 
   console.log('\n===== RESULTS (reveal.js deck) =====');
