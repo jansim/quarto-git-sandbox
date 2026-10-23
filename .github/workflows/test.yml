@@ -1,12 +1,17 @@
 name: test
 
+# Branch pushes are tested through their pull request, so each commit runs
+# once. Running both for the same commit used to cancel one of the two, which
+# GitHub shows as a failed check. A branch without a PR can be run by hand.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# Push and PR runs for the same branch share a group, so one cancels the other.
+# A new push to a PR cancels the run for the commit it replaces.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
