@@ -678,6 +678,23 @@
   // view a change was made in.
   var groups = {};
 
+  // Plugins that draw a ```git-sandbox-<name>``` exercise's workspace, by
+  // name, and the boxes still waiting for one: plugin scripts and this one
+  // may load in either order.
+  var views = {};
+  var viewWaiters = {};
+
+  function registerView(name, def) {
+    views[name] = def;
+    (viewWaiters[name] || []).forEach(function (fn) { fn(def); });
+    delete viewWaiters[name];
+  }
+
+  function whenView(name, fn) {
+    if (views[name]) fn(views[name]);
+    else (viewWaiters[name] = viewWaiters[name] || []).push(fn);
+  }
+
   function groupFor(key, config) {
     var g = key ? groups[key] : null;
     if (g) return g;
@@ -743,10 +760,11 @@
     var treeShown = treeMode === true;
     // The editor tab (and with it the tab strip) can be turned off.
     var editorOn = config.editor !== false && config.editor !== 'false';
-    // `vscode: true` adds a VS Code tab: the real workbench (explorer,
-    // editor, source control, terminal) on this box's repository. Its
-    // bundle is only fetched when the tab is first opened.
-    var vscodeOn = config.vscode === true || config.vscode === 'true';
+    // A ```git-sandbox-<view>``` block (config.view): a plugin registered
+    // under that name draws the workspace in place of the terminal and the
+    // editor, and works on this box's repository through viewBinding.
+    var viewName = config.view ? String(config.view) : null;
+    if (viewName) editorOn = false;
     // The panels below the terminal: the same three modes, here 'toggle'
     // starts open with a chevron to fold them. `panelTabs` picks which
     // panels there are at all.
@@ -763,26 +781,20 @@
         // The workspace tabs live in the title bar and open onto the dark
         // pane below it: the terminal and the file editor share that pane,
         // one at a time, like tabs in a code editor.
-        (editorOn || vscodeOn
+        (editorOn
           ? '<div class="gs-titlebar" role="tablist" aria-label="Workspace">' +
               '<button type="button" class="gs-wtab is-active" role="tab" aria-selected="true" data-view="terminal">' +
                 '<span class="gs-wtab-icon" aria-hidden="true">&gt;_</span>Terminal</button>' +
-              (editorOn
-                ? '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
-                    '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
-                    '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>'
-                : '') +
-              (vscodeOn
-                ? '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="vscode">' +
-                    '<span class="gs-wtab-icon" aria-hidden="true">&lt;/&gt;</span>VS Code</button>'
-                : '') +
+              '<button type="button" class="gs-wtab" role="tab" aria-selected="false" data-view="editor">' +
+                '<span class="gs-wtab-icon" aria-hidden="true">{ }</span>Editor' +
+                '<span class="gs-wtab-dirty" title="Unsaved changes" hidden>●<span class="gs-sr"> (unsaved changes)</span></span></button>' +
             '</div>'
           : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state"></span>' +
-        (vscodeOn
-          ? '<button type="button" class="gs-vsc-full" aria-pressed="false" aria-label="Fill the window"' +
-            ' title="Fill the window" hidden>' + ICON_EXPAND + '</button>'
+        (viewName
+          ? '<button type="button" class="gs-full" aria-pressed="false" aria-label="Fill the window"' +
+            ' title="Fill the window">' + ICON_EXPAND + '</button>'
           : '') +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
@@ -792,8 +804,10 @@
           : '') +
       '</div>' +
       '<div class="gs-body">' +
-        '<div class="gs-term-wrap">' +
-          '<div class="gs-view" role="tabpanel" data-view="terminal">' +
+        '<div class="gs-term-wrap' + (viewName ? ' is-ext' : '') + '">' +
+          // a view box keeps the terminal, out of sight: commands from the
+          // view are echoed there, and Undo restores it with the rest
+          '<div class="gs-view" role="tabpanel" data-view="terminal"' + (viewName ? ' hidden' : '') + '>' +
             '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
             '<form class="gs-input-row" autocomplete="off">' +
               '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
@@ -857,11 +871,8 @@
               '<div class="gs-ed-empty"></div>' +
             '</div>' +
           '</div>' +
-          (vscodeOn
-            ? '<div class="gs-view gs-view-vscode" role="tabpanel" data-view="vscode" hidden>' +
-                '<div class="gs-vsc"></div>' +
-                '<div class="gs-vsc-msg" role="status"></div>' +
-              '</div>'
+          (viewName
+            ? '<div class="gs-view gs-view-ext" data-view="ext"><div class="gs-ext"></div></div>'
             : '') +
         '</div>' +
         '<div class="gs-tasks"></div>' +
@@ -1230,10 +1241,6 @@
       activate(viewButtons, viewPanes, name, true);
       // lets narrow screens give the stacked file tree + editor more room
       host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
-      host.querySelector('.gs-term-wrap').classList.toggle('is-vscode', name === 'vscode');
-      if (vscFullBtn) vscFullBtn.hidden = name !== 'vscode';
-      if (name !== 'vscode' && vscFull) setVSCodeFull(false);
-      if (name === 'vscode') openVSCode();
       if (!focus) return;
       if (name === 'terminal') input.focus();
       else if (name === 'editor' && openFile) edText.focus();
@@ -1243,45 +1250,27 @@
       viewButtons[k].addEventListener('click', function () { selectView(k, true); });
     });
 
-    /* --------------------------- VS Code view -------------------------- */
+    /* ------------------------- plugin views ---------------------------- */
 
-    // The workbench is one per page (its services are global), so it moves
-    // to whichever box opened it last and works on that box's repository.
-    // Everything it does goes through this box: commands from its terminal
-    // and Source Control view run like typed ones (task ticks, undo, the
-    // panels below), and file edits get undo entries like the Editor tab's.
-    var vscPane = host.querySelector('.gs-vsc');
-    var vscMsg = host.querySelector('.gs-vsc-msg');
-    var vscFullBtn = host.querySelector('.gs-vsc-full');
-    var vscFull = false;
-    var vscLoading = false;
-    // called after every refresh, so VS Code sees what any view changed
+    // A view box hands its workspace to the plugin registered under its
+    // view's name (see registerView). Everything the plugin does goes
+    // through viewBinding: commands run as if typed here (task ticks, Undo,
+    // the panels below), and file changes get undo entries like the
+    // Editor tab's.
+    var extPane = host.querySelector('.gs-ext');
+    var fullBtn = host.querySelector('.gs-full');
+    var full = false;
+    // called after every refresh, so the view sees what anything changed
     var refreshHooks = [];
 
-    function setVSCodeFull(on) {
-      vscFull = on;
-      host.classList.toggle('gs-vsc-is-full', on);
-      vscFullBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-      vscFullBtn.title = on ? 'Back into the page' : 'Fill the window';
-      vscFullBtn.setAttribute('aria-label', vscFullBtn.title);
+    function setFull(on) {
+      full = on;
+      host.classList.toggle('gs-is-full', on);
+      fullBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      fullBtn.title = on ? 'Back into the page' : 'Fill the window';
+      fullBtn.setAttribute('aria-label', fullBtn.title);
     }
-    if (vscFullBtn) vscFullBtn.addEventListener('click', function () { setVSCodeFull(!vscFull); });
-
-    function openVSCode() {
-      if (vscLoading) return;
-      vscLoading = true;
-      vscMsg.hidden = false;
-      vscMsg.textContent = 'Loading VS Code…';
-      var load = root.GitSandboxVSCode ? Promise.resolve(root.GitSandboxVSCode)
-        : root.GitSandboxVSCodeLoad ? root.GitSandboxVSCodeLoad()
-        : Promise.reject(new Error('sandbox-vscode.js is not on this page.'));
-      load
-        .then(function (vsc) { return vsc.attach(vscPane, vscBinding); })
-        .then(function () { vscMsg.hidden = true; }, function (e) {
-          vscMsg.textContent = 'VS Code could not start: ' + (e && e.message ? e.message : e);
-        })
-        .then(function () { vscLoading = false; });
-    }
+    if (fullBtn) fullBtn.addEventListener('click', function () { setFull(!full); });
 
     // Runs `fn` once nothing else is running. fn must claim `busy` before
     // its first await, as submit() does, or two callers could both start.
@@ -1292,20 +1281,28 @@
       }
     }
 
-    var vscBinding = {
+    // What a view plugin gets: see "Writing a view plugin" in CONTRIBUTING.md.
+    // Add to it freely; never change what an existing member means.
+    var viewBinding = {
+      version: 1,
+      id: host.id || null,
+      title: config.title || 'Git sandbox',
       get sandbox() { return sb; },
-      // the folder VS Code shows: the last part of the prompt's path
+      // the project folder's name: the last part of the prompt's path
       name: (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/').pop().replace(/^~$/, '') || 'project',
+      // the exercise's `intro`, with {y}…{/} colour markers
+      intro: intro.slice(),
       prompt: promptText,
       // A command line, run as if typed here. `io.write(text, ok)` receives
       // the output, `io.clear()` a `clear`, and `io.editor(file, text)`
       // replaces vim for `git commit` without -m (resolve with the saved
-      // message, or undefined to drop it). Resolves with { out, ok }.
+      // message, or undefined to drop it); `io.abandon()` is called if
+      // Reset drops that commit. Resolves with { out, ok }.
       run: function (line, io) {
         return whenIdle(function () { return submit(line, true, io || {}); });
       },
-      // A file change made in VS Code (save, new file, delete, rename):
-      // an undo entry and a refresh, as for the Editor tab.
+      // A file change made in the view (save, new file, delete, rename):
+      // `fn(sandbox)` makes it, with an undo entry and a refresh.
       mutate: function (label, fn) {
         return whenIdle(async function () {
           setBusy(true);
@@ -1320,6 +1317,7 @@
           }
         });
       },
+      // `fn()` runs after every refresh; returns a function that stops it
       onRefresh: function (fn) {
         refreshHooks.push(fn);
         return function () {
@@ -1328,6 +1326,32 @@
         };
       }
     };
+
+    if (viewName) {
+      var viewMsg = function (text) {
+        extPane.innerHTML = '<div class="gs-ext-msg" role="status"></div>';
+        extPane.firstChild.textContent = text;
+      };
+      var viewAttached = false;
+      viewMsg('Loading…');
+      whenView(viewName, function (def) {
+        viewAttached = true;
+        // after mount() returns (`ready` is set at its end) and the seed ran
+        Promise.resolve().then(function () { return ready; })
+          .then(function () { return def.attach(extPane, viewBinding); })
+          .then(null, function (e) { viewMsg('This view could not start: ' + (e && e.message ? e.message : e)); });
+      });
+      // once the page has loaded, a view nobody registered is a missing plugin
+      var noPlugin = function () {
+        setTimeout(function () {
+          if (!viewAttached) {
+            viewMsg('This exercise needs the git-sandbox-' + viewName + ' extension, which is not on this page.');
+          }
+        }, 0);
+      };
+      if (document.readyState === 'complete') noPlugin();
+      else root.addEventListener('load', noPlugin);
+    }
 
     /* ------------------------- file editor ---------------------------- */
 
@@ -2088,8 +2112,8 @@
 
     // `quiet`: a scripted command, run without taking the keyboard, which
     // on a slide belongs to reveal.js
-    // `io`: the command came from elsewhere (VS Code's terminal or Source
-    // Control view), which wants the output too; see vscBinding.run.
+    // `io`: the command came from a plugin view, which wants the output
+    // too; see viewBinding.run.
     async function submit(line, quiet, io) {
       if (busy) return;
       setBusy(true);
@@ -2556,6 +2580,9 @@
   }
 
   function boot() {
+    // views first, so the boxes below find theirs at once
+    (root.__gsViews || []).forEach(function (v) { registerView(v[0], v[1]); });
+    root.__gsViews = { push: function (v) { registerView(v[0], v[1]); } };
     var pending = root.__gsPending || [];
     pending.forEach(function (p) { mount(p[0], p[1]); });
     root.__gsPending = { push: function (p) { mount(p[0], p[1]); } };
@@ -2566,6 +2593,9 @@
   var W = root.GitSandboxWhen || {};
   root.GitSandboxUI = {
     mount: mount,
+    // registerView(name, { attach(pane, binding) }): draw the workspace of
+    // ```git-sandbox-<name>``` exercises; see CONTRIBUTING.md
+    registerView: registerView,
     boot: boot,
     branchOid: W.branchOid,
     reaches: W.reaches,

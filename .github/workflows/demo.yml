@@ -32,11 +32,14 @@ jobs:
           version: 1.6.43
 
       # The guide is the site's front page and is also published under its
-      # own name, which is what the reveal.js deck links back to.
+      # own name, which is what the reveal.js deck links back to. The VS
+      # Code page is not self-contained: VS Code is fetched from its _files
+      # folder when an exercise scrolls into view.
       - name: Render the demo
         run: |
           quarto render example.qmd
           quarto render example-revealjs.qmd
+          quarto render example-vscode.qmd
 
       - uses: actions/configure-pages@v5
 
@@ -44,7 +47,7 @@ jobs:
         run: |
           mkdir -p _site
           cp example.html _site/index.html
-          mv example.html example-revealjs.html _site/
+          mv example.html example-revealjs.html example-vscode.html example-vscode_files _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:

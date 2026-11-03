@@ -1,9 +1,11 @@
 // Which box VS Code is working on. The workbench is one per page, so
 // opening it from another box rebinds everything here to that box.
 //
-// A binding comes from sandbox-ui.js (see vscBinding there):
-//   sandbox         the box's GitSandboxCore sandbox
+// A binding comes from git-sandbox (viewBinding in sandbox-ui.js):
+//   sandbox         the exercise's GitSandboxCore sandbox
+//   title           the exercise's title
 //   name            the project folder's name, e.g. sales-analysis
+//   intro           the exercise's intro lines, with {y}…{/} markers
 //   prompt()        the box's prompt, e.g. "~/sales-analysis (main) $"
 //   run(line, io)   runs a command line as if typed in the box
 //   mutate(label, fn)  a file change, with an undo entry

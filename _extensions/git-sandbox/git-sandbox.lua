@@ -64,41 +64,6 @@ local function add_dependencies()
   })
 end
 
--- The VS Code view is several megabytes in resources/vscode/. It is
--- copied next to the page only when an exercise asks for it (`vscode:
--- true`), and the browser only fetches it when a learner opens that tab.
-local vscode_added = false
-local function list_files(dir, prefix, out)
-  for _, name in ipairs(pandoc.system.list_directory(dir)) do
-    local full = pandoc.path.join({ dir, name })
-    local rel = prefix == '' and name or (prefix .. '/' .. name)
-    -- only folders can be listed
-    if pcall(pandoc.system.list_directory, full) then
-      list_files(full, rel, out)
-    else
-      out[#out + 1] = { name = rel, path = full }
-    end
-  end
-  return out
-end
-
-local function add_vscode_dependency()
-  if vscode_added then return end
-  vscode_added = true
-  local ok, files = pcall(list_files, res('vscode'), 'vscode', {})
-  if not ok or #files == 0 then
-    warn('the VS Code view is missing from resources/vscode/; build it with ' ..
-         '`cd vscode && npm install && npm run build`')
-    files = {}
-  end
-  quarto.doc.addHtmlDependency({
-    name = 'git-sandbox-vscode',
-    version = '1.1.0',
-    scripts = { { path = res('sandbox-vscode.js'), afterBody = true } },
-    resources = files
-  })
-end
-
 -------------------------------------------------------------------- helpers
 
 local function is_array(t)
@@ -151,8 +116,7 @@ end
 local BLOCK_KEYS = {
   id = true, title = true, prompt = true, intro = true, hints = true,
   seed = true, tasks = true, ['done-note'] = true, ['tree-view'] = true,
-  editor = true, panels = true, ['panel-tabs'] = true, share = true, script = true,
-  vscode = true
+  editor = true, panels = true, ['panel-tabs'] = true, share = true, script = true
 }
 local PANEL_NAMES = { 'files', 'changes', 'history', 'remote' }
 local TASK_KEYS = { text = true, ['when'] = true, js = true }
@@ -237,9 +201,6 @@ local function build_config(cfg, problems)
   if panels ~= nil then out.panels = panels end
   local editor = switch('editor', false)
   if editor ~= nil then out.editor = editor end
-  -- off unless asked for: it is a big download, if only on first use
-  local vscode = switch('vscode', false)
-  if vscode ~= nil then out.vscode = vscode end
 
   local tabs = cfg['panel-tabs']
   if tabs ~= nil and tabs ~= '' then
@@ -318,8 +279,21 @@ end
 
 --------------------------------------------------------------------- filter
 
+-- ```git-sandbox``` is an exercise; ```git-sandbox-<view>``` is one whose
+-- workspace a plugin draws instead of the terminal (git-sandbox-vscode
+-- draws VS Code). Returns nil, or the view's name ('' for none).
+local function block_view(el)
+  for _, c in ipairs(el.classes) do
+    if c == 'git-sandbox' then return '' end
+    local v = c:match('^git%-sandbox%-([%w][%w%-]*)$')
+    if v then return v end
+  end
+  return nil
+end
+
 function CodeBlock(el)
-  if not el.classes:includes('git-sandbox') then return nil end
+  local view = block_view(el)
+  if view == nil then return nil end
 
   local problems = {}
 
@@ -335,6 +309,7 @@ function CodeBlock(el)
   dash_keys(cfg)
   check_keys(cfg, BLOCK_KEYS, 'the exercise options', problems)
   local config = build_config(cfg, problems)
+  if view ~= '' then config.view = view end
 
   if #problems > 0 then
     for _, p in ipairs(problems) do warn(p) end
@@ -366,13 +341,15 @@ function CodeBlock(el)
   end
 
   add_dependencies()
-  if config.vscode then add_vscode_dependency() end
 
   local json = quarto.json.encode(config)
   -- The tree pane needs room beside the box, so let the exercise run on
   -- into the right margin, as Quarto's own wide figures do.
   -- (A tree that opens on demand drops below the box when there is no room.)
   local classes = config.treeView == true and 'git-sandbox column-page-right' or 'git-sandbox'
+  -- the view's plugin finds its exercises by this class, before or after
+  -- this filter has run
+  if config.view then classes = classes .. ' git-sandbox-view-' .. config.view end
   -- On a slide each scripted command gets two reveal.js fragments: the
   -- first types it into the prompt, the second runs it. They sit outside
   -- the box, whose contents the browser replaces when it mounts, and are

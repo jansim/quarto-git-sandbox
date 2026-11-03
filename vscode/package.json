@@ -2,7 +2,7 @@
   "name": "quarto-git-sandbox-vscode",
   "private": true,
   "type": "module",
-  "description": "Builds the optional VS Code view (resources/vscode/), loaded only when a learner opens it.",
+  "description": "Builds the git-sandbox-vscode extension's workbench (_extensions/git-sandbox-vscode/resources/vscode/).",
   "license": "MIT",
   "scripts": {
     "build": "vite build"

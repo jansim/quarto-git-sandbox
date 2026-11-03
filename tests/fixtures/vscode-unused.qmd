@@ -1,0 +1,11 @@
+---
+title: "No VS Code exercises"
+format: html
+filters:
+  - git-sandbox
+  - git-sandbox-vscode
+---
+
+```git-sandbox
+title: Just a box
+```

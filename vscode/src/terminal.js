@@ -77,8 +77,12 @@ class SandboxShell extends SimpleTerminalProcess {
     if (back > 0) this.write(ESC + back + 'D')
   }
 
+  // the exercise's own intro, as the box's terminal would show it
   banner () {
-    this.write(ansi('{w}Git sandbox shell{/}: real git commands on this exercise\'s repository.\nType {y}help{/} to see what it supports.\n\n'))
+    const b = current()
+    const intro = b && b.intro && b.intro.length ? b.intro.join('\n')
+      : '{w}Git sandbox shell{/}: real git commands on this exercise\'s repository.\nType {y}help{/} to see what it supports.'
+    this.write(ansi(intro + '\n\n'))
     this.prompt()
   }
 

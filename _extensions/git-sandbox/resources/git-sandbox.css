@@ -107,9 +107,9 @@
 /* nothing on the stack yet */
 .gs-undo:disabled { opacity: 0.45; cursor: default; }
 
-/* `tree-view: toggle`: opens and closes the commit tree pane; the VS Code
+/* `tree-view: toggle`: opens and closes the commit tree pane; a plugin
    view's button lets it fill the window */
-.gs-tree-btn, .gs-vsc-full {
+.gs-tree-btn, .gs-full {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -121,11 +121,10 @@
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.gs-tree-btn .gs-icon, .gs-vsc-full .gs-icon { width: 16px; height: 16px; }
+.gs-tree-btn .gs-icon, .gs-full .gs-icon { width: 16px; height: 16px; }
 .gs-tree-btn:hover, .gs-tree-btn[aria-pressed="true"],
-.gs-vsc-full:hover, .gs-vsc-full[aria-pressed="true"] { background: var(--gs-blue); color: #FFFFFF; border-color: var(--gs-blue); }
-.gs-tree-btn:focus-visible, .gs-vsc-full:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: 2px; }
-.gs-vsc-full[hidden] { display: none; }
+.gs-full:hover, .gs-full[aria-pressed="true"] { background: var(--gs-blue); color: #FFFFFF; border-color: var(--gs-blue); }
+.gs-tree-btn:focus-visible, .gs-full:focus-visible { outline: 3px solid rgba(50, 118, 181, 0.45); outline-offset: 2px; }
 
 /* -------------------------------- body ------------------------------- */
 
@@ -485,18 +484,16 @@
 .gs-hint:hover { background: var(--gs-blue-vibrant); border-color: var(--gs-blue-vibrant); }
 .gs-hint:focus-visible { outline: 3px solid rgba(238, 99, 49, 0.6); outline-offset: 2px; }
 
-/* ----------------------------- VS Code view --------------------------- */
+/* ---------------------------- plugin views --------------------------- */
 
-/* The workbench needs room: a taller pane while it shows, or the whole
-   window. It draws itself inside a shadow root, so none of the page's
-   styles reach it and none of its own leak out. */
-.gs-term-wrap.is-vscode { height: 620px; }
-.gs-view-vscode { position: relative; }
-.gs-vsc { flex: 1 1 auto; min-height: 0; }
-.gs-vsc > * { height: 100%; }
-.gs-vsc-msg {
-  position: absolute;
-  inset: 0;
+/* A ```git-sandbox-<view>``` exercise: a plugin draws the workspace (VS
+   Code, say) where the terminal would be. It gets a tall pane, or the
+   whole window. */
+.gs-term-wrap.is-ext { height: 640px; }
+.gs-view-ext { position: relative; }
+.gs-ext { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.gs-ext > * { flex: 1 1 auto; min-height: 0; }
+.gs-ext-msg {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -506,9 +503,8 @@
   font-size: calc(13px * var(--gs-zoom, 1));
   color: var(--gs-t-dim);
 }
-.gs-vsc-msg[hidden] { display: none; }
 
-.gs.gs-vsc-is-full {
+.gs.gs-is-full {
   position: fixed;
   inset: 0;
   z-index: 2147483000;
@@ -517,9 +513,9 @@
   display: flex;
   flex-direction: column;
 }
-.gs-vsc-is-full > .gs-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.gs-vsc-is-full .gs-term-wrap.is-vscode { flex: 1 1 auto; height: auto; }
-.gs-vsc-is-full .gs-tasks, .gs-vsc-is-full .gs-viz, .gs-vsc-is-full > .gs-tree { display: none; }
+.gs-is-full > .gs-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.gs-is-full .gs-term-wrap.is-ext { flex: 1 1 auto; height: auto; }
+.gs-is-full .gs-tasks, .gs-is-full .gs-viz, .gs-is-full > .gs-tree { display: none; }
 
 /* ------------------------------- editor ------------------------------ */
 
@@ -1292,7 +1288,7 @@
 @media print {
   .gs-term-wrap, .gs-viz { break-inside: avoid; }
   .gs-input-row, .gs-hints, .gs-script, .gs-reset, .gs-undo, .gs-tree-btn, .gs-tabs,
-  .gs-titlebar, .gs-view-editor, .gs-view-vscode, .gs-vsc-full { display: none; }
+  .gs-titlebar, .gs-view-editor, .gs-view-ext, .gs-full { display: none; }
   /* the terminal transcript prints even if the editor was showing */
   .gs-view[data-view="terminal"][hidden] { display: flex; }
   /* On paper there are no tabs to click, so print every panel. */

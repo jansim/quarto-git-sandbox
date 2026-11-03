@@ -12,7 +12,7 @@
 # 7. test-rendered the extension's real rendered output, driven end to end
 # 8. test-revealjs  the same inside a reveal.js deck, views shared across slides
 # 9. test-realgit  the sandbox's terminal output against the real git binary's
-# 10. test-vscode  the VS Code view, rendered and driven in Chromium (needs
+# 10. test-vscode  the git-sandbox-vscode extension, driven in Chromium (needs
 #                  `npx playwright install chromium`; skipped without it)
 
 set -uo pipefail
@@ -53,7 +53,7 @@ step "test-realgit (output compared with real git)"
 # no tail: on failure every mismatch should reach the CI log
 node tests/test-realgit.js || fail=1
 
-step "test-vscode (the VS Code view in a browser)"
+step "test-vscode (exercises in VS Code, in a browser)"
 node tests/test-vscode.js || fail=1
 
 printf '\n'

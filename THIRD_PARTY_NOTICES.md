@@ -6,7 +6,8 @@ This extension bundles third-party software in
 - [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git) (MIT)
 - [buffer](https://github.com/feross/buffer) (MIT)
 
-The optional VS Code view, `_extensions/git-sandbox/resources/vscode/`, is
+The optional VS Code extension's workbench,
+`_extensions/git-sandbox-vscode/resources/vscode/`, is
 built from:
 
 - [Visual Studio Code](https://github.com/microsoft/vscode) (MIT), through

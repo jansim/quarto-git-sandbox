@@ -6,6 +6,8 @@ example.html
 example_files/
 example-revealjs.html
 example-revealjs_files/
+example-vscode.html
+example-vscode_files/
 tests/graph-preview.svg
 tests/*.html
 

@@ -3,12 +3,13 @@
 //   cd vscode && npm install && npm run build
 //
 // The output is an ES module (workbench.js) plus the chunks, workers and
-// assets it loads. sandbox-ui.js only fetches it when a learner opens the
-// VS Code tab, so pages that never open it pay nothing for it.
+// assets it loads, in the git-sandbox-vscode extension. Its loader,
+// sandbox-vscode.js, only fetches it once a VS Code exercise scrolls into
+// view.
 import { defineConfig } from 'vite'
 import { fileURLToPath } from 'node:url'
 
-const outDir = fileURLToPath(new URL('../_extensions/git-sandbox/resources/vscode', import.meta.url))
+const outDir = fileURLToPath(new URL('../_extensions/git-sandbox-vscode/resources/vscode', import.meta.url))
 
 export default defineConfig({
   // relative URLs, so the bundle works wherever Quarto copies it

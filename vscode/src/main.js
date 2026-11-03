@@ -1,8 +1,9 @@
 // The VS Code view: the real VS Code workbench (monaco-vscode-api), cut down
 // to what working with git needs: the explorer, editors and diffs, search,
 // Source Control, and the integrated terminal. No extensions, no
-// marketplace, no debugger. sandbox-vscode.js loads this module when a
-// learner first opens a VS Code tab; it sets window.GitSandboxVSCode.
+// marketplace, no debugger. sandbox-vscode.js (the git-sandbox-vscode
+// extension's loader) loads this module when a VS Code exercise first
+// scrolls into view; it sets window.GitSandboxVSCode.
 import { initialize, getService, IWorkbenchLayoutService, ICommandService } from '@codingame/monaco-vscode-api'
 import getWorkbenchServiceOverride from '@codingame/monaco-vscode-workbench-service-override'
 import getConfigurationServiceOverride from '@codingame/monaco-vscode-configuration-service-override'
@@ -160,6 +161,8 @@ async function attach (container, binding) {
   if (frame.parentNode !== container) container.appendChild(frame)
   bind(binding)
   layout.layout()
+  // and again once the page has settled around it
+  requestAnimationFrame(() => layout.layout())
 }
 
 window.GitSandboxVSCode = { attach }

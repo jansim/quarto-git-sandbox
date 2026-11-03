@@ -1,15 +1,32 @@
 ---
-title: "VS Code view"
+title: "VS Code exercises"
 format: html
 filters:
+  - git-sandbox-vscode
   - git-sandbox
 ---
 
 ```git-sandbox
+id: plain
+title: A box without VS Code
+prompt: "~/sales-analysis $"
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the README"
+```
+
+::: {style="height: 1600px"}
+Room enough that the exercises below start out of view.
+:::
+
+```git-sandbox-vscode
 id: in-vscode
 title: Commit from VS Code
 prompt: "~/sales-analysis $"
-vscode: true
+intro: |
+  Stage {y}analysis.R{/}, then commit it.
 seed: |
   git init
   echo "# Sales analysis" > README.md
@@ -23,7 +40,14 @@ tasks:
     when: commits >= 2
 ```
 
-```git-sandbox
-id: plain
-title: A box without the VS Code view
+::: {style="height: 1600px"}
+:::
+
+```git-sandbox-vscode
+id: shared
+title: The plain box, in VS Code
+share: plain
+tasks:
+  - text: Create a branch called `feature`
+    when: branch feature
 ```
