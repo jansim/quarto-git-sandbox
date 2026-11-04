@@ -279,8 +279,21 @@ end
 
 --------------------------------------------------------------------- filter
 
+-- ```git-sandbox``` is an exercise; ```git-sandbox-<view>``` is one whose
+-- workspace a plugin draws instead of the terminal (git-sandbox-vscode
+-- draws VS Code). Returns nil, or the view's name ('' for none).
+local function block_view(el)
+  for _, c in ipairs(el.classes) do
+    if c == 'git-sandbox' then return '' end
+    local v = c:match('^git%-sandbox%-([%w][%w%-]*)$')
+    if v then return v end
+  end
+  return nil
+end
+
 function CodeBlock(el)
-  if not el.classes:includes('git-sandbox') then return nil end
+  local view = block_view(el)
+  if view == nil then return nil end
 
   local problems = {}
 
@@ -296,6 +309,7 @@ function CodeBlock(el)
   dash_keys(cfg)
   check_keys(cfg, BLOCK_KEYS, 'the exercise options', problems)
   local config = build_config(cfg, problems)
+  if view ~= '' then config.view = view end
 
   if #problems > 0 then
     for _, p in ipairs(problems) do warn(p) end
@@ -333,6 +347,9 @@ function CodeBlock(el)
   -- into the right margin, as Quarto's own wide figures do.
   -- (A tree that opens on demand drops below the box when there is no room.)
   local classes = config.treeView == true and 'git-sandbox column-page-right' or 'git-sandbox'
+  -- the view's plugin finds its exercises by this class, before or after
+  -- this filter has run
+  if config.view then classes = classes .. ' git-sandbox-view-' .. config.view end
   -- On a slide each scripted command gets two reveal.js fragments: the
   -- first types it into the prompt, the second runs it. They sit outside
   -- the box, whose contents the browser replaces when it mounts, and are

@@ -60,9 +60,10 @@ filters:
 ```
 
 `example.qmd` in this repository is an author's guide built with the extension itself:
-six working boxes, each paired with the block that produced it, from a tour
-of the panels through branching, merging, pushing to a remote, and the
-optional commit tree.
+working boxes, each paired with the block that produced it, from a tour
+of the panels through branching, merging, pushing to a remote, the
+optional commit tree. `example-vscode.qmd` does the same for the VS Code
+extension below.
 Render it to see everything working:
 
 ```bash
@@ -258,6 +259,81 @@ to make room for the pane. When the box is narrower than 760 px, the pane
 moves below it instead. With `GitSandboxUI.mount()` the option is
 `treeView: true`.
 
+### Exercises in VS Code
+
+The repository holds a second, optional extension, **git-sandbox-vscode**.
+`quarto add jansim/quarto-git-sandbox` offers both. It puts an exercise
+in the real VS Code workbench
+([monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api)),
+cut down to what working with git needs: the explorer, editors and diffs,
+search, the Source Control view and the integrated terminal. There are no
+extensions, no marketplace and no debugger.
+
+List both filters, in either order, and write a ` ```git-sandbox-vscode `
+block:
+
+````markdown
+---
+filters:
+  - git-sandbox
+  - git-sandbox-vscode
+---
+
+```git-sandbox-vscode
+title: Commit from VS Code
+prompt: "~/sales-analysis $"
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+tasks:
+  - text: Stage and commit `README.md` in Source Control
+    when: commits >= 1
+```
+````
+
+It is an exercise like any other: it takes every option above, with VS
+Code where the terminal and editor would be, and the title, Undo, Reset,
+tasks and panels around it. `share: <id>` makes it VS Code on another
+exercise's repository, so a plain box and its VS Code view can sit side by
+side on a page.
+
+Everything VS Code does goes through the exercise:
+
+- **Source Control** lists Staged Changes, Changes and, during a merge,
+  Merge Changes, with VS Code's usual buttons to stage, unstage, discard,
+  open a file or its diff, and commit from the message box (Ctrl+Enter).
+  Each click runs the git command it stands for (`git add load.R`,
+  `git restore --staged load.R`, `git commit -m "…"`), listed in VS
+  Code's **Git** output. So tasks tick, **Undo** takes the click back, and
+  the panels below keep up.
+- The **...** menu has Pull, Push, Fetch, Checkout to..., Create Branch...
+  and Merge...; the status bar shows the branch (click it to switch) and,
+  with a remote, how far ahead and behind it is (click to sync).
+- The **explorer** colours and letters changed files (`M`, `U`, `A`,
+  `D`, `!`), and the editor's gutter marks changed lines.
+- The **terminal** is the exercise's shell, opening with its `intro`: the
+  same commands, with history, Tab completion and a git-aware prompt.
+  `git commit` without `-m` opens the message in an editor tab instead of
+  vim, as with `core.editor` set to `code --wait`; the ✓ in its title bar
+  commits.
+- Saving, creating, renaming or deleting files in VS Code changes the
+  working directory like any command, with an undo entry.
+
+The workbench is several megabytes, so nothing of it loads until a VS Code
+exercise first scrolls into view (about 3.4 MB compressed, cached after
+that), and Quarto only copies it next to pages that have one. The button
+beside **Undo** lets it fill the window.
+
+VS Code's services are global, so a page has one workbench. It follows the
+reader to the VS Code exercise they scroll to, and the others offer to
+bring it back. Its explorer keeps the folder name of the exercise it
+opened in first.
+
+It needs the page served over http(s), not opened as a file, and does not
+survive `embed-resources: true`, which cannot inline files a page fetches
+later. On reveal.js slides it is better left out: the pane is taller than
+most slides.
+
 ## Conditions: the `when:` language
 
 A task ticks when its condition becomes true, and stays ticked afterwards, so
@@ -442,10 +518,19 @@ for a fixed-size frame suited to screen recordings.
 Useful when a platform will take an HTML block or an iframe but not a Quarto
 document.
 
+For exercises in VS Code, also load
+`_extensions/git-sandbox-vscode/resources/sandbox-vscode.js`, keep the
+`vscode/` folder beside it, and pass `view: 'vscode'` to `mount()`. The
+loader looks for `vscode/workbench.js` next to itself; set
+`window.GitSandboxVSCodeBase` to a URL ending in `/` to serve it from
+elsewhere.
+
 ## Notes for platform and LMS embedding
 
 - **Page weight.** The Git engine is 260 KB (80 KB gzipped) and loads after the
-  body, so it never blocks first paint. With `embed-resources: true` a lesson
+  body, so it never blocks first paint. The optional VS Code extension adds a
+  5 KB loader to pages with a VS Code exercise; its 3.4 MB (compressed)
+  workbench is fetched only when one scrolls into view. With `embed-resources: true` a lesson
   becomes a single self-contained file of roughly 2 MB, much of it embedded
   fonts. It is worth dropping the font `<link>` if your platform already serves Open
   Sans and Source Code Pro.
@@ -463,13 +548,16 @@ document.
 
 ```bash
 npm install          # dev dependencies only; the extension itself needs none
-./tests/run.sh       # all nine suites
+./tests/run.sh       # all ten suites
 ./build.sh           # only to re-bundle isomorphic-git
+(cd vscode && npm install && npm run build)   # only to rebuild VS Code
 ```
 
 The sandbox's scripts in `_extensions/git-sandbox/resources/` are the
-source: edit them directly, there is nothing to rebuild. See
-`CONTRIBUTING.md`.
+source: edit them directly, there is nothing to rebuild. The VS Code
+extension's workbench is the exception: its source is in `vscode/src/`,
+and `_extensions/git-sandbox-vscode/resources/vscode/` is built from it.
+See `CONTRIBUTING.md`.
 
 ## Credits
 

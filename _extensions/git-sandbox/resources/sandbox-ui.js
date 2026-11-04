@@ -14,6 +14,7 @@
   var ICON_UP = icon('M8 13V3M4 7l4-4 4 4');
   var ICON_HOME = icon('M3 8l5-4.5L13 8M4.5 7v6h7V7');
   var ICON_PLUS = icon('M8 3v10M3 8h10');
+  var ICON_EXPAND = icon('M3 6.5V3h3.5M13 6.5V3H9.5M3 9.5V13h3.5M13 9.5V13H9.5');
   // a small commit graph: two branches off a trunk
   var ICON_TREE = '<svg class="gs-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
     '<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">' +
@@ -677,6 +678,23 @@
   // view a change was made in.
   var groups = {};
 
+  // Plugins that draw a ```git-sandbox-<name>``` exercise's workspace, by
+  // name, and the boxes still waiting for one: plugin scripts and this one
+  // may load in either order.
+  var views = {};
+  var viewWaiters = {};
+
+  function registerView(name, def) {
+    views[name] = def;
+    (viewWaiters[name] || []).forEach(function (fn) { fn(def); });
+    delete viewWaiters[name];
+  }
+
+  function whenView(name, fn) {
+    if (views[name]) fn(views[name]);
+    else (viewWaiters[name] = viewWaiters[name] || []).push(fn);
+  }
+
   function groupFor(key, config) {
     var g = key ? groups[key] : null;
     if (g) return g;
@@ -742,6 +760,11 @@
     var treeShown = treeMode === true;
     // The editor tab (and with it the tab strip) can be turned off.
     var editorOn = config.editor !== false && config.editor !== 'false';
+    // A ```git-sandbox-<view>``` block (config.view): a plugin registered
+    // under that name draws the workspace in place of the terminal and the
+    // editor, and works on this box's repository through viewBinding.
+    var viewName = config.view ? String(config.view) : null;
+    if (viewName) editorOn = false;
     // The panels below the terminal: the same three modes, here 'toggle'
     // starts open with a chevron to fold them. `panelTabs` picks which
     // panels there are at all.
@@ -769,6 +792,10 @@
           : '') +
         '<span class="gs-eyebrow">' + esc(config.title || 'Git sandbox') + '</span>' +
         '<span class="gs-state"></span>' +
+        (viewName
+          ? '<button type="button" class="gs-full" aria-pressed="false" aria-label="Fill the window"' +
+            ' title="Fill the window">' + ICON_EXPAND + '</button>'
+          : '') +
         '<button type="button" class="gs-undo" disabled>Undo</button>' +
         '<button type="button" class="gs-reset">Reset</button>' +
         (treeMode === 'toggle'
@@ -777,8 +804,10 @@
           : '') +
       '</div>' +
       '<div class="gs-body">' +
-        '<div class="gs-term-wrap">' +
-          '<div class="gs-view" role="tabpanel" data-view="terminal">' +
+        '<div class="gs-term-wrap' + (viewName ? ' is-ext' : '') + '">' +
+          // a view box keeps the terminal, out of sight: commands from the
+          // view are echoed there, and Undo restores it with the rest
+          '<div class="gs-view" role="tabpanel" data-view="terminal"' + (viewName ? ' hidden' : '') + '>' +
             '<div class="gs-out" role="log" aria-live="polite" aria-label="Terminal output"></div>' +
             '<form class="gs-input-row" autocomplete="off">' +
               '<label class="gs-prompt" for="' + (host.id || 'gs') + '-in">' + esc(config.prompt || '~/project $') + '</label>' +
@@ -842,6 +871,9 @@
               '<div class="gs-ed-empty"></div>' +
             '</div>' +
           '</div>' +
+          (viewName
+            ? '<div class="gs-view gs-view-ext" data-view="ext"><div class="gs-ext"></div></div>'
+            : '') +
         '</div>' +
         '<div class="gs-tasks"></div>' +
         '<div class="gs-viz"' + (panelMode === false ? ' hidden' : '') + '>' +
@@ -990,18 +1022,23 @@
       tasks.forEach(function (t, i) { t._done = snap.done[i]; t._wasDone = snap.done[i]; });
     }
 
+    // returns what it printed
     function doUndo() {
+      var said;
       if (!canUndo()) {
         echo(promptText(), 'undo');
-        writeText(undoStack.length
+        said = undoStack.length
           ? 'The last change was made in another view of this repository. Undo it there.'
-          : 'Nothing to undo.');
-        return;
+          : 'Nothing to undo.';
+        writeText(said);
+        return said;
       }
       var entry = undoStack.pop();
       restoreSnap(entry);
       echo(entry.prompt, 'undo');
-      writeText('Undid: {y}' + entry.line + '{/}');
+      said = 'Undid: {y}' + entry.line + '{/}';
+      writeText(said);
+      return said;
     }
 
     /* ------------------------------ tabs ------------------------------ */
@@ -1206,12 +1243,115 @@
       host.querySelector('.gs-term-wrap').classList.toggle('is-editor', name === 'editor');
       if (!focus) return;
       if (name === 'terminal') input.focus();
-      else if (openFile) edText.focus();
+      else if (name === 'editor' && openFile) edText.focus();
     }
 
     Object.keys(viewButtons).forEach(function (k) {
       viewButtons[k].addEventListener('click', function () { selectView(k, true); });
     });
+
+    /* ------------------------- plugin views ---------------------------- */
+
+    // A view box hands its workspace to the plugin registered under its
+    // view's name (see registerView). Everything the plugin does goes
+    // through viewBinding: commands run as if typed here (task ticks, Undo,
+    // the panels below), and file changes get undo entries like the
+    // Editor tab's.
+    var extPane = host.querySelector('.gs-ext');
+    var fullBtn = host.querySelector('.gs-full');
+    var full = false;
+    // called after every refresh, so the view sees what anything changed
+    var refreshHooks = [];
+
+    function setFull(on) {
+      full = on;
+      host.classList.toggle('gs-is-full', on);
+      fullBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      fullBtn.title = on ? 'Back into the page' : 'Fill the window';
+      fullBtn.setAttribute('aria-label', fullBtn.title);
+    }
+    if (fullBtn) fullBtn.addEventListener('click', function () { setFull(!full); });
+
+    // Runs `fn` once nothing else is running. fn must claim `busy` before
+    // its first await, as submit() does, or two callers could both start.
+    async function whenIdle(fn) {
+      for (;;) {
+        await waitIdle();
+        if (!busy) return fn();
+      }
+    }
+
+    // What a view plugin gets: see "Writing a view plugin" in CONTRIBUTING.md.
+    // Add to it freely; never change what an existing member means.
+    var viewBinding = {
+      version: 1,
+      id: host.id || null,
+      title: config.title || 'Git sandbox',
+      get sandbox() { return sb; },
+      // the project folder's name: the last part of the prompt's path
+      name: (config.prompt || '~/project').replace(/\s*\$\s*$/, '').split('/').pop().replace(/^~$/, '') || 'project',
+      // the exercise's `intro`, with {y}…{/} colour markers
+      intro: intro.slice(),
+      prompt: promptText,
+      // A command line, run as if typed here. `io.write(text, ok)` receives
+      // the output, `io.clear()` a `clear`, and `io.editor(file, text)`
+      // replaces vim for `git commit` without -m (resolve with the saved
+      // message, or undefined to drop it); `io.abandon()` is called if
+      // Reset drops that commit. Resolves with { out, ok }.
+      run: function (line, io) {
+        return whenIdle(function () { return submit(line, true, io || {}); });
+      },
+      // A file change made in the view (save, new file, delete, rename):
+      // `fn(sandbox)` makes it, with an undo entry and a refresh.
+      mutate: function (label, fn) {
+        return whenIdle(async function () {
+          setBusy(true);
+          var snap = captureUndo(label);
+          try {
+            return await fn(sb);
+          } finally {
+            if (sb.changedSince(snap.core)) pushUndo(snap);
+            await refresh();
+            notifyViews();
+            setBusy(false);
+          }
+        });
+      },
+      // `fn()` runs after every refresh; returns a function that stops it
+      onRefresh: function (fn) {
+        refreshHooks.push(fn);
+        return function () {
+          var i = refreshHooks.indexOf(fn);
+          if (i !== -1) refreshHooks.splice(i, 1);
+        };
+      }
+    };
+
+    if (viewName) {
+      var viewMsg = function (text) {
+        extPane.innerHTML = '<div class="gs-ext-msg" role="status"></div>';
+        extPane.firstChild.textContent = text;
+      };
+      var viewAttached = false;
+      viewMsg('Loading…');
+      whenView(viewName, function (def) {
+        viewAttached = true;
+        // after mount() returns (`ready` is set at its end) and the seed ran
+        Promise.resolve().then(function () { return ready; })
+          .then(function () { return def.attach(extPane, viewBinding); })
+          .then(null, function (e) { viewMsg('This view could not start: ' + (e && e.message ? e.message : e)); });
+      });
+      // once the page has loaded, a view nobody registered is a missing plugin
+      var noPlugin = function () {
+        setTimeout(function () {
+          if (!viewAttached) {
+            viewMsg('This exercise needs the git-sandbox-' + viewName + ' extension, which is not on this page.');
+          }
+        }, 0);
+      };
+      if (document.readyState === 'complete') noPlugin();
+      else root.addEventListener('load', noPlugin);
+    }
 
     /* ------------------------- file editor ---------------------------- */
 
@@ -1733,6 +1873,9 @@
       // a stopped merge shows as (main|MERGING), as git's own prompt does
       host.querySelector('.gs-prompt').textContent =
         sb.pwd() + (br ? ' (' + br + (status.merging ? '|MERGING' : '') + ')' : '') + ' $';
+      refreshHooks.slice().forEach(function (fn) {
+        try { fn(); } catch (e) { if (root.console) root.console.error(e); }
+      });
     }
 
     // The history graph, with the contents of each opened commit laid out
@@ -1969,18 +2112,21 @@
 
     // `quiet`: a scripted command, run without taking the keyboard, which
     // on a slide belongs to reveal.js
-    async function submit(line, quiet) {
+    // `io`: the command came from a plugin view, which wants the output
+    // too; see viewBinding.run.
+    async function submit(line, quiet, io) {
       if (busy) return;
       setBusy(true);
       var trimmed = line.trim();
       if (trimmed === 'undo') {
         // never reaches the engine: undo is a sandbox affordance, not git
-        doUndo();
+        var said = doUndo();
+        if (io && io.write) io.write(said, true);
         await refresh();
         notifyViews();
         setBusy(false);
         if (!quiet) input.focus();
-        return;
+        return { out: said, ok: true };
       }
       var snap = captureUndo(line);
       echo(promptText(), line);
@@ -1988,15 +2134,31 @@
       histIdx = history.length;
       var r = await sb.run(line);
       if (r.editor) {
-        var saved = await openVim(r.editor.file, r.editor.text);
+        var saved;
+        if (io && io.editor) {
+          // Reset abandons this as it would vim
+          vim = { abandon: function () { if (io.abandon) io.abandon(); } };
+          try { saved = await io.editor(r.editor.file, r.editor.text); }
+          finally { vim = null; }
+        } else {
+          saved = await openVim(r.editor.file, r.editor.text);
+        }
         // Reset closes the editor from underneath us and starts afresh
         if (saved === undefined) return;
         r = await sb.finishCommit(saved);
       }
-      if (trimmed === 'clear') { out.innerHTML = ''; }
-      else if (trimmed === 'help') { writeText(helpText()); }
-      else if (trimmed === 'reset') { await doReset(); }
-      else { writeText(r.out, r.ok ? '' : 'gs-err'); }
+      if (trimmed === 'clear') {
+        out.innerHTML = '';
+        if (io && io.clear) io.clear();
+      } else if (trimmed === 'help') {
+        writeText(helpText());
+        if (io && io.write) io.write(helpText(), true);
+      } else if (trimmed === 'reset') {
+        await doReset();
+      } else {
+        writeText(r.out, r.ok ? '' : 'gs-err');
+        if (io && io.write) io.write(r.out, r.ok);
+      }
       // a merge that stops on conflicts fails but still changes the repo,
       // and undoing it is the quickest way back out
       var changed = sb.changedSince(snap.core);
@@ -2010,6 +2172,7 @@
       if (changed && trimmed !== 'reset') notifyViews();
       setBusy(false);
       if (!quiet) input.focus();
+      return { out: r.out, ok: r.ok };
     }
 
     // The remote half's heading names the remote shown; with several it is
@@ -2417,6 +2580,9 @@
   }
 
   function boot() {
+    // views first, so the boxes below find theirs at once
+    (root.__gsViews || []).forEach(function (v) { registerView(v[0], v[1]); });
+    root.__gsViews = { push: function (v) { registerView(v[0], v[1]); } };
     var pending = root.__gsPending || [];
     pending.forEach(function (p) { mount(p[0], p[1]); });
     root.__gsPending = { push: function (p) { mount(p[0], p[1]); } };
@@ -2427,6 +2593,9 @@
   var W = root.GitSandboxWhen || {};
   root.GitSandboxUI = {
     mount: mount,
+    // registerView(name, { attach(pane, binding) }): draw the workspace of
+    // ```git-sandbox-<name>``` exercises; see CONTRIBUTING.md
+    registerView: registerView,
     boot: boot,
     branchOid: W.branchOid,
     reaches: W.reaches,

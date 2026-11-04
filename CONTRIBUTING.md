@@ -28,6 +28,17 @@ _extensions/git-sandbox/
     sandbox-ui.js      terminal, editor, panels, task list; mounts the boxes
     git-sandbox.css    styling
     isomorphic-git.bundle.js   GENERATED from vendor/ by ./build.sh
+_extensions/git-sandbox-vscode/       the optional VS Code extension
+  git-sandbox-vscode.lua   adds its files to pages with a VS Code exercise
+  resources/
+    sandbox-vscode.js  registers the `vscode` view; loads VS Code on demand
+    vscode/            GENERATED from vscode/src/ (see below)
+vscode/                the workbench's source, built with Vite
+  src/main.js          boots the workbench; GitSandboxVSCode.attach()
+  src/session.js       which exercise VS Code is bound to
+  src/files.js         the exercise's in-memory files as VS Code's file://
+  src/git.js           Source Control, explorer decorations, Git commands
+  src/terminal.js      the integrated terminal's line editing
 ```
 
 The scripts load in that order, each one a plain browser script (the first
@@ -40,6 +51,61 @@ At render time the filter turns each block into a container plus a
 body, drains that queue. This keeps a 260 KB library off the critical path
 while still letting per-exercise configuration sit inline where the author
 wrote it.
+
+## Writing a view plugin
+
+A ` ```git-sandbox-<name> ``` ` block is an exercise like any other, except
+that the plugin registered as `<name>` draws its workspace instead of the
+terminal and editor. git-sandbox-vscode is one such plugin; the core knows
+nothing about it.
+
+- **The filter.** git-sandbox turns the block into an exercise whose
+  container has the class `git-sandbox-view-<name>`. The plugin's own Lua
+  filter only adds its files, when it sees either the code block (it ran
+  first) or that class (it ran second), so authors can list the two in
+  any order. See `git-sandbox-vscode.lua`.
+- **The script.** It registers the view, whether or not `sandbox-ui.js`
+  has loaded yet:
+
+  ```js
+  (window.__gsViews = window.__gsViews || []).push(['<name>', {
+    attach: function (pane, binding) { /* draw in pane */ }
+  }]);
+  ```
+
+  `attach` is called once per exercise, after its seed has run. If no
+  plugin registers the name by the time the page has loaded, the exercise
+  says which extension is missing.
+- **The binding** (`viewBinding` in `sandbox-ui.js`) is the plugin's only
+  way to the repository: `sandbox`, `title`, `name`, `intro`, `prompt()`,
+  `run(line, io)`, `mutate(label, fn)` and `onRefresh(fn)`, documented
+  where it is defined. It has a `version`; add members freely, but never
+  change what an existing one means.
+
+The rule that makes a view trustworthy: it never changes the repository
+behind the exercise's back. Every git action is a command line through
+`run`, and every file change goes through `mutate`, so tasks, Undo and the
+panels see the view's work exactly as they see typed commands, and a
+learner can always find the command a click stood for.
+
+## The VS Code extension
+
+Its workbench is built from
+[monaco-vscode-api](https://github.com/CodinGame/monaco-vscode-api). It is
+the one part of the repository with a build step, because VS Code ships as
+thousands of ES modules:
+
+```bash
+cd vscode
+npm install
+npm run build        # writes _extensions/git-sandbox-vscode/resources/vscode/
+```
+
+Commit the rebuilt `resources/vscode/` with the change to `vscode/src/`:
+like the isomorphic-git bundle, it is what `quarto add` installs. The
+build is reproducible, so an unchanged source rebuilds to identical files.
+The `@codingame/*` packages are pinned to one exact version; bump them all
+together.
 
 ## Tests
 
@@ -58,8 +124,12 @@ wrote it.
 | `tests/test-rendered.js` | The real rendered `example.qmd`, driven end to end |
 | `tests/test-revealjs.js` | The rendered `example-revealjs.qmd`: boxes on reveal.js slides, one repository shared across two |
 | `tests/test-realgit.js` | The same commands run in the sandbox and through the real `git` binary, with the terminal output compared |
+| `tests/test-vscode.js` | The VS Code extension in Chromium: loaded only when an exercise scrolls into view, then the terminal, Source Control, commit and a shared repository driven for real |
 
 The UI and end-to-end suites use jsdom, so they run in CI without a browser.
+`test-vscode.js` is the exception: it needs Playwright's Chromium
+(`npx playwright install chromium`) and says it skipped the browser half
+when that is missing.
 `test-rendered.js` loads the actual rendered HTML, executes its real scripts,
 and completes the exercises by submitting the form. If it passes, the
 lesson works.
@@ -110,7 +180,10 @@ opening a pull request, and keep a non-colour signal alongside it.
 ## Releasing
 
 1. Bump `version` in `_extensions/git-sandbox/_extension.yml`, `package.json`,
-   and the `version` passed to `addHtmlDependency` in `git-sandbox.lua`.
+   and the `version` passed to `addHtmlDependency` in `git-sandbox.lua`; and
+   the same two in `_extensions/git-sandbox-vscode/` (its `_extension.yml`
+   and `git-sandbox-vscode.lua`), plus the library path in
+   `tests/test-vscode.js`.
 2. Tag the release: `git tag v1.0.1 && git push --tags`.
 
 `quarto add ryjohnson09/quarto-git-sandbox` installs from the **HEAD of `main`**,

@@ -1,0 +1,149 @@
+---
+title: "Git exercises in VS Code"
+subtitle: "The git-sandbox-vscode extension: the same exercises, in the real VS Code"
+format:
+  html:
+    toc: false
+    include-in-header:
+      text: |
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;700&family=Source+Code+Pro:wght@400&display=swap" rel="stylesheet">
+filters:
+  - git-sandbox
+  - git-sandbox-vscode
+---
+
+A ` ```git-sandbox-vscode ` block is a git-sandbox exercise drawn in the
+real VS Code: explorer, editors and diffs, search, the Source Control view
+and the integrated terminal. It takes every option a ` ```git-sandbox `
+block takes, so tasks tick, **Undo** and **Reset** work, and the panels
+below follow along. Each click in Source Control runs the git command it
+stands for, which you can find in VS Code's **Git** output.
+
+VS Code is a few megabytes. It is fetched when the first exercise below
+scrolls into view, and stays with whichever one you scrolled to last. The
+button beside **Undo** lets it fill the window. Back to the
+[git-sandbox guide](example.html).
+
+## Install
+
+```bash
+quarto add jansim/quarto-git-sandbox
+```
+
+installs both extensions. List both filters, in either order:
+
+```yaml
+filters:
+  - git-sandbox
+  - git-sandbox-vscode
+```
+
+## Stage and commit with Source Control
+
+```git-sandbox-vscode
+id: vscode-flow
+title: The edit, stage, commit loop, in VS Code
+prompt: "~/sales-analysis $"
+intro: |
+  {w}VS Code's terminal runs this exercise's shell.{/}
+  Try the Source Control view on the left: it runs the same commands for you.
+done-note: Every click in Source Control was a git command. **Show Git Output** in its **...** menu lists them.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  echo "sales <- read_csv('sales.csv')" > load.R
+tasks:
+  - text: In Source Control, stage `load.R` with its **+** button
+    when: staged
+  - text: Write a message in the box above the changes and commit with **Ctrl+Enter**
+    when: commits >= 2
+  - text: Open `README.md` in the explorer, add a line, save, and find the change in Source Control
+    when: commits >= 2 and not clean
+```
+
+````markdown
+```git-sandbox-vscode
+title: The edit, stage, commit loop, in VS Code
+prompt: "~/sales-analysis $"
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  echo "sales <- read_csv('sales.csv')" > load.R
+tasks:
+  - text: In Source Control, stage `load.R` with its **+** button
+    when: staged
+```
+````
+
+## Resolve a conflict in VS Code
+
+VS Code lists the conflicted file under **Merge Changes**, and its
+terminal prompt shows `(main|MERGING)`. Fix the file in the editor, save,
+stage it, and commit: the message box already holds git's merge message.
+
+```git-sandbox-vscode
+id: vscode-conflict
+title: A merge conflict, in VS Code
+prompt: "~/sales-analysis $"
+intro: |
+  Type {y}git merge title{/} below, then resolve the conflict in the editor.
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+  git checkout -b title
+  echo "# Sales analysis 2026" > README.md
+  git commit -am "Retitle for the new year"
+  git checkout main
+  echo "# Quarterly sales analysis" > README.md
+  git commit -am "Say which sales"
+tasks:
+  - text: Merge `title` into `main` and open `README.md` from **Merge Changes**
+    when: conflicts
+  - text: Keep the line you want, save, and stage the file
+    when: merging and not conflicts and not file README.md contains "<<<<<<<"
+  - text: Commit the merge
+    when: merged title into main and merge commit
+```
+
+## A box, and the same repository in VS Code
+
+`share: <id>` works here too: this exercise is VS Code on the repository
+of the box above it. Work in either; the other keeps up.
+
+```git-sandbox
+id: plain-box
+title: A plain box
+prompt: "~/sales-analysis $"
+seed: |
+  git init
+  echo "# Sales analysis" > README.md
+  git add .
+  git commit -m "Add the project README"
+tasks:
+  - text: Create a branch called `report` in either view
+    when: branch report
+```
+
+```git-sandbox-vscode
+id: plain-box-vscode
+share: plain-box
+title: The box above, in VS Code
+tasks:
+  - text: Switch to `report` from the branch name in VS Code's status bar
+    when: on report
+```
+
+````markdown
+```git-sandbox-vscode
+share: plain-box
+title: The box above, in VS Code
+```
+````

@@ -451,6 +451,14 @@ panel-tabs: [history]
 A box with `share` has no `seed` of its own. **Reset** in either box
 starts the shared repository over.
 
+### In VS Code
+
+The companion extension `git-sandbox-vscode` puts an exercise in the real
+VS Code: its explorer, editor, Source Control view and integrated
+terminal, with the same tasks, Undo and panels as a box. Every click in
+Source Control runs the git command it stands for. It is a few megabytes,
+so it has [a page of its own](example-vscode.html).
+
 ## Showing less
 
 Each part of the box beyond the terminal can be removed or folded away:

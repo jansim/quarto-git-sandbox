@@ -4,7 +4,7 @@ const path = require('path');
 const { JSDOM } = require('jsdom');
 const git = require('isomorphic-git');
 
-const dom = new JSDOM('<!doctype html><html><body><div id="box"></div></body></html>', {
+const dom = new JSDOM('<!doctype html><html><body><div id="box"></div><div id="vbox"></div></body></html>', {
   runScripts: 'outside-only', pretendToBeVisual: true
 });
 const win = dom.window;
@@ -1052,6 +1052,80 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const svgOut = svg.outerHTML.replace('>', ' width="640">').replace(/^(<svg[^>]*>)/, '$1' + style);
   fs.writeFileSync(path.join(__dirname, 'graph-preview.svg'),
     '<?xml version="1.0"?>' + svgOut.replace('<svg', '<svg style="background:#fff"'));
+
+  // ---- plugin views: a ```git-sandbox-<view>``` exercise hands its
+  // workspace to a registered plugin (git-sandbox-vscode's own side is
+  // exercised in a real browser by test-vscode.js)
+  check('a plain box has no view pane', !host.querySelector('.gs-ext'));
+  let attached = null;
+  const vbox = win.GitSandboxUI.mount('#vbox', {
+    title: 'VS Code box', prompt: '~/sales-analysis $', view: 'test',
+    intro: ['Use {y}the view{/}.'],
+    seed: 'git init\necho "# Sales" > README.md',
+    tasks: [{ text: 'Commit', when: 'commits >= 1' }]
+  });
+  await vbox.ready;
+  const vhost = win.document.querySelector('#vbox');
+  check('a view exercise has no Terminal/Editor tabs', !vhost.querySelector('.gs-titlebar'));
+  check('its terminal is out of sight', vhost.querySelector('.gs-view[data-view="terminal"]').hidden === true);
+  await sleep(10);
+  check('a loaded page without the plugin says which extension is missing',
+    /needs the git-sandbox-test extension/.test(vhost.querySelector('.gs-ext').textContent), vhost.querySelector('.gs-ext').textContent);
+  // registered after the box mounted, as a plugin script loading late would
+  win.__gsViews.push(['test', { attach: async (pane, binding) => { attached = { pane, binding }; } }]);
+  await sleep(20);
+  check('a late plugin still gets the pane', attached && attached.pane === vhost.querySelector('.gs-ext'));
+  check('a view exercise can fill the window', !!vhost.querySelector('.gs-full'));
+  vhost.querySelector('.gs-full').click();
+  check('the full-window button toggles', vhost.classList.contains('gs-is-full'));
+  vhost.querySelector('.gs-full').click();
+  const b = attached.binding;
+  check('the binding names the project folder', b.name === 'sales-analysis', b.name);
+  check('the binding carries the title and intro', b.title === 'VS Code box' && b.intro[0] === 'Use {y}the view{/}.', JSON.stringify([b.title, b.intro]));
+  check('the binding has a version', b.version === 1);
+  check('the binding shares the exercise\'s sandbox', b.sandbox === vbox.sandbox);
+  let refreshed = 0;
+  const unhook = b.onRefresh(() => refreshed++);
+  let written = '';
+  let r = await b.run('git add README.md', { write: (t) => { written += t; } });
+  check('binding.run runs a command and resolves with its result', r && r.ok === true, JSON.stringify(r));
+  check('binding.run refreshes the exercise, and the view hears of it', refreshed >= 1, String(refreshed));
+  check('binding.run echoes in the hidden terminal too', /git add README\.md/.test(vhost.querySelector('.gs-out').textContent));
+  let edited = null;
+  r = await b.run('git commit', {
+    write: (t) => { written += t; },
+    editor: async (file, text) => { edited = { file, text }; return 'From VS Code\n' + text; }
+  });
+  check('git commit without -m asks the view for the message, not vim', edited && edited.file === '.git/COMMIT_EDITMSG' &&
+    vhost.querySelector('.gs-vim').hidden === true, JSON.stringify(edited));
+  check('the message the view saved makes the commit', r && r.ok && /From VS Code/.test(written), written);
+  check('a command from the view ticks tasks', vbox.tasks[0]._done === true);
+  r = await b.run('git log --oneline', { write: () => {} });
+  check('commands from the view run one after another', r && /From VS Code/.test(r.out), r && r.out);
+  const ran = await Promise.all([b.run('git status', {}), b.run('git branch', {})]);
+  check('two commands at once both run, in turn', ran.every((x) => x && x.ok), JSON.stringify(ran));
+  await b.mutate('save notes.md', (sb) => sb.writeFile('notes.md', 'hello'));
+  check('a save in the view lands in the working directory', (await vbox.sandbox.readFile('notes.md')) === 'hello');
+  check('a save in the view can be undone', vhost.querySelector('.gs-undo').disabled === false);
+  vhost.querySelector('.gs-undo').click();
+  await sleep(60);
+  check('undo takes the save back', !(await vbox.sandbox.listFiles()).includes('notes.md'));
+  let abandoned = false;
+  await b.run('echo x > x.txt', {});
+  await b.run('git add x.txt', {});
+  const waiting = b.run('git commit', {
+    editor: () => new Promise(() => {}),
+    abandon: () => { abandoned = true; }
+  });
+  await sleep(40);
+  vhost.querySelector('.gs-reset').click();
+  await sleep(80);
+  check('Reset abandons a commit message the view is editing', abandoned);
+  void waiting;
+  unhook();
+  const before = refreshed;
+  await b.run('git status', {});
+  check('onRefresh unsubscribes', refreshed === before);
 
   console.log('\n===== TERMINAL RENDER (last run) =====');
   console.log(host.querySelector('.gs-out').textContent.trim().split('\n').slice(-14).join('\n'));
